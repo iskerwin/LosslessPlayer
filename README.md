@@ -29,7 +29,7 @@ open LosslessPlayer.xcodeproj
 
 GitHub Actions 使用 macOS 生成工程，在可用 iPhone 模拟器执行 `xcodebuild test`，保留 xcresult。单元测试覆盖队列边界、真实 PCM WAV 导入、持久化恢复、收藏、删除保留源文件、无效文件回滚。
 
-当前开发容器为 Linux，没有 Swift / Xcode；此处尚未执行 iOS 编译或 XCTest。CI 配置已准备，需推送 GitHub 后运行，不能将源码检查视为构建通过。
+GitHub Actions 已完成模拟器编译和 3 项 XCTest（0 失败），并完成 arm64 真机编译。测试结果保存在工作流的 xcresult 附件中；真机音频行为仍需手动验收。
 
 真机验收：FLAC / ALAC / WAV / AIFF 各种位深与采样率、损坏文件、超过 1GB 文件、iCloud 文件下载、中文标签、熄屏连续播放、来电、耳机拔出、蓝牙与 DAC 切换、重启恢复、VoiceOver 与大字体。
 
@@ -40,5 +40,9 @@ GitHub Actions 使用 macOS 生成工程，在可用 iPhone 模拟器执行 `xco
 - 当前播放器使用 AVAudioPlayer；未实现无缝播放、自动匹配音源采样率、逐位输出验证、EQ、DSD、APE、CUE、NAS 或 CarPlay。
 - M4A 标签和位深取决于系统返回的信息，未知位深不编造数值。
 - 随机播放目前逐次抽选，未实现完整洗牌循环。
-- 还没有签名证书、TestFlight 或 IPA 发布流水线；CI 仅为模拟器构建与测试。
+- 尚未配置 Apple 签名证书或 TestFlight。CI 会在测试通过后生成 arm64 Debug 未签名 IPA，并发布 GitHub 预发布版本；需自行重新签名安装。
 - 不包含第三方音乐文件或在线下载能力。
+
+## 开发版 IPA
+
+main 分支构建通过后，在仓库 Releases 的开发预发布中下载 `LosslessPlayer-dev-unsigned.ipa`。支持 iOS 17+，使用 AltStore 等工具以自己的 Apple ID 重新签名后安装。未签名 IPA 不能直接安装，不是 TestFlight 或 App Store 版本。每个发布附带 `SHA256SUMS.txt`，可验证文件完整性。

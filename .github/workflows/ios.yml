@@ -74,7 +74,7 @@ jobs:
           assert 'audio' in info['UIBackgroundModes']
           binary = app / info['CFBundleExecutable']
           assert binary.is_file()
-          subprocess.run(['lipo', '-verify_arch', 'arm64', str(binary)], check=True)
+          subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)
           PY
           ditto -c -k --keepParent build/ipa/Payload build/LosslessPlayer-dev-unsigned.ipa
           unzip -t build/LosslessPlayer-dev-unsigned.ipa
