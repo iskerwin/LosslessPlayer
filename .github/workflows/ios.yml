@@ -40,3 +40,68 @@ jobs:
         with:
           name: ios-test-results
           path: TestResults.xcresult
+  development-ipa:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned development app for physical iPhone
+        run: >-
+          xcodebuild build -project LosslessPlayer.xcodeproj -scheme LosslessPlayer
+          -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS'
+          -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO
+          CURRENT_PROJECT_VERSION=${{ github.run_number }}
+      - name: Package and validate IPA
+        run: |
+          set -euo pipefail
+          mkdir -p build/ipa/Payload
+          cp -R build/device/Build/Products/Debug-iphoneos/LosslessPlayer.app build/ipa/Payload/
+          python3 - <<'PY'
+          import pathlib, plistlib, subprocess
+          app = pathlib.Path('build/ipa/Payload/LosslessPlayer.app')
+          with (app / 'Info.plist').open('rb') as f:
+              info = plistlib.load(f)
+          assert info['CFBundleIdentifier'] == 'com.iskerwin.LosslessPlayer'
+          assert 'iPhoneOS' in info['CFBundleSupportedPlatforms']
+          assert 'audio' in info['UIBackgroundModes']
+          binary = app / info['CFBundleExecutable']
+          assert binary.is_file()
+          subprocess.run(['lipo', '-verify_arch', 'arm64', str(binary)], check=True)
+          PY
+          ditto -c -k --keepParent build/ipa/Payload build/LosslessPlayer-dev-unsigned.ipa
+          unzip -t build/LosslessPlayer-dev-unsigned.ipa
+          cd build
+          shasum -a 256 LosslessPlayer-dev-unsigned.ipa > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LosslessPlayer-development-IPA
+          path: |
+            build/LosslessPlayer-dev-unsigned.ipa
+            build/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Publish development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: dev-${{ github.run_number }}-${{ github.run_attempt }}
+        run: |
+          cat > build/release-notes.md <<'NOTES'
+          原音开发测试版（iOS 17+，arm64，Debug）。
+
+          本 IPA 未经过 Apple 开发者证书签名，不能直接安装。请使用 AltStore 等工具以自己的 Apple ID 重新签名后安装。这不是 TestFlight 或 App Store 版本。
+
+          包含本地音乐导入、搜索、收藏、播放进度保存、后台和锁屏控制。模拟器单元测试通过后才会生成此发布。
+
+          未验证真机音频设备兼容性，不保证无缝播放或 bit-perfect 输出。可用 SHA256SUMS.txt 校验下载文件。
+          NOTES
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
+            --title "原音开发版 $RELEASE_TAG" --notes-file build/release-notes.md \
+            build/LosslessPlayer-dev-unsigned.ipa build/SHA256SUMS.txt
