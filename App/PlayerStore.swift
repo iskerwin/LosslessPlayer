@@ -1,6 +1,7 @@
 import AVFoundation
 import MediaPlayer
 import Combine
+import UIKit
 
 @MainActor
 final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
@@ -8,8 +9,13 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var playing = false
     @Published private(set) var position: Double = 0
     @Published private(set) var output = ""
-    @Published var shuffle = false
-    @Published var repeatAll = true
+    @Published private(set) var shuffle = false
+    @Published var repeatMode: RepeatMode = .all
+    @Published private(set) var queueIDs: [UUID] = []
+    private var accessRoot: URL?
+    private var interruptedWhilePlaying = false
+    enum RepeatMode { case off, all, one }
+    var queuedTracks: [Track] { queueIDs.compactMap { id in library.tracks.first { $0.id == id && $0.available } } }
     @Published var errorMessage: String?
     private let library: LibraryStore
     private var player: AVAudioPlayer?
@@ -21,14 +27,20 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     init(library: LibraryStore) {
         self.library = library
         super.init()
+        queueIDs = library.snapshot.queueIDs.filter { id in library.tracks.contains { $0.id == id && $0.available } }
         configureRemote()
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             let options = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             Task { @MainActor [weak self] in
-                if type == AVAudioSession.InterruptionType.began.rawValue { self?.pause() }
-                else if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume) { self?.resume() }
+                if type == AVAudioSession.InterruptionType.began.rawValue {
+                    self?.interruptedWhilePlaying = self?.playing == true
+                    self?.pause()
+                } else if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume),
+                          self?.interruptedWhilePlaying == true {
+                    self?.interruptedWhilePlaying = false; self?.resume()
+                }
             }
         })
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
@@ -48,15 +60,32 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     deinit {
+        accessRoot?.stopAccessingSecurityScopedResource()
         timer?.invalidate()
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         remoteTargets.forEach { $0.0.removeTarget($0.1) }
     }
 
-    func load(_ track: Track, autoplay: Bool = true, at time: Double = 0) {
+    func load(_ track: Track, autoplay: Bool = true, at time: Double = 0, context: [Track]? = nil) {
+        guard track.available else { errorMessage = "文件已移动或删除，请重新扫描文件夹"; return }
         pause()
         do {
+            let newAccess: URL?
+            if let id = track.folderID {
+                guard let folder = library.snapshot.folders.first(where: { $0.id == id }) else {
+                    throw CocoaError(.fileReadNoPermission)
+                }
+                newAccess = try library.resolve(folder)
+            } else { newAccess = nil }
+            let scoped = newAccess?.startAccessingSecurityScopedResource() == true
+            var accepted = false
+            defer { if scoped && !accepted { newAccess?.stopAccessingSecurityScopedResource() } }
             let next = try AVAudioPlayer(contentsOf: library.url(for: track))
+            accessRoot?.stopAccessingSecurityScopedResource()
+            accessRoot = scoped ? newAccess : nil
+            accepted = true
+            if let context { setQueue(context.map(\.id)) }
+            else if !queueIDs.contains(track.id) { setQueue(library.tracks.filter(\.available).map(\.id)) }
             next.delegate = self
             next.prepareToPlay()
             player = next
@@ -100,6 +129,7 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard current?.id == track.id else { return }
         pause()
         player = nil
+        accessRoot?.stopAccessingSecurityScopedResource(); accessRoot = nil
         current = nil
         position = 0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -113,16 +143,57 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         updateNowPlaying()
     }
 
+    func setQueue(_ ids: [UUID]) {
+        queueIDs = ids.filter { id in library.tracks.contains { $0.id == id && $0.available } }
+        library.rememberQueue(queueIDs)
+    }
+
+    func toggleShuffle() {
+        shuffle.toggle()
+        guard let id = current?.id else { return }
+        var rest = queueIDs.filter { $0 != id }
+        if shuffle { rest.shuffle() }
+        else { rest = library.tracks.filter { rest.contains($0.id) }.map(\.id) }
+        setQueue([id] + rest)
+    }
+
+    func enqueue(_ track: Track, next: Bool) {
+        guard track.available, track.id != current?.id else { return }
+        var ids = queueIDs.filter { $0 != track.id }
+        if next, let id = current?.id, let index = ids.firstIndex(of: id) { ids.insert(track.id, at: index + 1) }
+        else { ids.append(track.id) }
+        setQueue(ids)
+    }
+
+    func removeQueue(at offsets: IndexSet) {
+        var ids = queueIDs
+        for i in offsets.sorted(by: >) where ids.indices.contains(i) { ids.remove(at: i) }
+        setQueue(ids)
+    }
+
+    func moveQueue(from offsets: IndexSet, to destination: Int) {
+        var ids = queueIDs
+        let moving = offsets.sorted().map { ids[$0] }
+        for i in offsets.sorted(by: >) { ids.remove(at: i) }
+        ids.insert(contentsOf: moving, at: destination - offsets.filter { $0 < destination }.count)
+        setQueue(ids)
+    }
+
+    func reconcileLibrary() {
+        setQueue(queueIDs)
+        if let old = current {
+            if let track = library.tracks.first(where: { $0.id == old.id }) {
+                current = track
+                if !track.available { pause() }
+            } else { stopIfCurrent(old) }
+        }
+    }
+
     func skip(backwards: Bool = false) {
         if backwards && position > 3 { seek(0); return }
-        let ids = library.tracks.map(\.id)
-        let nextID: UUID?
-        if shuffle && !backwards {
-            nextID = ids.filter { $0 != current?.id }.randomElement() ?? ids.first
-        } else {
-            nextID = PlaybackQueue(ids: ids, repeatAll: repeatAll).next(after: current?.id, backwards: backwards)
-        }
-        if let track = library.tracks.first(where: { $0.id == nextID }) { load(track) }
+        let id = PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off)
+            .next(after: current?.id, backwards: backwards)
+        if let track = library.tracks.first(where: { $0.id == id && $0.available }) { load(track) }
         else { pause(); seek(0) }
     }
 
@@ -141,7 +212,7 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private func updateNowPlaying() {
         guard let current else { return }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+        var info: [String: Any] = [
             MPMediaItemPropertyTitle: current.title,
             MPMediaItemPropertyArtist: current.artist,
             MPMediaItemPropertyAlbumTitle: current.album,
@@ -149,6 +220,11 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0
         ]
+        if let name = current.artworkFilename,
+           let image = UIImage(contentsOfFile: library.root.appendingPathComponent(name).path) {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
     private func configureRemote() {
@@ -177,7 +253,9 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
-            if flag { self.skip() }
+            if flag {
+                if self.repeatMode == .one { self.seek(0); self.resume() } else { self.skip() }
+            }
             else { self.pause(); self.errorMessage = "音频播放意外结束" }
         }
     }

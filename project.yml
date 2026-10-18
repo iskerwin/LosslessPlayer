@@ -6,7 +6,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '0.1.0'
+    MARKETING_VERSION: '0.2.0'
     CURRENT_PROJECT_VERSION: '1'
     GENERATE_INFOPLIST_FILE: YES
     DEVELOPMENT_TEAM: ''
@@ -17,6 +17,7 @@ targets:
     sources: [App]
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.iskerwin.LosslessPlayer
         TARGETED_DEVICE_FAMILY: '1,2'
         GENERATE_INFOPLIST_FILE: YES
@@ -28,7 +29,7 @@ targets:
         UIBackgroundModes: [audio]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
   LosslessPlayerTests:
     type: bundle.unit-test
     platform: iOS
