@@ -23,9 +23,11 @@ actor AudioScanner {
         defer { if scope { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         var candidates: [URL] = []
+        var scanRoot = url
         var enumerationError: Error?
         var coordinationError: NSError?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { directory in
+            scanRoot = directory
             let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
             guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: keys,
                 options: [.skipsHiddenFiles, .skipsPackageDescendants], errorHandler: { _, error in
@@ -50,7 +52,10 @@ actor AudioScanner {
         var result = ScanResult()
         for (index, file) in candidates.sorted(by: { $0.path < $1.path }).enumerated() {
             try Task.checkCancellation()
-            let relative = String(file.path.dropFirst(url.path.hasSuffix("/") ? url.path.count : url.path.count + 1))
+            guard let relative = Self.relativePath(for: file, in: scanRoot) else {
+                result.failures.append("\(file.lastPathComponent)：无法定位相对路径")
+                continue
+            }
             result.seen.insert(relative)
             await progress(index + 1, candidates.count, file.lastPathComponent)
             if folder.excludedPaths.contains(relative) { result.skipped += 1; continue }
@@ -162,6 +167,29 @@ actor AudioScanner {
         }
         return track
     }
+
+    /// Path of `file` relative to `directory`.
+    /// Strips a leading `/private` so `/var/...` and `/private/var/...` (and file-provider coordinated URLs) still match.
+    static func relativePath(for file: URL, in directory: URL) -> String? {
+        let filePath = canonicalPath(file)
+        let directoryPath = canonicalPath(directory)
+        guard filePath != directoryPath else { return nil }
+        let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        guard filePath.hasPrefix(prefix) else { return nil }
+        let relative = String(filePath.dropFirst(prefix.count))
+        guard !relative.isEmpty, !relative.hasPrefix("/") else { return nil }
+        return relative
+    }
+
+    static func canonicalPath(_ url: URL) -> String {
+        var path = url.path.precomposedStringWithCanonicalMapping
+        if path.hasPrefix("/private/") {
+            path = String(path.dropFirst("/private".count))
+        }
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
     private func sidecarLyrics(_ url: URL) -> String? {
         let lrc = url.deletingPathExtension().appendingPathExtension("lrc")
         guard let values = try? lrc.resourceValues(forKeys: [.fileSizeKey]), (values.fileSize ?? 0) < 1_000_000 else { return nil }

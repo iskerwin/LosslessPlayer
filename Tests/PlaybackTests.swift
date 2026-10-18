@@ -15,6 +15,70 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(queue.next(after: a, backwards: true), c)
         XCTAssertNil(PlaybackQueue().next(after: nil))
     }
+
+    func testShuffleRestoresContextAndKeepsEnqueuedTail() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        var ordering = QueueOrdering(queue: [b, c, a, d], context: [a, b, c], shuffle: true)
+        ordering.toggleShuffle(current: b)
+        XCTAssertFalse(ordering.shuffle)
+        XCTAssertEqual(ordering.queue, [a, b, c, d])
+    }
+
+    func testEnablingShuffleKeepsCurrentFirstAndRemembersContext() {
+        let a = UUID(), b = UUID(), c = UUID()
+        var ordering = QueueOrdering(queue: [a, b, c], context: [], shuffle: false)
+        ordering.toggleShuffle(current: b)
+        XCTAssertTrue(ordering.shuffle)
+        XCTAssertEqual(ordering.context, [a, b, c])
+        XCTAssertEqual(ordering.queue.first, b)
+        XCTAssertEqual(Set(ordering.queue), Set([a, b, c]))
+        ordering.toggleShuffle(current: b)
+        XCTAssertEqual(ordering.queue, [a, b, c])
+    }
+
+    func testShuffledPlayRestoresListOrder() {
+        let a = UUID(), b = UUID(), c = UUID()
+        var ordering = QueueOrdering()
+        ordering.applyPlay(orderedIDs: [a, b, c], queue: [c, a, b], shuffle: true)
+        XCTAssertTrue(ordering.shuffle)
+        XCTAssertEqual(ordering.context, [a, b, c])
+        ordering.toggleShuffle(current: c)
+        XCTAssertFalse(ordering.shuffle)
+        XCTAssertEqual(ordering.queue, [a, b, c])
+    }
+
+    func testFirstPlayableSkipsMissingTracks() {
+        var missing = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        missing.missing = true
+        let playable = Track(id: UUID(), filename: "b.wav", title: "B", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        XCTAssertEqual([missing, playable].firstPlayable()?.id, playable.id)
+        XCTAssertNil([missing].firstPlayable())
+    }
+
+    func testRemovalNoticeMatchesDeleteBehavior() {
+        var imported = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        var indexed = imported
+        indexed.folderID = UUID()
+        XCTAssertTrue(RemovalNotice.deletesAppCopy(imported))
+        XCTAssertFalse(RemovalNotice.deletesAppCopy(indexed))
+        XCTAssertTrue(RemovalNotice.message(for: imported).contains("副本"))
+        XCTAssertTrue(RemovalNotice.message(for: indexed).contains("不会删除"))
+        XCTAssertNotEqual(RemovalNotice.title(for: imported), RemovalNotice.title(for: indexed))
+    }
+
+    func testRelativePathUsesCoordinatedRootDespitePrivatePrefix() {
+        let root = URL(fileURLWithPath: "/var/mobile/Containers/Music")
+        let coordinated = URL(fileURLWithPath: "/private/var/mobile/Containers/Music/")
+        let file = URL(fileURLWithPath: "/private/var/mobile/Containers/Music/Album/01.flac")
+        XCTAssertEqual(AudioScanner.relativePath(for: file, in: root), "Album/01.flac")
+        XCTAssertEqual(AudioScanner.relativePath(for: file, in: coordinated), "Album/01.flac")
+        let provider = URL(fileURLWithPath: "/private/var/mobile/Library/LiveFiles/ABC/Music")
+        let provided = URL(fileURLWithPath: "/var/mobile/Library/LiveFiles/ABC/Music/Live/02.wav")
+        XCTAssertEqual(AudioScanner.relativePath(for: provided, in: provider), "Live/02.wav")
+        XCTAssertNil(AudioScanner.relativePath(for: URL(fileURLWithPath: "/private/var/mobile/Other/01.flac"), in: root))
+        let composed = URL(fileURLWithPath: "/var/mobile/Containers/Music/Album/\u{0065}\u{0301}.flac")
+        XCTAssertEqual(AudioScanner.relativePath(for: composed, in: URL(fileURLWithPath: "/private/var/mobile/Containers/Music")), "Album/\u{00e9}.flac")
+    }
 }
 
 @MainActor
@@ -43,14 +107,15 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(track.sampleRate, 44100)
         XCTAssertEqual(track.duration, 0.1, accuracy: 0.001)
         library.toggleFavorite(track)
+        XCTAssertTrue(RemovalNotice.deletesAppCopy(track))
         library.remember(id: track.id, position: 0.05)
         let restored = LibraryStore(root: root)
         XCTAssertEqual(restored.tracks.first?.favorite, true)
-        XCTAssertEqual(restored.snapshot.currentID, track.id)
-        XCTAssertEqual(restored.snapshot.position, 0.05)
+        XCTAssertEqual(restored.playback.currentID, track.id)
+        XCTAssertEqual(restored.playback.position, 0.05)
         restored.remove(track)
         XCTAssertTrue(restored.tracks.isEmpty)
-        XCTAssertNil(restored.snapshot.currentID)
+        XCTAssertNil(restored.playback.currentID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: restored.url(for: track).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
         XCTAssertTrue(LibraryStore(root: root).tracks.isEmpty)
@@ -66,6 +131,77 @@ final class LibraryTests: XCTestCase {
         XCTAssertTrue(library.tracks.isEmpty)
         XCTAssertNotNil(library.errorMessage)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["bad.flac"])
+    }
+
+    func testPlaybackProgressDoesNotRewriteLibraryFile() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let source = base.appendingPathComponent("tone.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410))
+        buffer.frameLength = 4410
+        for channel in 0..<2 { for frame in 0..<4410 { buffer.floatChannelData![channel][frame] = 0 } }
+        do {
+            let file = try AVAudioFile(forWriting: source, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        let root = base.appendingPathComponent("Library")
+        let library = LibraryStore(root: root)
+        await library.importFiles([source])
+        let track = try XCTUnwrap(library.tracks.first)
+        let libraryURL = root.appendingPathComponent("library.json")
+        let before = try Data(contentsOf: libraryURL)
+        library.remember(id: track.id, position: 4)
+        library.rememberQueue([track.id], contextOrder: [track.id], shuffle: true)
+        library.rememberTransport(shuffle: true, repeatMode: .one)
+        XCTAssertEqual(try Data(contentsOf: libraryURL), before)
+        let playbackURL = root.appendingPathComponent("playback.json")
+        let playback = try Data(contentsOf: playbackURL)
+        XCTAssertLessThan(playback.count, before.count)
+        let restored = LibraryStore(root: root)
+        XCTAssertEqual(restored.playback.currentID, track.id)
+        XCTAssertEqual(restored.playback.position, 4)
+        XCTAssertEqual(restored.playback.queueIDs, [track.id])
+        XCTAssertEqual(restored.playback.contextOrder, [track.id])
+        XCTAssertTrue(restored.playback.shuffle)
+        XCTAssertEqual(restored.playback.repeatMode, .one)
+        XCTAssertNotEqual(restored.playback, PlaybackState())
+    }
+
+    func testLegacyLibraryPlaybackMigratesIntoPlaybackFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let id = UUID()
+        let json = #"{"tracks":[],"currentID":"\#(id.uuidString)","position":3.5,"queueIDs":["\#(id.uuidString)"]}"#
+        try Data(json.utf8).write(to: root.appendingPathComponent("library.json"))
+        let library = LibraryStore(root: root)
+        XCTAssertEqual(library.playback.currentID, id)
+        XCTAssertEqual(library.playback.position, 3.5, accuracy: 0.001)
+        XCTAssertEqual(library.playback.queueIDs, [id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("playback.json").path))
+        XCTAssertEqual(LibraryStore(root: root).playback.currentID, id)
+    }
+
+    func testStaleBookmarkRefreshesAndFreshBookmarkStays() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        let nested = folder.appendingPathComponent("Nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let id = try XCTUnwrap(library.snapshot.folders.first?.id)
+        let before = try XCTUnwrap(library.snapshot.folders.first?.bookmark)
+        library.noteResolvedBookmark(for: id, url: nested, stale: false)
+        XCTAssertEqual(library.snapshot.folders.first?.bookmark, before)
+        library.noteResolvedBookmark(for: id, url: nested, stale: true)
+        let after = try XCTUnwrap(library.snapshot.folders.first?.bookmark)
+        XCTAssertNotEqual(after, before)
+        var stale = false
+        let resolved = try URL(resolvingBookmarkData: after, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &stale)
+        XCTAssertEqual(resolved.standardizedFileURL, nested.standardizedFileURL)
     }
 }
 
@@ -152,11 +288,29 @@ final class FolderScanTests: XCTestCase {
         let library = LibraryStore(root: base.appendingPathComponent("Index"))
         await library.addFolder(folder)
         let track = try XCTUnwrap(library.tracks.first)
+        XCTAssertFalse(RemovalNotice.deletesAppCopy(track))
         let id = try XCTUnwrap(library.snapshot.folders.first?.id)
         library.remove(track)
         await library.scanFolder(id)
         XCTAssertTrue(library.tracks.isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: audio.path))
+    }
+    func testToggleStartsFirstAvailableTrack() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        try wav(folder.appendingPathComponent("a.wav"))
+        try wav(folder.appendingPathComponent("b.wav"))
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("a.wav"))
+        let id = try XCTUnwrap(library.snapshot.folders.first?.id)
+        await library.scanFolder(id)
+        XCTAssertEqual(library.tracks.first { $0.relativePath == "a.wav" }?.available, false)
+        XCTAssertEqual(library.tracks.firstPlayable()?.relativePath, "b.wav")
+        let player = PlayerStore(library: library)
+        player.toggle()
+        XCTAssertEqual(player.current?.relativePath, "b.wav")
     }
     func testCopiedImportDeduplicatesIdenticalContentAndFolderAuthorization() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

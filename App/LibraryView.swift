@@ -38,20 +38,22 @@ struct LibraryView: View {
                 }
                 Button("取消", role: .cancel) { playlistTrack = nil }
             }
-            .confirmationDialog("从资料库移除歌曲？", isPresented: Binding(
+            .confirmationDialog(RemovalNotice.title(for: pendingDelete), isPresented: Binding(
                 get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
             ), titleVisibility: .visible) {
                 if let track = pendingDelete {
-                    Button("移除 \(track.title)", role: .destructive) {
+                    Button(RemovalNotice.deletesAppCopy(track) ? "删除副本" : "从资料库移除", role: .destructive) {
                         player.stopIfCurrent(track); library.remove(track); pendingDelete = nil
                     }
                 }
-            } message: { Text("原文件不会删除。从扫描文件夹移除的歌曲，在后续扫描中保持隐藏。") }
+            } message: {
+                Text(pendingDelete.map(RemovalNotice.message(for:)) ?? "")
+            }
             .alert("无法完成操作", isPresented: Binding(
-                get: { library.errorMessage != nil || player.errorMessage != nil },
+                get: { !showSources && (library.errorMessage != nil || player.errorMessage != nil) },
                 set: { if !$0 { library.errorMessage = nil; player.errorMessage = nil } }
             )) { Button("好") { library.errorMessage = nil; player.errorMessage = nil } }
-            message: { Text(library.errorMessage ?? player.errorMessage ?? "") }
+            message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
     }
 
     @ViewBuilder private var playerTabs: some View {
@@ -213,13 +215,12 @@ struct LibraryView: View {
             }
             if !sorted.isEmpty {
                 HStack {
-                    Button { if let first = sorted.first(where: \.available) { player.load(first, context: sorted) } } label: {
+                    Button { player.play(sorted, shuffled: false) } label: {
                         Label("播放", systemImage: "play.fill").frame(maxWidth: .infinity)
                     }
-                    Button {
-                        let shuffled = sorted.filter(\.available).shuffled()
-                        if let first = shuffled.first { player.load(first, context: shuffled) }
-                    } label: { Label("随机播放", systemImage: "shuffle").frame(maxWidth: .infinity) }
+                    Button { player.play(sorted, shuffled: true) } label: {
+                        Label("随机播放", systemImage: "shuffle").frame(maxWidth: .infinity)
+                    }
                 }.buttonStyle(.bordered).listRowSeparator(.hidden)
             }
             ForEach(sorted) { track in
@@ -286,13 +287,26 @@ struct SongRow: View {
     }
 }
 
+final class ArtworkCache {
+    static let shared = ArtworkCache()
+    private let images = NSCache<NSString, UIImage>()
+    func image(at url: URL) -> UIImage? {
+        let key = url.path as NSString
+        if let cached = images.object(forKey: key) { return cached }
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        images.setObject(image, forKey: key)
+        return image
+    }
+    func removeAll() { images.removeAllObjects() }
+}
+
 struct ArtworkView: View {
     let track: Track?
     let root: URL
     var size: CGFloat?
     var body: some View {
         Group {
-            if let name = track?.artworkFilename, let image = UIImage(contentsOfFile: root.appendingPathComponent(name).path) {
+            if let name = track?.artworkFilename, let image = ArtworkCache.shared.image(at: root.appendingPathComponent(name)) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 ZStack {

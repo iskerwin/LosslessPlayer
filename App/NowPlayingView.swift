@@ -5,7 +5,14 @@ import MediaPlayer
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
+    @ObservedObject private var playbackClock: PlaybackClock
     @Environment(\.dismiss) private var dismiss
+
+    init(library: LibraryStore, player: PlayerStore) {
+        self.library = library
+        self.player = player
+        _playbackClock = ObservedObject(wrappedValue: player.clock)
+    }
     @State private var mode = 0
     @State private var scrubbing = false
     @State private var draft: Double = 0
@@ -73,7 +80,7 @@ struct NowPlayingView: View {
                             LabeledContent("专辑", value: current.album)
                             LabeledContent("音源", value: current.specification)
                             LabeledContent("文件", value: current.relativePath ?? current.filename)
-                            Text("音源规格与系统采样率不代表逐位无损输出。").font(.caption).foregroundStyle(.secondary)
+                            Text("高音质本地播放，声音经过 iOS 系统混音。文件格式和输出采样率都不表示逐位还原。").font(.caption).foregroundStyle(.secondary)
                         }
                     }.navigationTitle("歌曲信息").navigationBarTitleDisplayMode(.inline)
                 }.presentationDetents([.medium]).presentationDragIndicator(.visible)
@@ -83,12 +90,12 @@ struct NowPlayingView: View {
 
     private var transport: some View {
         VStack(spacing: 12) {
-            Slider(value: Binding(get: { scrubbing ? draft : min(player.position, max(current?.duration ?? 0, 0.01)) },
+            Slider(value: Binding(get: { scrubbing ? draft : min(playbackClock.position, max(current?.duration ?? 0, 0.01)) },
                 set: { draft = $0 }), in: 0...max(current?.duration ?? 0, 0.01)) { editing in
-                if editing { draft = player.position; scrubbing = true }
+                if editing { draft = playbackClock.position; scrubbing = true }
                 else { player.seek(draft); scrubbing = false }
             }.accessibilityLabel("播放进度")
-            HStack { Text(clock(scrubbing ? draft : player.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - player.position))) }
+            HStack { Text(clock(scrubbing ? draft : playbackClock.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - playbackClock.position))) }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             HStack {
                 Button { player.toggleShuffle() } label: {
@@ -115,7 +122,7 @@ struct NowPlayingView: View {
         VStack(alignment: .leading) {
             Text("播放队列").font(.headline)
             List {
-                ForEach(Array(player.queuedTracks.enumerated()), id: \.offset) { _, track in
+                ForEach(player.queuedTracks) { track in
                     Button { player.load(track) } label: { SongRow(track: track, root: library.root, current: track.id == current?.id) }.buttonStyle(.plain)
                 }.onDelete { player.removeQueue(at: $0) }.onMove { player.moveQueue(from: $0, to: $1) }
             }.listStyle(.plain).frame(height: 230).environment(\.editMode, .constant(.active)).scrollContentBackground(.hidden)
@@ -125,7 +132,7 @@ struct NowPlayingView: View {
     @ViewBuilder private var lyricsPanel: some View {
         if let text = current?.lyrics, !text.isEmpty {
             let lines = LyricsLine.parse(text)
-            let active = lines.lastIndex { ($0.time ?? -.infinity) <= player.position }
+            let active = lines.lastIndex { ($0.time ?? -.infinity) <= playbackClock.position }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
