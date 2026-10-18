@@ -530,7 +530,7 @@ final class PlaylistManagementTests: XCTestCase {
         XCTAssertEqual(restored.snapshot.playlists.first?.name, "Evening")
     }
 
-    func testAddingTracksSkipsOnesAlreadyPresent() {
+    func testAddingTracksSkipsOnesAlreadyPresent() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
         let library = LibraryStore(root: base)
