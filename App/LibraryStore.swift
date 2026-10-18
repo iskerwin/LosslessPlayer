@@ -117,10 +117,21 @@ final class LibraryStore: ObservableObject {
         return persist(s) ? list : nil
     }
     func add(_ track: Track, to playlist: Playlist) {
+        add([track], to: playlist)
+    }
+
+    func add(_ tracks: [Track], to playlist: Playlist) {
         var s = snapshot
-        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }),
-              !s.playlists[i].trackIDs.contains(track.id) else { return }
-        s.playlists[i].trackIDs.append(track.id); persist(s)
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        var ids = s.playlists[i].trackIDs
+        var changed = false
+        for track in tracks where !ids.contains(track.id) {
+            ids.append(track.id)
+            changed = true
+        }
+        guard changed else { return }
+        s.playlists[i].trackIDs = ids
+        persist(s)
     }
     func removePlaylist(_ playlist: Playlist) {
         var s = snapshot; s.playlists.removeAll { $0.id == playlist.id }; persist(s)

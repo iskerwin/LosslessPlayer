@@ -225,3 +225,11 @@ enum RemovalNotice {
 extension Sequence where Element == Track {
     func firstPlayable() -> Track? { first { $0.available } }
 }
+
+/// Whether a visible list is the list playback was started from. Order does not matter; an empty list never matches.
+enum PlaybackContext {
+    static func matches(list: [UUID], context: [UUID]) -> Bool {
+        guard !list.isEmpty, list.count == context.count else { return false }
+        return Set(list) == Set(context)
+    }
+}

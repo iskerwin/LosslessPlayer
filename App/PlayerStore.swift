@@ -33,6 +33,8 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var ordering = QueueOrdering()
     private var playbackReady = false
     var queuedTracks: [Track] { queueIDs.compactMap { id in library.tracks.first { $0.id == id && $0.available } } }
+    /// The list the user started, in its pre-shuffle order.
+    var contextIDs: [UUID] { ordering.context }
     @Published var errorMessage: String?
     private let library: LibraryStore
     private var player: AVAudioPlayer?

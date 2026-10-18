@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    @State private var tab = 0
+    @State private var tab = AppTab.library
+    @FocusState private var searchFieldFocused: Bool
     @State private var showPlayer = false
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
@@ -13,6 +14,8 @@ struct LibraryView: View {
     @State private var playlistName = ""
     @State private var creatingPlaylist = false
     @State private var playlistTrack: Track?
+    @State private var playlistTarget: Track?
+    @State private var songPicker: Playlist?
     @State private var pendingDelete: Track?
     @State private var renamingPlaylist: Playlist?
     @State private var exportPresented = false
@@ -48,6 +51,12 @@ struct LibraryView: View {
                     playlistName = ""; self.renamingPlaylist = nil
                 }
                 Button("取消", role: .cancel) { playlistName = "" }
+            }
+            .sheet(item: $playlistTarget) { track in
+                AddToPlaylistSheet(library: library, tracks: [track])
+            }
+            .sheet(item: $songPicker) { playlist in
+                SongPickerSheet(library: library, playlist: playlist)
             }
             .alert("新建歌单", isPresented: $creatingPlaylist) {
                 TextField("歌单名称", text: $playlistName)
@@ -99,15 +108,67 @@ struct LibraryView: View {
             NavigationStack {
                 libraryHome.navigationTitle("资料库").toolbar { importMenu }
                     .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            }.tabItem { Label("资料库", systemImage: "square.stack.fill") }.tag(0)
+            }.tabItem { Label("资料库", systemImage: "square.stack.fill") }.tag(AppTab.library)
+            NavigationStack {
+                PlaylistHome(library: library, onRename: { playlist in
+                    playlistName = playlist.name
+                    renamingPlaylist = playlist
+                }, onCreate: { creatingPlaylist = true })
+                .toolbar { importMenu }
+                .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+            }.tabItem { Label("歌单", systemImage: "music.note.list") }.tag(AppTab.playlists)
             NavigationStack {
                 collection(library.tracks.filter(\.favorite), title: "收藏")
                     .toolbar { importMenu }
-            }.tabItem { Label("收藏", systemImage: "star.fill") }.tag(1)
+            }.tabItem { Label("收藏", systemImage: "star.fill") }.tag(AppTab.favorites)
             NavigationStack {
-                collection(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索")
-                    .searchable(text: $query, prompt: "歌曲、艺术家、专辑、流派")
-            }.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(2)
+                searchPage
+            }.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
+        }
+        .onChange(of: tab) { _, new in
+            if new == .search { focusSearchSoon() } else { searchFieldFocused = false }
+        }
+    }
+
+    private var searchPage: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("歌曲、艺术家、专辑", text: $query)
+                    .focused($searchFieldFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        searchFieldFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除搜索")
+                }
+            }
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+            .onTapGesture { searchFieldFocused = true }
+            collection(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索")
+        }
+        .background(Color(uiColor: .systemBackground))
+        .scrollDismissesKeyboard(.interactively)
+        .onAppear { focusSearchSoon() }
+    }
+
+    private func focusSearchSoon() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard tab == .search else { return }
+            searchFieldFocused = true
         }
     }
 
@@ -129,17 +190,11 @@ struct LibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(spacing: 0) {
-                    libraryLink("歌单", icon: "music.note.list", route: .playlists)
-                    Divider().padding(.leading, 48)
                     libraryLink("艺术家", icon: "music.mic", route: .artists)
                     Divider().padding(.leading, 48)
                     libraryLink("专辑", icon: "square.stack", route: .albums)
                     Divider().padding(.leading, 48)
                     libraryLink("歌曲", icon: "music.note", route: .songs)
-                    Divider().padding(.leading, 48)
-                    libraryLink("流派", icon: "guitars", route: .genres)
-                    Divider().padding(.leading, 48)
-                    libraryLink("年份", icon: "calendar", route: .years)
                     Divider().padding(.leading, 48)
                     libraryLink("最近播放", icon: "clock", route: .recent)
                 }
@@ -203,7 +258,7 @@ struct LibraryView: View {
 
     @ViewBuilder private func destination(_ route: LibraryRoute) -> some View {
         switch route {
-        case .songs: collection(library.tracks, title: "歌曲")
+        case .songs: collection(library.tracks, title: "歌曲", reflectsPlayback: true)
         case .artists:
             List(Array(Set(library.tracks.map(\.artist))).sorted(), id: \.self) { artist in
                 NavigationLink(value: LibraryRoute.artist(artist)) { Label(artist, systemImage: "person.crop.circle") }
@@ -217,65 +272,14 @@ struct LibraryView: View {
                 }
             }.navigationTitle("专辑")
         case .album(let id): collection(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", album: true)
-        case .genres:
-            List {
-                ForEach(genreNames, id: \.self) { name in
-                    NavigationLink(value: LibraryRoute.genre(name)) { Label(name, systemImage: "guitars") }
-                }
-                if library.tracks.contains(where: { normalizedGenre($0) == nil }) {
-                    NavigationLink(value: LibraryRoute.unknownGenre) { Label("未知流派", systemImage: "questionmark") }
-                }
-            }.navigationTitle("流派")
-        case .genre(let name): collection(library.tracks.filter { normalizedGenre($0) == name }, title: name)
-        case .unknownGenre: collection(library.tracks.filter { normalizedGenre($0) == nil }, title: "未知流派")
-        case .years:
-            List {
-                ForEach(years, id: \.self) { year in
-                    NavigationLink(value: LibraryRoute.year(year)) { Label(String(year), systemImage: "calendar") }
-                }
-                if library.tracks.contains(where: { $0.year == nil }) {
-                    NavigationLink(value: LibraryRoute.unknownYear) { Label("未知年份", systemImage: "questionmark") }
-                }
-            }.navigationTitle("年份")
-        case .year(let year): collection(library.tracks.filter { $0.year == year }, title: String(year))
-        case .unknownYear: collection(library.tracks.filter { $0.year == nil }, title: "未知年份")
-        case .recent: collection(recentlyPlayed, title: "最近播放", preserveOrder: true)
-        case .playlists:
-            List {
-                Button("新建歌单", systemImage: "plus") { creatingPlaylist = true }
-                ForEach(library.snapshot.playlists) { playlist in
-                    NavigationLink(value: LibraryRoute.playlist(playlist.id)) {
-                        HStack {
-                            ArtworkView(track: library.coverTrack(for: playlist), root: library.root, size: 44)
-                            VStack(alignment: .leading) {
-                                Text(playlist.name)
-                                Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .swipeActions(allowsFullSwipe: false) {
-                        Button("重命名") { playlistName = playlist.name; renamingPlaylist = playlist }.tint(.orange)
-                        Button("删除歌单", role: .destructive) { library.removePlaylist(playlist) }
-                    }
-                }
-            }.navigationTitle("歌单")
+        case .recent: collection(recentlyPlayed, title: "最近播放", preserveOrder: true, reflectsPlayback: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
             collection((playlist?.trackIDs ?? []).compactMap { id in library.tracks.first { $0.id == id } }, title: playlist?.name ?? "歌单", playlist: playlist)
         }
     }
 
-    private func normalizedGenre(_ track: Track) -> String? {
-        let name = track.genre?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let name, !name.isEmpty else { return nil }
-        return name
-    }
-    private var genreNames: [String] {
-        Array(Set(library.tracks.compactMap(normalizedGenre))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
-    private var years: [Int] { Array(Set(library.tracks.compactMap(\.year))).sorted(by: >) }
-
-    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil, preserveOrder: Bool = false) -> some View {
+    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil, preserveOrder: Bool = false, reflectsPlayback: Bool = false) -> some View {
         let activeSort: LibrarySort? = {
             if playlist != nil || preserveOrder { return nil }
             if album { return LibrarySort(rawValue: albumSortRaw) ?? .album }
@@ -289,18 +293,21 @@ struct LibraryView: View {
                     Text(first.album).font(.title2.bold()); Text(first.albumArtistName).foregroundStyle(.orange)
                 }.frame(maxWidth: .infinity).listRowSeparator(.hidden)
             }
-            if let playlist, let cover = library.coverTrack(for: playlist) {
-                ArtworkView(track: cover, root: library.root, size: 160).frame(maxWidth: .infinity).listRowSeparator(.hidden)
+            if let playlist {
+                PlaylistCover(playlist: playlist, library: library)
+                    .frame(width: 180)
+                    .frame(maxWidth: .infinity)
+                    .listRowSeparator(.hidden)
+                Button {
+                    songPicker = library.snapshot.playlists.first { $0.id == playlist.id } ?? playlist
+                } label: {
+                    Label("添加歌曲", systemImage: "plus").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .listRowSeparator(.hidden)
             }
             if !sorted.isEmpty {
-                HStack {
-                    Button { player.play(sorted, shuffled: false) } label: {
-                        Label("播放", systemImage: "play.fill").frame(maxWidth: .infinity)
-                    }
-                    Button { player.play(sorted, shuffled: true) } label: {
-                        Label("随机播放", systemImage: "shuffle").frame(maxWidth: .infinity)
-                    }
-                }.buttonStyle(.bordered).listRowSeparator(.hidden)
+                playbackCapsules(sorted, reflectsPlayback: reflectsPlayback)
             }
             ForEach(sorted) { track in
                 Button { player.load(track, context: sorted) } label: {
@@ -311,6 +318,7 @@ struct LibraryView: View {
                     Button("移除", role: .destructive) {
                         if let playlist { library.removeFromPlaylist(track, playlist: playlist) } else { pendingDelete = track }
                     }
+                    Button("加入歌单") { playlistTarget = track }.tint(.orange)
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button { library.toggleFavorite(track) } label: { Label(track.favorite ? "取消收藏" : "收藏", systemImage: "star") }.tint(.orange)
@@ -348,6 +356,33 @@ struct LibraryView: View {
         }
     }
 
+    private func playbackCapsules(_ tracks: [Track], reflectsPlayback: Bool) -> some View {
+        let active = reflectsPlayback && PlaybackContext.matches(list: tracks.map(\.id), context: player.contextIDs)
+        let playingHere = active && player.playing
+        let shuffleHere = active && player.shuffle
+        return HStack {
+            capsule(playingHere ? "暂停" : "播放", icon: playingHere ? "pause.fill" : "play.fill", highlighted: playingHere, tinted: active && !playingHere) {
+                if playingHere { player.pause() }
+                else if active, player.current != nil { player.resume() }
+                else { player.play(tracks, shuffled: false) }
+            }
+            capsule("随机播放", icon: "shuffle", highlighted: shuffleHere, tinted: false) {
+                if active { player.toggleShuffle() }
+                else { player.play(tracks, shuffled: true) }
+            }
+        }
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder private func capsule(_ title: String, icon: String, highlighted: Bool, tinted: Bool, action: @escaping () -> Void) -> some View {
+        let label = Label(title, systemImage: icon).frame(maxWidth: .infinity)
+        if highlighted {
+            Button(action: action) { label }.buttonStyle(.borderedProminent).tint(.orange)
+        } else {
+            Button(action: action) { label }.buttonStyle(.bordered).tint(tinted ? .orange : .primary)
+        }
+    }
+
     private func indexLabel(_ track: Track) -> String? {
         guard let number = track.trackNumber else { return nil }
         if let disc = track.discNumber, disc > 0 { return "\(disc)-\(number)" }
@@ -364,10 +399,7 @@ struct LibraryView: View {
         Button(track.favorite ? "取消收藏" : "收藏", systemImage: "star") { library.toggleFavorite(track) }
         Button("接下来播放", systemImage: "text.line.first.and.arrowtriangle.forward") { player.enqueue(track, next: true) }
         Button("最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) }
-        Menu("添加到歌单", systemImage: "text.badge.plus") {
-            ForEach(library.snapshot.playlists) { list in Button(list.name) { library.add(track, to: list) } }
-            Button("新建歌单") { playlistTrack = track; creatingPlaylist = true }
-        }
+        Button("添加到歌单", systemImage: "text.badge.plus") { playlistTarget = track }
         if let playlist {
             Button("设为歌单封面", systemImage: "photo") { library.setCover(track, for: playlist) }
         }
@@ -375,9 +407,13 @@ struct LibraryView: View {
     }
 }
 
-private enum LibraryRoute: Hashable {
-    case songs, artists, albums, playlists, genres, years, recent, unknownGenre, unknownYear
-    case artist(String), album(String), playlist(UUID), genre(String), year(Int)
+enum LibraryRoute: Hashable {
+    case songs, artists, albums, recent
+    case artist(String), album(String), playlist(UUID)
+}
+
+private enum AppTab: Hashable {
+    case library, playlists, favorites, search
 }
 struct AlbumGroup: Identifiable {
     var id: String
@@ -458,15 +494,32 @@ struct MiniPlayer: View {
     var open: () -> Void
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: open) {
-                HStack { ArtworkView(track: player.current, root: library.root, size: 40)
-                    Text(player.current?.title ?? "未在播放").font(.subheadline.weight(.medium)).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading) }
-            }.buttonStyle(.plain).accessibilityLabel("打开正在播放")
-            Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44) }
-                .accessibilityLabel(player.playing ? "暂停" : "播放")
-            Button { player.skip() } label: { Image(systemName: "forward.end.fill").frame(width: 40, height: 44) }.accessibilityLabel("下一首")
-        }.padding(.horizontal, 12).padding(.vertical, 5).foregroundStyle(.primary)
+            ArtworkView(track: player.current, root: library.root, size: 40)
+            Text(player.current?.title ?? "未在播放")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("打开正在播放")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, open)
+            Button { player.toggle() } label: {
+                Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(player.playing ? "暂停" : "播放")
+            Button { player.skip() } label: {
+                Image(systemName: "forward.end.fill").frame(width: 40, height: 44)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("下一首")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: open)
+        .foregroundStyle(.primary)
+        .accessibilityElement(children: .contain)
     }
 }
 

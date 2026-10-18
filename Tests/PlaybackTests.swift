@@ -66,6 +66,15 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertNotEqual(RemovalNotice.title(for: imported), RemovalNotice.title(for: indexed))
     }
 
+    func testPlaybackContextMatchesTheWholeList() {
+        let a = UUID(), b = UUID(), c = UUID()
+        XCTAssertTrue(PlaybackContext.matches(list: [a, b], context: [b, a]))
+        XCTAssertFalse(PlaybackContext.matches(list: [a, b], context: [a, b, c]))
+        XCTAssertFalse(PlaybackContext.matches(list: [a], context: [a, b]))
+        XCTAssertFalse(PlaybackContext.matches(list: [], context: []))
+        XCTAssertFalse(PlaybackContext.matches(list: [], context: [a]))
+    }
+
     func testRelativePathUsesCoordinatedRootDespitePrivatePrefix() {
         let root = URL(fileURLWithPath: "/var/mobile/Containers/Music")
         let coordinated = URL(fileURLWithPath: "/private/var/mobile/Containers/Music/")
@@ -445,6 +454,19 @@ final class LibraryCatalogTests: XCTestCase {
         XCTAssertNil(PlaylistExchange.match(M3UEntry(path: "extra.wav", title: nil, artist: nil, duration: nil), in: [short]))
     }
 
+    func testPlaylistCoverUsesCustomArtOrFourUpMosaic() {
+        let first = track(title: "One", artist: "Ada", album: "Hits")
+        let second = track(title: "Two", artist: "Bea", album: "Hits", file: "b.wav")
+        let mosaic = PlaylistCover.choice(coverTrackID: nil, members: [first, second])
+        XCTAssertFalse(mosaic.single)
+        XCTAssertEqual(mosaic.tracks.count, 4)
+        XCTAssertEqual(mosaic.tracks.compactMap { $0 }.map(\.id), [first.id, second.id])
+        let custom = PlaylistCover.choice(coverTrackID: second.id, members: [first, second])
+        XCTAssertTrue(custom.single)
+        XCTAssertEqual(custom.tracks.compactMap { $0 }.map(\.id), [second.id])
+        XCTAssertTrue(PlaylistCover.choice(coverTrackID: nil, members: [first]).single)
+    }
+
     func testLegacyTrackAndPlaylistDecodeWithoutNewFields() throws {
         let id = UUID()
         let trackJSON = """
@@ -506,5 +528,17 @@ final class PlaylistManagementTests: XCTestCase {
         XCTAssertEqual(restored.tracks.first { $0.id == tracks[1].id }?.playCount, 1)
         XCTAssertEqual(restored.tracks.filter(\.favorite).count, 1)
         XCTAssertEqual(restored.snapshot.playlists.first?.name, "Evening")
+    }
+
+    func testAddingTracksSkipsOnesAlreadyPresent() {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let library = LibraryStore(root: base)
+        let first = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        let second = Track(id: UUID(), filename: "b.wav", title: "B", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        let list = try XCTUnwrap(library.createPlaylist("Mix"))
+        library.add([first, second, first], to: list)
+        library.add(first, to: list)
+        XCTAssertEqual(library.snapshot.playlists.first?.trackIDs, [first.id, second.id])
     }
 }

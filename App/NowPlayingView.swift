@@ -17,6 +17,7 @@ struct NowPlayingView: View {
     @State private var scrubbing = false
     @State private var draft: Double = 0
     @State private var details = false
+    @State private var addToPlaylist = false
     private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
 
     var body: some View {
@@ -44,6 +45,10 @@ struct NowPlayingView: View {
                                 }.buttonStyle(.plain).modifier(GlassControl())
                                     .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
                                     .sensoryFeedback(.selection, trigger: current.favorite)
+                                Button { addToPlaylist = true } label: {
+                                    Image(systemName: "text.badge.plus").frame(width: 44, height: 44)
+                                }.buttonStyle(.plain).modifier(GlassControl())
+                                    .accessibilityLabel("添加到歌单")
                             }
                             Button { details = true } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                                 .buttonStyle(.plain).modifier(GlassControl()).accessibilityLabel("歌曲信息")
@@ -73,6 +78,9 @@ struct NowPlayingView: View {
             .toolbar { ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "chevron.down") }.accessibilityLabel("收起播放器")
             } }
+            .sheet(isPresented: $addToPlaylist) {
+                if let current { AddToPlaylistSheet(library: library, tracks: [current]) }
+            }
             .sheet(isPresented: $details) {
                 NavigationStack {
                     List {
