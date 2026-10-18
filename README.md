@@ -37,7 +37,7 @@ open LosslessPlayer.xcodeproj
 
 最低运行 iOS 17，Liquid Glass 分支需要 iOS 26+。工程以 `project.yml` 为来源，不提交生成的工程和 Info.plist。设置自己的 Signing Team 后可真机运行。
 
-GitHub Actions 使用 `xcode-27` runner 生成工程并运行 XCTest。main 的测试通过后，编译 arm64 Debug App，校验 Bundle ID、后台音频能力、图标和二进制架构，生成未签名 IPA、SHA256SUMS 并发布开发预发布版本。未签名 IPA 需 AltStore 等工具重新签名安装，不是 TestFlight / App Store 发行版。
+GitHub Actions 在稳定的 `macos-26` / iOS 26 模拟器运行 XCTest，并使用 `xcode-27` runner 编译最终真机 IPA。iOS 27 模拟器测试机出现启动测试停滞，因此 iOS 27 实际界面仍待真机验收。main 的测试通过后，编译 arm64 Debug App，校验 Bundle ID、后台音频能力、图标和二进制架构，生成未签名 IPA、SHA256SUMS 并发布开发预发布版本。未签名 IPA 需 AltStore 等工具重新签名安装，不是 TestFlight / App Store 发行版。
 
 ## 验证与限制
 
