@@ -171,7 +171,7 @@ enum RemovalNotice {
 
     static func message(for track: Track) -> String {
         if deletesAppCopy(track) {
-            return "将删除已经复制到 App 里的文件。你在「文件」中的原始文件不会被改动。"
+            return "将删除已经复制到 App 里的副本。你在「文件」中的原始文件不会被改动。"
         }
         return "只移除资料库索引，不会删除文件夹里的原文件。之后重新扫描仍会隐藏这首歌。"
     }
