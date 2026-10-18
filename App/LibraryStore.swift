@@ -64,10 +64,13 @@ final class LibraryStore: ObservableObject {
         s.tracks[i].favorite.toggle(); persist(s)
     }
 
-    func createPlaylist(_ name: String) {
+    @discardableResult
+    func createPlaylist(_ name: String) -> Playlist? {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        var s = snapshot; s.playlists.append(Playlist(name: name)); persist(s)
+        guard !name.isEmpty else { return nil }
+        var s = snapshot
+        let list = Playlist(name: name); s.playlists.append(list)
+        return persist(s) ? list : nil
     }
     func add(_ track: Track, to playlist: Playlist) {
         var s = snapshot

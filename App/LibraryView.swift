@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var playlistName = ""
     @State private var creatingPlaylist = false
+    @State private var playlistTrack: Track?
     @State private var pendingDelete: Track?
     enum ImportKind { case files, folders }
 
@@ -31,8 +32,11 @@ struct LibraryView: View {
             }
             .alert("新建歌单", isPresented: $creatingPlaylist) {
                 TextField("歌单名称", text: $playlistName)
-                Button("创建") { library.createPlaylist(playlistName); playlistName = "" }
-                Button("取消", role: .cancel) {}
+                Button("创建") {
+                    if let list = library.createPlaylist(playlistName), let track = playlistTrack { library.add(track, to: list) }
+                    playlistName = ""; playlistTrack = nil
+                }
+                Button("取消", role: .cancel) { playlistTrack = nil }
             }
             .confirmationDialog("从资料库移除歌曲？", isPresented: Binding(
                 get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
@@ -51,12 +55,14 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private var playerTabs: some View {
-        if #available(iOS 26.0, *) {
-            if player.current != nil {
-                tabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory {
-                    MiniPlayer(library: library, player: player) { showPlayer = true }
-                }
-            } else { tabs.tabBarMinimizeBehavior(.onScrollDown) }
+        if #available(iOS 26.1, *) {
+            tabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory(isEnabled: player.current != nil) {
+                MiniPlayer(library: library, player: player) { showPlayer = true }
+            }
+        } else if #available(iOS 26.0, *) {
+            tabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory {
+                if player.current != nil { MiniPlayer(library: library, player: player) { showPlayer = true } }
+            }
         } else {
             tabs.safeAreaInset(edge: .bottom) {
                 if player.current != nil {
@@ -241,7 +247,7 @@ struct LibraryView: View {
         Button("最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) }
         Menu("添加到歌单", systemImage: "text.badge.plus") {
             ForEach(library.snapshot.playlists) { list in Button(list.name) { library.add(track, to: list) } }
-            Button("新建歌单") { creatingPlaylist = true }
+            Button("新建歌单") { playlistTrack = track; creatingPlaylist = true }
         }
         Button("从资料库移除", systemImage: "trash", role: .destructive) { pendingDelete = track }
     }
