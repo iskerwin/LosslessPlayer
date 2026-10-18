@@ -105,24 +105,25 @@ struct NowPlayingView: View {
             }.accessibilityLabel("播放进度")
             HStack { Text(clock(scrubbing ? draft : playbackClock.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - playbackClock.position))) }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            HStack {
-                Button { player.toggleShuffle() } label: {
-                    Image(systemName: "shuffle").foregroundStyle(player.shuffle ? Color.orange : Color.secondary).frame(width: 44, height: 44)
-                }.accessibilityLabel("切换随机播放")
-                Spacer()
-                Button { player.skip(backwards: true) } label: { Image(systemName: "backward.fill").font(.title).frame(width: 44, height: 54) }.accessibilityLabel("上一首")
-                Spacer()
-                Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.system(size: 44)).frame(width: 60, height: 64) }.accessibilityLabel(player.playing ? "暂停" : "播放")
-                Spacer()
-                Button { player.skip() } label: { Image(systemName: "forward.fill").font(.title).frame(width: 44, height: 54) }.accessibilityLabel("下一首")
-                Spacer()
-                Button {
-                    switch player.repeatMode { case .off: player.repeatMode = .all; case .all: player.repeatMode = .one; case .one: player.repeatMode = .off }
-                } label: {
-                    Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
-                        .foregroundStyle(player.repeatMode == .off ? Color.secondary : Color.orange).frame(width: 44, height: 44)
-                }.accessibilityLabel(player.repeatMode == .one ? "单曲循环" : player.repeatMode == .all ? "列表循环" : "循环已关闭")
-            }.buttonStyle(.plain).foregroundStyle(.primary)
+            HStack(spacing: 10) {
+                CapsuleButton(systemImage: "shuffle", active: player.shuffle, iconPointSize: 18, accessibilityLabel: "切换随机播放") {
+                    player.toggleShuffle()
+                }
+                Spacer(minLength: 4)
+                CapsuleButton(systemImage: "backward.fill", iconPointSize: 20, accessibilityLabel: "上一首") {
+                    player.skip(backwards: true)
+                }
+                CapsuleButton(systemImage: player.playing ? "pause.fill" : "play.fill", active: player.playing, iconPointSize: 28, accessibilityLabel: player.playing ? "暂停" : "播放") {
+                    player.toggle()
+                }
+                CapsuleButton(systemImage: "forward.fill", iconPointSize: 20, accessibilityLabel: "下一首") {
+                    player.skip()
+                }
+                Spacer(minLength: 4)
+                CapsuleButton(systemImage: player.repeatMode.symbolName, active: player.repeatMode != .off, iconPointSize: 18, accessibilityLabel: player.repeatMode == .one ? "单曲循环" : player.repeatMode == .all ? "列表循环" : "循环已关闭") {
+                    player.cycleRepeat()
+                }
+            }
         }
     }
 

@@ -75,6 +75,31 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertFalse(PlaybackContext.matches(list: [], context: [a]))
     }
 
+    func testRepeatModeCyclesBetweenOffListAndOne() {
+        XCTAssertEqual(RepeatMode.off.cycled, .all)
+        XCTAssertEqual(RepeatMode.all.cycled, .one)
+        XCTAssertEqual(RepeatMode.one.cycled, .off)
+        XCTAssertEqual(RepeatMode.off.symbolName, "repeat")
+        XCTAssertEqual(RepeatMode.all.symbolName, "repeat")
+        XCTAssertEqual(RepeatMode.one.symbolName, "repeat.1")
+        XCTAssertNotEqual(RepeatMode.all.symbolName, RepeatMode.one.symbolName)
+    }
+
+    func testSelectAllKeepsHiddenChoicesWhenTheFilterChanges() {
+        let ada = UUID(), bea = UUID(), cy = UUID()
+        var selected = VisibleSongSelection.selectVisible([ada, bea], in: [])
+        XCTAssertEqual(selected, Set([ada, bea]))
+        selected = VisibleSongSelection.selectVisible([cy], in: selected)
+        XCTAssertEqual(selected, Set([ada, bea, cy]))
+        selected = VisibleSongSelection.deselectVisible([bea], in: selected)
+        XCTAssertEqual(selected, Set([ada, cy]))
+        XCTAssertTrue(VisibleSongSelection.allVisibleSelected([ada], in: selected))
+        XCTAssertFalse(VisibleSongSelection.allVisibleSelected([ada, bea], in: selected))
+        XCTAssertTrue(VisibleSongSelection.anyVisibleSelected([bea, cy], in: selected))
+        XCTAssertFalse(VisibleSongSelection.anyVisibleSelected([bea], in: selected))
+        XCTAssertFalse(VisibleSongSelection.allVisibleSelected([], in: selected))
+    }
+
     func testRelativePathUsesCoordinatedRootDespitePrivatePrefix() {
         let root = URL(fileURLWithPath: "/var/mobile/Containers/Music")
         let coordinated = URL(fileURLWithPath: "/private/var/mobile/Containers/Music/")

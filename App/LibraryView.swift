@@ -125,8 +125,11 @@ struct LibraryView: View {
                 searchPage
             }.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
         }
+        .background {
+            SearchTabReselect(title: "搜索") { searchFieldFocused = true }
+        }
         .onChange(of: tab) { _, new in
-            if new == .search { focusSearchSoon() } else { searchFieldFocused = false }
+            if new != .search { searchFieldFocused = false }
         }
     }
 
@@ -161,15 +164,6 @@ struct LibraryView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .scrollDismissesKeyboard(.interactively)
-        .onAppear { focusSearchSoon() }
-    }
-
-    private func focusSearchSoon() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard tab == .search else { return }
-            searchFieldFocused = true
-        }
     }
 
     private var importMenu: some ToolbarContent {
@@ -258,7 +252,7 @@ struct LibraryView: View {
 
     @ViewBuilder private func destination(_ route: LibraryRoute) -> some View {
         switch route {
-        case .songs: collection(library.tracks, title: "歌曲", reflectsPlayback: true)
+        case .songs: collection(library.tracks, title: "歌曲")
         case .artists:
             List(Array(Set(library.tracks.map(\.artist))).sorted(), id: \.self) { artist in
                 NavigationLink(value: LibraryRoute.artist(artist)) { Label(artist, systemImage: "person.crop.circle") }
@@ -272,14 +266,14 @@ struct LibraryView: View {
                 }
             }.navigationTitle("专辑")
         case .album(let id): collection(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", album: true)
-        case .recent: collection(recentlyPlayed, title: "最近播放", preserveOrder: true, reflectsPlayback: true)
+        case .recent: collection(recentlyPlayed, title: "最近播放", preserveOrder: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
             collection((playlist?.trackIDs ?? []).compactMap { id in library.tracks.first { $0.id == id } }, title: playlist?.name ?? "歌单", playlist: playlist)
         }
     }
 
-    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil, preserveOrder: Bool = false, reflectsPlayback: Bool = false) -> some View {
+    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil, preserveOrder: Bool = false) -> some View {
         let activeSort: LibrarySort? = {
             if playlist != nil || preserveOrder { return nil }
             if album { return LibrarySort(rawValue: albumSortRaw) ?? .album }
@@ -307,7 +301,7 @@ struct LibraryView: View {
                 .listRowSeparator(.hidden)
             }
             if !sorted.isEmpty {
-                playbackCapsules(sorted, reflectsPlayback: reflectsPlayback)
+                playbackCapsules(sorted)
             }
             ForEach(sorted) { track in
                 Button { player.load(track, context: sorted) } label: {
@@ -356,31 +350,25 @@ struct LibraryView: View {
         }
     }
 
-    private func playbackCapsules(_ tracks: [Track], reflectsPlayback: Bool) -> some View {
-        let active = reflectsPlayback && PlaybackContext.matches(list: tracks.map(\.id), context: player.contextIDs)
+    private func playbackCapsules(_ tracks: [Track]) -> some View {
+        let active = PlaybackContext.matches(list: tracks.map(\.id), context: player.contextIDs)
         let playingHere = active && player.playing
-        let shuffleHere = active && player.shuffle
-        return HStack {
-            capsule(playingHere ? "暂停" : "播放", icon: playingHere ? "pause.fill" : "play.fill", highlighted: playingHere, tinted: active && !playingHere) {
+        let mode = player.repeatMode
+        return HStack(spacing: 8) {
+            CapsuleButton(title: playingHere ? "暂停" : "播放", systemImage: playingHere ? "pause.fill" : "play.fill", active: playingHere, expands: true, accessibilityLabel: playingHere ? "暂停" : "播放") {
                 if playingHere { player.pause() }
                 else if active, player.current != nil { player.resume() }
                 else { player.play(tracks, shuffled: false) }
             }
-            capsule("随机播放", icon: "shuffle", highlighted: shuffleHere, tinted: false) {
+            CapsuleButton(title: "随机", systemImage: "shuffle", active: active && player.shuffle, expands: true, accessibilityLabel: "随机播放") {
                 if active { player.toggleShuffle() }
                 else { player.play(tracks, shuffled: true) }
             }
+            CapsuleButton(title: mode.controlTitle, systemImage: mode.symbolName, active: mode != .off, expands: true, accessibilityLabel: mode == .one ? "单曲循环" : mode == .all ? "列表循环" : "循环已关闭") {
+                player.cycleRepeat()
+            }
         }
         .listRowSeparator(.hidden)
-    }
-
-    @ViewBuilder private func capsule(_ title: String, icon: String, highlighted: Bool, tinted: Bool, action: @escaping () -> Void) -> some View {
-        let label = Label(title, systemImage: icon).frame(maxWidth: .infinity)
-        if highlighted {
-            Button(action: action) { label }.buttonStyle(.borderedProminent).tint(.orange)
-        } else {
-            Button(action: action) { label }.buttonStyle(.bordered).tint(tinted ? .orange : .primary)
-        }
     }
 
     private func indexLabel(_ track: Track) -> String? {

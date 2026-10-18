@@ -123,6 +123,25 @@ struct PlaybackQueue {
 
 enum RepeatMode: String, Codable, Equatable {
     case off, all, one
+
+    var cycled: RepeatMode {
+        switch self {
+        case .off: return .all
+        case .all: return .one
+        case .one: return .off
+        }
+    }
+
+    /// Off and list share `repeat`; single-track repeat uses `repeat.1`.
+    var symbolName: String { self == .one ? "repeat.1" : "repeat" }
+
+    var controlTitle: String {
+        switch self {
+        case .off: return "循环"
+        case .all: return "列表"
+        case .one: return "单曲"
+        }
+    }
 }
 
 /// Lightweight resume state. Kept out of `library.json` so playback ticks do not rewrite the catalog.

@@ -142,6 +142,24 @@ struct M3UEntry: Equatable {
     var duration: Int?
 }
 
+enum VisibleSongSelection {
+    static func allVisibleSelected(_ visible: [UUID], in selected: Set<UUID>) -> Bool {
+        !visible.isEmpty && visible.allSatisfy(selected.contains)
+    }
+
+    static func anyVisibleSelected(_ visible: [UUID], in selected: Set<UUID>) -> Bool {
+        visible.contains(where: selected.contains)
+    }
+
+    static func selectVisible(_ visible: [UUID], in selected: Set<UUID>) -> Set<UUID> {
+        selected.union(visible)
+    }
+
+    static func deselectVisible(_ visible: [UUID], in selected: Set<UUID>) -> Set<UUID> {
+        selected.subtracting(visible)
+    }
+}
+
 enum PlaylistFileTypes {
     static let m3u = UTType(tag: "m3u", tagClass: .filenameExtension, conformingTo: .plainText) ?? .plainText
     static let m3u8 = UTType(tag: "m3u8", tagClass: .filenameExtension, conformingTo: .plainText) ?? .plainText

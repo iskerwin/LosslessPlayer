@@ -233,6 +233,17 @@ struct SongPickerSheet: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture { searchFocused = true }
+                HStack {
+                    Text("已选 \(selected.count) 首").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button("全选") { selected = VisibleSongSelection.selectVisible(visibleIDs, in: selected) }
+                        .disabled(visibleIDs.isEmpty || VisibleSongSelection.allVisibleSelected(visibleIDs, in: selected))
+                    Button("取消全选") { selected = VisibleSongSelection.deselectVisible(visibleIDs, in: selected) }
+                        .disabled(!VisibleSongSelection.anyVisibleSelected(visibleIDs, in: selected))
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
                 List(candidates) { track in
                     Button { toggle(track) } label: {
                         HStack(spacing: 12) {
@@ -251,7 +262,7 @@ struct SongPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("加入 \(selected.count)") { commit() }
+                    Button("添加 (\(selected.count))") { commit() }
                         .disabled(selected.isEmpty)
                 }
             }
@@ -259,6 +270,8 @@ struct SongPickerSheet: View {
         }
         .tint(.orange)
     }
+
+    private var visibleIDs: [UUID] { candidates.map(\.id) }
 
     private func toggle(_ track: Track) {
         if selected.contains(track.id) { selected.remove(track.id) } else { selected.insert(track.id) }

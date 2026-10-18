@@ -209,6 +209,8 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         library.rememberQueue(queueIDs, contextOrder: ordering.context, shuffle: shuffle)
     }
 
+    func cycleRepeat() { repeatMode = repeatMode.cycled }
+
     func toggleShuffle() {
         ordering.queue = queueIDs
         ordering.shuffle = shuffle
