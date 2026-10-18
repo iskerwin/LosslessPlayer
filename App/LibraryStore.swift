@@ -145,9 +145,11 @@ final class LibraryStore: ObservableObject {
             try Task.checkCancellation()
             var s = snapshot
             let oldIDs = Set(s.tracks.map(\.id))
-            let added = result.tracks.filter { !oldIDs.contains($0.id) }.count
+            let excluded = Set(s.folders.first(where: { $0.id == id })?.excludedPaths ?? [])
+            let accepted = result.tracks.filter { !excluded.contains($0.relativePath ?? "") }
+            let added = accepted.filter { !oldIDs.contains($0.id) }.count
             // Keep favorites/playlist membership edited while the worker was running.
-            for var track in result.tracks {
+            for var track in accepted {
                 if let i = s.tracks.firstIndex(where: { $0.id == track.id }) {
                     track.favorite = s.tracks[i].favorite; s.tracks[i] = track
                 } else { s.tracks.append(track) }

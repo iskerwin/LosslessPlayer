@@ -92,6 +92,7 @@ actor AudioScanner {
         let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
         let target = root.appendingPathComponent(digest + "." + url.pathExtension.lowercased())
         var track = try await read(file, id: UUID())
+        track.lyrics = sidecarLyrics(url)
         track.title = track.title == file.deletingPathExtension().lastPathComponent ? url.deletingPathExtension().lastPathComponent : track.title
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: file) }
         else { try FileManager.default.moveItem(at: file, to: target) }
