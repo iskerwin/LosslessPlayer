@@ -252,3 +252,41 @@ enum PlaybackContext {
         return Set(list) == Set(context)
     }
 }
+
+/// How the shared play / shuffle / repeat capsules should look for one collection.
+/// Shuffle and repeat always follow the player. Play shows pause only while this collection is the one being heard.
+struct CapsulePlaybackAppearance: Equatable {
+    var playTitle: String
+    var playSymbol: String
+    var playHighlighted: Bool
+    /// Pause the current audio instead of starting this collection.
+    var pauses: Bool
+    /// Resume the current audio instead of starting this collection over.
+    var resumes: Bool
+    var shuffleHighlighted: Bool
+    var repeatTitle: String
+    var repeatSymbol: String
+    var repeatHighlighted: Bool
+    var repeatAccessibility: String
+}
+
+enum CapsulePlayback {
+    static func appearance(listIDs: [UUID], contextIDs: [UUID], currentID: UUID?, playing: Bool, shuffle: Bool, repeatMode: RepeatMode) -> CapsulePlaybackAppearance {
+        let startedHere = PlaybackContext.matches(list: listIDs, context: contextIDs)
+        let currentHere = currentID.map { listIDs.contains($0) } ?? false
+        let owns = startedHere || currentHere
+        let showPause = owns && playing
+        return CapsulePlaybackAppearance(
+            playTitle: showPause ? "暂停" : "播放",
+            playSymbol: showPause ? "pause.fill" : "play.fill",
+            playHighlighted: showPause,
+            pauses: showPause,
+            resumes: owns && !playing && currentID != nil,
+            shuffleHighlighted: shuffle,
+            repeatTitle: repeatMode.controlTitle,
+            repeatSymbol: repeatMode.symbolName,
+            repeatHighlighted: repeatMode != .off,
+            repeatAccessibility: repeatMode == .one ? "单曲循环" : repeatMode == .all ? "列表循环" : "循环已关闭"
+        )
+    }
+}

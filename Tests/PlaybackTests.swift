@@ -75,6 +75,37 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertFalse(PlaybackContext.matches(list: [], context: [a]))
     }
 
+    func testCapsuleStateFollowsGlobalShuffleAndRepeatOnEveryList() {
+        let here = UUID(), other = UUID(), current = UUID()
+        let playingElsewhere = CapsulePlayback.appearance(
+            listIDs: [here], contextIDs: [other], currentID: other, playing: true, shuffle: true, repeatMode: .all)
+        XCTAssertEqual(playingElsewhere.playTitle, "播放")
+        XCTAssertEqual(playingElsewhere.playSymbol, "play.fill")
+        XCTAssertFalse(playingElsewhere.playHighlighted)
+        XCTAssertTrue(playingElsewhere.shuffleHighlighted)
+        XCTAssertEqual(playingElsewhere.repeatSymbol, "repeat")
+        XCTAssertEqual(playingElsewhere.repeatTitle, "列表")
+        XCTAssertTrue(playingElsewhere.repeatHighlighted)
+
+        let playingHere = CapsulePlayback.appearance(
+            listIDs: [here, current], contextIDs: [other, current], currentID: current, playing: true, shuffle: false, repeatMode: .one)
+        XCTAssertEqual(playingHere.playSymbol, "pause.fill")
+        XCTAssertEqual(playingHere.playTitle, "暂停")
+        XCTAssertTrue(playingHere.pauses)
+        XCTAssertFalse(playingHere.shuffleHighlighted)
+        XCTAssertEqual(playingHere.repeatSymbol, "repeat.1")
+        XCTAssertEqual(playingHere.repeatTitle, "单曲")
+
+        let pausedHere = CapsulePlayback.appearance(
+            listIDs: [current], contextIDs: [current], currentID: current, playing: false, shuffle: true, repeatMode: .off)
+        XCTAssertEqual(pausedHere.playTitle, "播放")
+        XCTAssertTrue(pausedHere.resumes)
+        XCTAssertFalse(pausedHere.playHighlighted)
+        XCTAssertTrue(pausedHere.shuffleHighlighted)
+        XCTAssertFalse(pausedHere.repeatHighlighted)
+        XCTAssertEqual(pausedHere.repeatTitle, "循环")
+    }
+
     func testRepeatModeCyclesBetweenOffListAndOne() {
         XCTAssertEqual(RepeatMode.off.cycled, .all)
         XCTAssertEqual(RepeatMode.all.cycled, .one)

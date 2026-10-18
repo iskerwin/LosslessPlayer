@@ -301,7 +301,7 @@ struct LibraryView: View {
                 .listRowSeparator(.hidden)
             }
             if !sorted.isEmpty {
-                playbackCapsules(sorted)
+                PlaybackCapsules(player: player, tracks: sorted)
             }
             ForEach(sorted) { track in
                 Button { player.load(track, context: sorted) } label: {
@@ -348,27 +348,6 @@ struct LibraryView: View {
                 }
             }
         }
-    }
-
-    private func playbackCapsules(_ tracks: [Track]) -> some View {
-        let active = PlaybackContext.matches(list: tracks.map(\.id), context: player.contextIDs)
-        let playingHere = active && player.playing
-        let mode = player.repeatMode
-        return HStack(spacing: 8) {
-            CapsuleButton(title: playingHere ? "暂停" : "播放", systemImage: playingHere ? "pause.fill" : "play.fill", active: playingHere, expands: true, accessibilityLabel: playingHere ? "暂停" : "播放") {
-                if playingHere { player.pause() }
-                else if active, player.current != nil { player.resume() }
-                else { player.play(tracks, shuffled: false) }
-            }
-            CapsuleButton(title: "随机", systemImage: "shuffle", active: active && player.shuffle, expands: true, accessibilityLabel: "随机播放") {
-                if active { player.toggleShuffle() }
-                else { player.play(tracks, shuffled: true) }
-            }
-            CapsuleButton(title: mode.controlTitle, systemImage: mode.symbolName, active: mode != .off, expands: true, accessibilityLabel: mode == .one ? "单曲循环" : mode == .all ? "列表循环" : "循环已关闭") {
-                player.cycleRepeat()
-            }
-        }
-        .listRowSeparator(.hidden)
     }
 
     private func indexLabel(_ track: Track) -> String? {
@@ -473,6 +452,37 @@ struct ArtworkView: View {
         }.frame(width: size, height: size).aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: (size ?? 150) < 80 ? 7 : 14))
             .accessibilityHidden(true)
+    }
+}
+
+/// Observes the shared player, so a playlist already open in the stack updates when shuffle or repeat changes.
+struct PlaybackCapsules: View {
+    @ObservedObject var player: PlayerStore
+    let tracks: [Track]
+
+    var body: some View {
+        let look = CapsulePlayback.appearance(
+            listIDs: tracks.map(\.id),
+            contextIDs: player.contextIDs,
+            currentID: player.current?.id,
+            playing: player.playing,
+            shuffle: player.shuffle,
+            repeatMode: player.repeatMode
+        )
+        HStack(spacing: 8) {
+            CapsuleButton(title: look.playTitle, systemImage: look.playSymbol, active: look.playHighlighted, expands: true, accessibilityLabel: look.playTitle) {
+                if look.pauses { player.pause() }
+                else if look.resumes { player.resume() }
+                else { player.play(tracks, shuffled: player.shuffle) }
+            }
+            CapsuleButton(title: "随机", systemImage: "shuffle", active: look.shuffleHighlighted, expands: true, accessibilityLabel: "随机播放") {
+                player.toggleShuffle()
+            }
+            CapsuleButton(title: look.repeatTitle, systemImage: look.repeatSymbol, active: look.repeatHighlighted, expands: true, accessibilityLabel: look.repeatAccessibility) {
+                player.cycleRepeat()
+            }
+        }
+        .listRowSeparator(.hidden)
     }
 }
 

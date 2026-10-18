@@ -105,22 +105,31 @@ struct NowPlayingView: View {
             }.accessibilityLabel("播放进度")
             HStack { Text(clock(scrubbing ? draft : playbackClock.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - playbackClock.position))) }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            let queueIDs = player.contextIDs.isEmpty ? [player.current?.id].compactMap { $0 } : player.contextIDs
+            let look = CapsulePlayback.appearance(
+                listIDs: queueIDs,
+                contextIDs: queueIDs,
+                currentID: player.current?.id,
+                playing: player.playing,
+                shuffle: player.shuffle,
+                repeatMode: player.repeatMode
+            )
             HStack(spacing: 10) {
-                CapsuleButton(systemImage: "shuffle", active: player.shuffle, iconPointSize: 18, accessibilityLabel: "切换随机播放") {
+                CapsuleButton(systemImage: "shuffle", active: look.shuffleHighlighted, iconPointSize: 18, accessibilityLabel: "切换随机播放") {
                     player.toggleShuffle()
                 }
                 Spacer(minLength: 4)
                 CapsuleButton(systemImage: "backward.fill", iconPointSize: 20, accessibilityLabel: "上一首") {
                     player.skip(backwards: true)
                 }
-                CapsuleButton(systemImage: player.playing ? "pause.fill" : "play.fill", active: player.playing, iconPointSize: 28, accessibilityLabel: player.playing ? "暂停" : "播放") {
+                CapsuleButton(systemImage: look.playSymbol, active: look.playHighlighted, iconPointSize: 28, accessibilityLabel: look.playTitle) {
                     player.toggle()
                 }
                 CapsuleButton(systemImage: "forward.fill", iconPointSize: 20, accessibilityLabel: "下一首") {
                     player.skip()
                 }
                 Spacer(minLength: 4)
-                CapsuleButton(systemImage: player.repeatMode.symbolName, active: player.repeatMode != .off, iconPointSize: 18, accessibilityLabel: player.repeatMode == .one ? "单曲循环" : player.repeatMode == .all ? "列表循环" : "循环已关闭") {
+                CapsuleButton(systemImage: look.repeatSymbol, active: look.repeatHighlighted, iconPointSize: 18, accessibilityLabel: look.repeatAccessibility) {
                     player.cycleRepeat()
                 }
             }
