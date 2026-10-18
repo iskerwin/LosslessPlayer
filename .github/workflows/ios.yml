@@ -30,11 +30,19 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('SIMULATOR_ID=' + sorted(devices, key=lambda d: d['name'])[0]['udid'] + '\n')
           PY
+      - name: Boot selected simulator before testing
+        timeout-minutes: 8
+        run: |
+          xcrun simctl boot "$SIMULATOR_ID" || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
       - name: Build and test
+        timeout-minutes: 12
         run: >-
           xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer
           -destination "platform=iOS Simulator,id=$SIMULATOR_ID"
-          -derivedDataPath build/simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO
+          -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1
+          -derivedDataPath build/simulator -resultBundlePath TestResults.xcresult
+          CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
       - name: Capture library screen
         if: success()
         run: |
