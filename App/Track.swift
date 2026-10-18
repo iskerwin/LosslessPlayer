@@ -18,10 +18,36 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var addedAt: Date?
     var artworkFilename: String?
     var trackNumber: Int?
+    var discNumber: Int?
+    var albumArtist: String?
+    var genre: String?
+    var year: Int?
+    var compilation: Bool?
+    var playCount = 0
+    var lastPlayed: Date?
+    /// Bumped when tag parsing learns new fields, so the next scan re-reads unchanged files once.
+    var catalogVersion: Int?
     var missing: Bool?
     var lyrics: String?
     var available: Bool { missing != true }
-    var albumID: String { artist + "\u{1f}" + album }
+    /// Album artist wins. A compilation flag with no album artist groups every track of that album name together.
+    var albumArtistName: String {
+        let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !named.isEmpty { return named }
+        if compilation == true { return "合辑" }
+        return artist
+    }
+    var albumID: String {
+        let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if compilation == true, named.isEmpty { return "\u{1f}c\u{1f}" + album }
+        return albumArtistName + "\u{1f}" + album
+    }
+    func matchesSearch(_ query: String) -> Bool {
+        if query.isEmpty { return true }
+        let yearText = year.map(String.init) ?? ""
+        let blob = [title, artist, album, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
+        return blob.localizedCaseInsensitiveContains(query)
+    }
     var specification: String {
         let depth = bitDepth > 0 ? "\(bitDepth)-bit · " : ""
         return "\(depth)\(String(format: "%.1f", sampleRate / 1000)) kHz · \((filename as NSString).pathExtension.uppercased())"
@@ -37,10 +63,29 @@ struct MusicFolder: Identifiable, Codable, Equatable, Sendable {
     var excludedPaths: [String] = []
 }
 
-struct Playlist: Identifiable, Codable, Equatable, Sendable {
+struct Playlist: Identifiable, Equatable, Sendable {
     var id = UUID()
     var name: String
     var trackIDs: [UUID] = []
+    var coverTrackID: UUID?
+}
+
+extension Playlist: Codable {
+    private enum CodingKeys: String, CodingKey { case id, name, trackIDs, coverTrackID }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        trackIDs = try container.decodeIfPresent([UUID].self, forKey: .trackIDs) ?? []
+        coverTrackID = try container.decodeIfPresent(UUID.self, forKey: .coverTrackID)
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(trackIDs, forKey: .trackIDs)
+        try container.encodeIfPresent(coverTrackID, forKey: .coverTrackID)
+    }
 }
 
 struct LibrarySnapshot: Codable {

@@ -127,7 +127,10 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             next.currentTime = position
             library.remember(id: track.id, position: position)
             updateNowPlaying()
-            if autoplay { resume() }
+            if autoplay {
+                resume()
+                if playing { library.recordPlay(id: track.id) }
+            }
         } catch { errorMessage = "播放失败：\(error.localizedDescription)" }
     }
 

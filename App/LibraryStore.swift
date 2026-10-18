@@ -128,13 +128,86 @@ final class LibraryStore: ObservableObject {
     func removeFromPlaylist(_ track: Track, playlist: Playlist) {
         var s = snapshot
         guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
-        s.playlists[i].trackIDs.removeAll { $0 == track.id }; persist(s)
+        s.playlists[i].trackIDs.removeAll { $0 == track.id }
+        if s.playlists[i].coverTrackID == track.id { s.playlists[i].coverTrackID = nil }
+        persist(s)
+    }
+
+    func rename(_ playlist: Playlist, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var s = snapshot
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        s.playlists[i].name = name
+        persist(s)
+    }
+
+    func moveTracks(in playlist: Playlist, displayed: [UUID], from offsets: IndexSet, to destination: Int) {
+        var ids = displayed
+        let moving = offsets.sorted().compactMap { ids.indices.contains($0) ? ids[$0] : nil }
+        for index in offsets.sorted(by: >) where ids.indices.contains(index) { ids.remove(at: index) }
+        let insertion = min(max(0, destination - offsets.filter { $0 < destination }.count), ids.count)
+        ids.insert(contentsOf: moving, at: insertion)
+        let hidden = playlist.trackIDs.filter { !Set(displayed).contains($0) }
+        var s = snapshot
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        s.playlists[i].trackIDs = ids + hidden
+        persist(s)
+    }
+
+    func setCover(_ track: Track, for playlist: Playlist) {
+        var s = snapshot
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }), s.playlists[i].trackIDs.contains(track.id) else { return }
+        s.playlists[i].coverTrackID = track.id
+        persist(s)
+    }
+
+    func coverTrack(for playlist: Playlist) -> Track? {
+        if let id = playlist.coverTrackID, let track = tracks.first(where: { $0.id == id }) { return track }
+        let members = playlist.trackIDs.compactMap { id in tracks.first { $0.id == id } }
+        return members.first { $0.artworkFilename != nil } ?? members.first
+    }
+
+    func recordPlay(id: UUID) {
+        var s = snapshot
+        guard let i = s.tracks.firstIndex(where: { $0.id == id }) else { return }
+        s.tracks[i].playCount += 1
+        s.tracks[i].lastPlayed = Date()
+        persist(s)
+    }
+
+    func startImportPlaylists(_ urls: [URL]) {
+        guard !importing else { return }
+        var notes: [String] = []
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = PlaylistExchange.read(url) else {
+                notes.append("\(url.lastPathComponent) 无法读取")
+                continue
+            }
+            let entries = PlaylistExchange.parse(text)
+            let name = url.deletingPathExtension().lastPathComponent
+            guard let list = createPlaylist(name) else { continue }
+            var matched = 0
+            for entry in entries {
+                if let track = PlaylistExchange.match(entry, in: tracks) {
+                    add(track, to: list)
+                    matched += 1
+                }
+            }
+            notes.append("\(name)：匹配 \(matched) 首，未匹配 \(entries.count - matched) 条")
+        }
+        if !notes.isEmpty { scanSummary = notes.joined(separator: "\n") }
     }
 
     func remove(_ track: Track) {
         var s = snapshot
         s.tracks.removeAll { $0.id == track.id }
-        for i in s.playlists.indices { s.playlists[i].trackIDs.removeAll { $0 == track.id } }
+        for i in s.playlists.indices {
+            s.playlists[i].trackIDs.removeAll { $0 == track.id }
+            if s.playlists[i].coverTrackID == track.id { s.playlists[i].coverTrackID = nil }
+        }
         if let folderID = track.folderID, let path = track.relativePath,
            let i = s.folders.firstIndex(where: { $0.id == folderID }) { s.folders[i].excludedPaths.append(path) }
         playback.queueIDs.removeAll { $0 == track.id }
@@ -172,7 +245,10 @@ final class LibraryStore: ObservableObject {
         var s = snapshot
         let removed = Set(s.tracks.filter { $0.folderID == folder.id }.map(\.id))
         s.folders.removeAll { $0.id == folder.id }; s.tracks.removeAll { removed.contains($0.id) }
-        for i in s.playlists.indices { s.playlists[i].trackIDs.removeAll { removed.contains($0) } }
+        for i in s.playlists.indices {
+            s.playlists[i].trackIDs.removeAll { removed.contains($0) }
+            if let cover = s.playlists[i].coverTrackID, removed.contains(cover) { s.playlists[i].coverTrackID = nil }
+        }
         playback.queueIDs.removeAll { removed.contains($0) }
         playback.contextOrder.removeAll { removed.contains($0) }
         if let id = playback.currentID, removed.contains(id) { playback.currentID = nil; playback.position = 0 }
@@ -210,7 +286,10 @@ final class LibraryStore: ObservableObject {
             // Keep favorites/playlist membership edited while the worker was running.
             for var track in accepted {
                 if let i = s.tracks.firstIndex(where: { $0.id == track.id }) {
-                    track.favorite = s.tracks[i].favorite; s.tracks[i] = track
+                    track.favorite = s.tracks[i].favorite
+                    track.playCount = s.tracks[i].playCount
+                    track.lastPlayed = s.tracks[i].lastPlayed
+                    s.tracks[i] = track
                 } else { s.tracks.append(track) }
             }
             for i in s.tracks.indices where s.tracks[i].folderID == id {

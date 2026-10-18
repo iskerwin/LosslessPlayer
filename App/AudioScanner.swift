@@ -50,6 +50,20 @@ actor AudioScanner {
             guard let path = track.relativePath else { return nil }; return (path, track)
         }, uniquingKeysWith: { first, _ in first })
         var result = ScanResult()
+        var lookedArt = Set<String>()
+        var foundArt: [String: URL] = [:]
+        func artwork(beside file: URL) -> URL? {
+            let directory = file.deletingLastPathComponent()
+            let key = Self.canonicalPath(directory)
+            if lookedArt.contains(key) { return foundArt[key] }
+            lookedArt.insert(key)
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            if let match = FolderArtwork.url(in: directory, entries: entries) {
+                foundArt[key] = match
+                return match
+            }
+            return nil
+        }
         for (index, file) in candidates.sorted(by: { $0.path < $1.path }).enumerated() {
             try Task.checkCancellation()
             guard let relative = Self.relativePath(for: file, in: scanRoot) else {
@@ -62,11 +76,17 @@ actor AudioScanner {
             do {
                 let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                 if var track = old[relative], track.fileSize == Int64(values.fileSize ?? -1),
-                   track.modifiedAt == values.contentModificationDate {
+                   track.modifiedAt == values.contentModificationDate, track.catalogVersion == AudioTags.catalogVersion {
                     track.missing = false; track.lyrics = sidecarLyrics(file)
+                    if track.artworkFilename == nil, let image = artwork(beside: file) {
+                        track.artworkFilename = storeThumbnail(at: image, id: track.id)
+                    }
                     result.tracks.append(track); result.skipped += 1; continue
                 }
                 var track = try await read(file, id: old[relative]?.id ?? UUID())
+                if track.artworkFilename == nil, let image = artwork(beside: file) {
+                    track.artworkFilename = storeThumbnail(at: image, id: track.id)
+                }
                 track.folderID = folder.id; track.relativePath = relative
                 track.filename = file.lastPathComponent
                 track.favorite = old[relative]?.favorite ?? false
@@ -97,6 +117,13 @@ actor AudioScanner {
         let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
         let target = root.appendingPathComponent(digest + "." + url.pathExtension.lowercased())
         var track = try await read(file, id: UUID())
+        if track.artworkFilename == nil {
+            let directory = url.deletingLastPathComponent()
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            if let image = FolderArtwork.url(in: directory, entries: entries) {
+                track.artworkFilename = storeThumbnail(at: image, id: track.id)
+            }
+        }
         track.lyrics = sidecarLyrics(url)
         track.title = track.title == file.deletingPathExtension().lastPathComponent ? url.deletingPathExtension().lastPathComponent : track.title
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: file) }
@@ -133,18 +160,9 @@ actor AudioScanner {
         let metadata = (try? await AVURLAsset(url: url).load(.commonMetadata)) ?? []
         for item in metadata {
             try Task.checkCancellation()
-            if item.commonKey == .commonKeyArtwork, let data = try? await item.load(.dataValue), data.count < 12_000_000 {
-                let name = id.uuidString + ".artwork"
-                if let source = CGImageSourceCreateWithData(data as CFData, nil),
-                   let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 700,
-                    kCGImageSourceCreateThumbnailWithTransform: true
-                   ] as CFDictionary),
-                   let destination = CGImageDestinationCreateWithURL(root.appendingPathComponent(name) as CFURL, UTType.jpeg.identifier as CFString, 1, nil) {
-                    CGImageDestinationAddImage(destination, image, nil)
-                    if CGImageDestinationFinalize(destination) { track.artworkFilename = name }
-                }
+            if item.commonKey == .commonKeyArtwork, let data = try? await item.load(.dataValue), data.count < 12_000_000,
+               let source = CGImageSourceCreateWithData(data as CFData, nil) {
+                track.artworkFilename = storeThumbnail(source, id: id)
             }
             if let value = try? await item.load(.stringValue), !value.isEmpty {
                 switch item.commonKey {
@@ -158,14 +176,58 @@ actor AudioScanner {
         track.lyrics = sidecarLyrics(url)
         let fullMetadata = (try? await AVURLAsset(url: url).load(.metadata)) ?? []
         for item in fullMetadata {
+            try Task.checkCancellation()
             let key = item.identifier?.rawValue ?? ""
-            if key.localizedCaseInsensitiveContains("TRCK") || key.hasSuffix("trkn") {
-                if let value = try? await item.load(.stringValue) {
-                    track.trackNumber = Int(value.split(separator: "/").first ?? "")
-                }
+            guard let role = AudioTags.role(for: key) else { continue }
+            switch role {
+            case .track:
+                if track.trackNumber == nil { track.trackNumber = await number(from: item) }
+            case .disc:
+                if track.discNumber == nil { track.discNumber = await number(from: item) }
+            case .albumArtist:
+                if track.albumArtist == nil, let value = try? await item.load(.stringValue), !value.isEmpty { track.albumArtist = value }
+            case .genre:
+                if track.genre == nil, let value = try? await item.load(.stringValue) { track.genre = AudioTags.genre(from: value) }
+            case .year:
+                if track.year == nil, let value = try? await item.load(.stringValue) { track.year = AudioTags.year(from: value) }
+            case .compilation:
+                if track.compilation != true { track.compilation = await compilation(from: item) }
             }
         }
+        track.catalogVersion = AudioTags.catalogVersion
         return track
+    }
+
+    private func number(from item: AVMetadataItem) async -> Int? {
+        if let text = try? await item.load(.stringValue), let value = AudioTags.number(from: text) { return value }
+        if let data = try? await item.load(.dataValue), let value = AudioTags.number(from: data) { return value }
+        if let number = try? await item.load(.numberValue), number.intValue > 0 { return number.intValue }
+        return nil
+    }
+
+    private func compilation(from item: AVMetadataItem) async -> Bool {
+        if let text = try? await item.load(.stringValue), AudioTags.compilation(from: text) { return true }
+        if let data = try? await item.load(.dataValue), AudioTags.compilation(from: data) { return true }
+        if let number = try? await item.load(.numberValue), number.intValue != 0 { return true }
+        return false
+    }
+
+    private func storeThumbnail(at url: URL, id: UUID) -> String? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return storeThumbnail(source, id: id)
+    }
+
+    private func storeThumbnail(_ source: CGImageSource, id: UUID) -> String? {
+        let name = id.uuidString + ".artwork"
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 700,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ] as CFDictionary),
+              let destination = CGImageDestinationCreateWithURL(root.appendingPathComponent(name) as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return name
     }
 
     /// Path of `file` relative to `directory`.

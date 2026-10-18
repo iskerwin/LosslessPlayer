@@ -344,4 +344,167 @@ final class FolderScanTests: XCTestCase {
         await task.value
         XCTAssertEqual(library.tracks, before)
     }
+
+    func testFolderArtworkIsUsedWhenAudioHasNoEmbeddedPicture() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Album")
+        try wav(folder.appendingPathComponent("01.wav"))
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        try png.write(to: folder.appendingPathComponent("cover.png"))
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let track = try XCTUnwrap(library.tracks.first)
+        let artwork = try XCTUnwrap(track.artworkFilename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.root.appendingPathComponent(artwork).path))
+        library.recordPlay(id: track.id)
+        await library.scanFolder(try XCTUnwrap(library.snapshot.folders.first?.id))
+        let again = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(again.playCount, 1)
+        XCTAssertNotNil(again.lastPlayed)
+        XCTAssertEqual(again.id, track.id)
+    }
+}
+
+final class LibraryCatalogTests: XCTestCase {
+    private func track(title: String, artist: String, album: String, file: String = "a.wav") -> Track {
+        Track(id: UUID(), filename: file, title: title, artist: artist, album: album, duration: 1, sampleRate: 44100, bitDepth: 16)
+    }
+
+    func testCompilationAndAlbumArtistGroupIntoOneAlbum() {
+        var first = track(title: "One", artist: "Ada", album: "Hits")
+        var second = track(title: "Two", artist: "Bea", album: "Hits", file: "b.wav")
+        first.compilation = true
+        second.compilation = true
+        let groups = AlbumGroup.groups([first, second])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].artist, "合辑")
+        first.albumArtist = "Various Artists"
+        second.albumArtist = "Various Artists"
+        let named = AlbumGroup.groups([first, second])
+        XCTAssertEqual(named.count, 1)
+        XCTAssertEqual(named[0].artist, "Various Artists")
+        var solo = track(title: "Solo", artist: "Ada", album: "Hits", file: "c.wav")
+        solo.albumArtist = "Ada"
+        XCTAssertEqual(AlbumGroup.groups([first, solo]).count, 2)
+    }
+
+    func testSortByPlayCountAddedDateAndAlbumOrder() {
+        var early = track(title: "B", artist: "Z", album: "A", file: "b.wav")
+        var later = track(title: "A", artist: "A", album: "A", file: "a.wav")
+        early.addedAt = Date(timeIntervalSince1970: 10)
+        later.addedAt = Date(timeIntervalSince1970: 20)
+        early.playCount = 3
+        later.playCount = 1
+        early.discNumber = 2
+        early.trackNumber = 1
+        later.discNumber = 1
+        later.trackNumber = 2
+        XCTAssertEqual(LibrarySort.played.sorted([later, early]).map(\.title), ["B", "A"])
+        XCTAssertEqual(LibrarySort.added.sorted([early, later]).map(\.title), ["A", "B"])
+        XCTAssertEqual(LibrarySort.album.sorted([early, later]).map(\.title), ["A", "B"])
+        XCTAssertEqual(LibrarySort.title.sorted([early, later]).map(\.title), ["A", "B"])
+    }
+
+    func testBinaryTrackAndDiscNumbersGenreAndYear() {
+        XCTAssertEqual(AudioTags.number(from: "3/12"), 3)
+        XCTAssertEqual(AudioTags.number(from: Data([0x00, 0x00, 0x00, 0x03, 0x00, 0x0C, 0x00, 0x00])), 3)
+        XCTAssertEqual(AudioTags.number(from: Data([0x00, 0x00, 0x00, 0x02, 0x00, 0x02])), 2)
+        XCTAssertEqual(AudioTags.role(for: "itsk/trkn"), .track)
+        XCTAssertEqual(AudioTags.role(for: "itsk/disk"), .disc)
+        XCTAssertEqual(AudioTags.role(for: "id3/TPE2"), .albumArtist)
+        XCTAssertEqual(AudioTags.genre(from: "(17)"), "Rock")
+        XCTAssertEqual(AudioTags.year(from: "1994-03-01"), 1994)
+        XCTAssertNil(AudioTags.year(from: "March"))
+        XCTAssertTrue(AudioTags.compilation(from: "1"))
+    }
+
+    func testFolderArtworkPrefersCoverOverFolder() {
+        let directory = URL(fileURLWithPath: "/Music/Album")
+        let chosen = FolderArtwork.url(in: directory, entries: ["notes.txt", "Folder.JPG", "cover.PNG"])
+        XCTAssertEqual(chosen?.lastPathComponent, "cover.PNG")
+    }
+
+    func testM3URoundTripAndMatch() {
+        var indexed = track(title: "Song", artist: "Ada", album: "Hits", file: "song.flac")
+        indexed.relativePath = "Hits/song.flac"
+        indexed.duration = 12.2
+        let rendered = PlaylistExchange.render([indexed])
+        let entries = PlaylistExchange.parse(rendered)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].artist, "Ada")
+        XCTAssertEqual(entries[0].title, "Song")
+        XCTAssertEqual(PlaylistExchange.match(entries[0], in: [indexed])?.id, indexed.id)
+        let windows = M3UEntry(path: "C:\\Music\\Hits\\song.flac", title: nil, artist: nil, duration: nil)
+        XCTAssertEqual(PlaylistExchange.match(windows, in: [indexed])?.id, indexed.id)
+        let text = "#EXTM3U\n#EXTINF:5,Only Title\nmissing.wav\nplain.wav\n"
+        XCTAssertEqual(PlaylistExchange.parse(text).map(\.path), ["missing.wav", "plain.wav"])
+        XCTAssertEqual(PlaylistExchange.parse(text)[0].title, "Only Title")
+        var short = track(title: "A", artist: "Ada", album: "Hits", file: "a.wav")
+        short.relativePath = "a.wav"
+        XCTAssertNil(PlaylistExchange.match(M3UEntry(path: "extra.wav", title: nil, artist: nil, duration: nil), in: [short]))
+    }
+
+    func testLegacyTrackAndPlaylistDecodeWithoutNewFields() throws {
+        let id = UUID()
+        let trackJSON = """
+        {"id":"\(id.uuidString)","filename":"a.wav","title":"A","artist":"B","album":"C","duration":1.5,"sampleRate":44100,"bitDepth":16,"favorite":true}
+        """
+        let track = try JSONDecoder().decode(Track.self, from: Data(trackJSON.utf8))
+        XCTAssertTrue(track.favorite)
+        XCTAssertEqual(track.playCount, 0)
+        XCTAssertNil(track.albumArtist)
+        XCTAssertNil(track.genre)
+        let playlist = try JSONDecoder().decode(Playlist.self, from: Data(#"{"name":"Old","trackIDs":[]}"#.utf8))
+        XCTAssertEqual(playlist.name, "Old")
+        XCTAssertNil(playlist.coverTrackID)
+    }
+}
+
+@MainActor
+final class PlaylistManagementTests: XCTestCase {
+    private func wav(_ url: URL, sample: Float) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410))
+        buffer.frameLength = 4410
+        for channel in 0..<2 { for frame in 0..<4410 { buffer.floatChannelData![channel][frame] = sample } }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
+
+    func testRenameReorderCoverFavoriteAndPlaylistImport() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let first = base.appendingPathComponent("one.wav")
+        let second = base.appendingPathComponent("two.wav")
+        try wav(first, sample: 0)
+        try wav(second, sample: 0.25)
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.importFiles([first, second])
+        XCTAssertEqual(library.tracks.count, 2)
+        let tracks = library.tracks.sorted { $0.title < $1.title }
+        library.toggleFavorite(tracks[0])
+        XCTAssertEqual(library.tracks.filter(\.favorite).map(\.id), [tracks[0].id])
+        let list = try XCTUnwrap(library.createPlaylist("Mix"))
+        library.add(tracks[0], to: list)
+        library.add(tracks[1], to: list)
+        library.moveTracks(in: list, displayed: [tracks[0].id, tracks[1].id], from: IndexSet(integer: 0), to: 2)
+        library.rename(list, to: "Evening")
+        library.setCover(tracks[1], for: list)
+        let saved = try XCTUnwrap(library.snapshot.playlists.first)
+        XCTAssertEqual(saved.name, "Evening")
+        XCTAssertEqual(saved.trackIDs, [tracks[1].id, tracks[0].id])
+        XCTAssertEqual(saved.coverTrackID, tracks[1].id)
+        library.recordPlay(id: tracks[1].id)
+        let m3u = base.appendingPathComponent("Evening.m3u8")
+        try PlaylistExchange.render(saved.trackIDs.compactMap { id in library.tracks.first { $0.id == id } }).write(to: m3u, atomically: true, encoding: .utf8)
+        library.startImportPlaylists([m3u])
+        XCTAssertEqual(library.snapshot.playlists.count, 2)
+        XCTAssertEqual(library.snapshot.playlists.last?.trackIDs.count, 2)
+        let restored = LibraryStore(root: library.root)
+        XCTAssertEqual(restored.tracks.first { $0.id == tracks[1].id }?.playCount, 1)
+        XCTAssertEqual(restored.tracks.filter(\.favorite).count, 1)
+        XCTAssertEqual(restored.snapshot.playlists.first?.name, "Evening")
+    }
 }

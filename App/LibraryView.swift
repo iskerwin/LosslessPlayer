@@ -14,21 +14,40 @@ struct LibraryView: View {
     @State private var creatingPlaylist = false
     @State private var playlistTrack: Track?
     @State private var pendingDelete: Track?
-    enum ImportKind { case files, folders }
+    @State private var renamingPlaylist: Playlist?
+    @State private var exportPresented = false
+    @State private var exportText = ""
+    @State private var exportName = "playlist"
+    @AppStorage("librarySort") private var sortRaw = LibrarySort.title.rawValue
+    @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
+    enum ImportKind { case files, folders, playlist }
 
     var body: some View {
         playerTabs
             .tint(.orange)
             .sheet(isPresented: $showPlayer) { NowPlayingView(library: library, player: player) }
             .sheet(isPresented: $showSources) { SourcesView(library: library, player: player) }
-            .fileImporter(isPresented: $pickerPresented,
-                allowedContentTypes: importKind == .folders ? [.folder] : [.audio], allowsMultipleSelection: true) { result in
+            .fileImporter(isPresented: $pickerPresented, allowedContentTypes: pickerTypes, allowsMultipleSelection: true) { result in
                 let kind = importKind
                 switch result {
                 case .success(let urls):
-                    if kind == .folders { library.startAddFolders(urls) } else { library.startImport(urls) }
+                    switch kind {
+                    case .folders: library.startAddFolders(urls)
+                    case .files: library.startImport(urls)
+                    case .playlist: library.startImportPlaylists(urls)
+                    }
                 case .failure(let error): library.errorMessage = error.localizedDescription
                 }
+            }
+            .fileExporter(isPresented: $exportPresented, document: TextFileDocument(text: exportText),
+                contentType: PlaylistFileTypes.m3u8, defaultFilename: exportName) { _ in }
+            .alert("重命名歌单", isPresented: Binding(get: { renamingPlaylist != nil }, set: { if !$0 { renamingPlaylist = nil } })) {
+                TextField("歌单名称", text: $playlistName)
+                Button("保存") {
+                    if let renamingPlaylist { library.rename(renamingPlaylist, to: playlistName) }
+                    playlistName = ""; self.renamingPlaylist = nil
+                }
+                Button("取消", role: .cancel) { playlistName = "" }
             }
             .alert("新建歌单", isPresented: $creatingPlaylist) {
                 TextField("歌单名称", text: $playlistName)
@@ -86,8 +105,8 @@ struct LibraryView: View {
                     .toolbar { importMenu }
             }.tabItem { Label("收藏", systemImage: "star.fill") }.tag(1)
             NavigationStack {
-                collection(library.tracks.filter { query.isEmpty || "\($0.title) \($0.artist) \($0.album)".localizedCaseInsensitiveContains(query) }, title: "搜索")
-                    .searchable(text: $query, prompt: "歌曲、艺术家、专辑")
+                collection(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索")
+                    .searchable(text: $query, prompt: "歌曲、艺术家、专辑、流派")
             }.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(2)
         }
     }
@@ -98,6 +117,7 @@ struct LibraryView: View {
                 Button("添加音乐文件夹", systemImage: "folder.badge.plus") { importKind = .folders; pickerPresented = true }
                 Button("导入音乐文件", systemImage: "square.and.arrow.down") { importKind = .files; pickerPresented = true }
                 Button("新建歌单", systemImage: "music.note.list") { creatingPlaylist = true }
+                Button("导入播放列表", systemImage: "list.bullet.rectangle") { importKind = .playlist; pickerPresented = true }
                 Button("管理文件夹", systemImage: "folder") { showSources = true }
             } label: { Image(systemName: "plus.circle").font(.title3) }
                 .disabled(library.importing)
@@ -116,6 +136,12 @@ struct LibraryView: View {
                     libraryLink("专辑", icon: "square.stack", route: .albums)
                     Divider().padding(.leading, 48)
                     libraryLink("歌曲", icon: "music.note", route: .songs)
+                    Divider().padding(.leading, 48)
+                    libraryLink("流派", icon: "guitars", route: .genres)
+                    Divider().padding(.leading, 48)
+                    libraryLink("年份", icon: "calendar", route: .years)
+                    Divider().padding(.leading, 48)
+                    libraryLink("最近播放", icon: "clock", route: .recent)
                 }
                 if library.importing { scanProgress }
                 if library.tracks.isEmpty {
@@ -146,7 +172,17 @@ struct LibraryView: View {
         }.background(Color(uiColor: .systemBackground))
     }
 
+    private var pickerTypes: [UTType] {
+        switch importKind {
+        case .folders: return [.folder]
+        case .files: return [.audio]
+        case .playlist: return PlaylistFileTypes.readable
+        }
+    }
     private var recentAlbums: [AlbumGroup] { AlbumGroup.groups(library.tracks).sorted { $0.latest > $1.latest } }
+    private var recentlyPlayed: [Track] {
+        library.tracks.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
+    }
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { Text("正在整理音乐").font(.headline); Spacer(); Button("取消") { library.cancelScan() } }
@@ -176,21 +212,49 @@ struct LibraryView: View {
         case .albums:
             List(AlbumGroup.groups(library.tracks)) { album in
                 NavigationLink(value: LibraryRoute.album(album.id)) {
-                    HStack { ArtworkView(track: album.tracks.first, root: library.root, size: 56)
+                    HStack { ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first, root: library.root, size: 56)
                         VStack(alignment: .leading) { Text(album.name); Text(album.artist).font(.caption).foregroundStyle(.secondary) } }
                 }
             }.navigationTitle("专辑")
         case .album(let id): collection(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", album: true)
+        case .genres:
+            List {
+                ForEach(genreNames, id: \.self) { name in
+                    NavigationLink(value: LibraryRoute.genre(name)) { Label(name, systemImage: "guitars") }
+                }
+                if library.tracks.contains(where: { normalizedGenre($0) == nil }) {
+                    NavigationLink(value: LibraryRoute.unknownGenre) { Label("未知流派", systemImage: "questionmark") }
+                }
+            }.navigationTitle("流派")
+        case .genre(let name): collection(library.tracks.filter { normalizedGenre($0) == name }, title: name)
+        case .unknownGenre: collection(library.tracks.filter { normalizedGenre($0) == nil }, title: "未知流派")
+        case .years:
+            List {
+                ForEach(years, id: \.self) { year in
+                    NavigationLink(value: LibraryRoute.year(year)) { Label(String(year), systemImage: "calendar") }
+                }
+                if library.tracks.contains(where: { $0.year == nil }) {
+                    NavigationLink(value: LibraryRoute.unknownYear) { Label("未知年份", systemImage: "questionmark") }
+                }
+            }.navigationTitle("年份")
+        case .year(let year): collection(library.tracks.filter { $0.year == year }, title: String(year))
+        case .unknownYear: collection(library.tracks.filter { $0.year == nil }, title: "未知年份")
+        case .recent: collection(recentlyPlayed, title: "最近播放", preserveOrder: true)
         case .playlists:
             List {
                 Button("新建歌单", systemImage: "plus") { creatingPlaylist = true }
                 ForEach(library.snapshot.playlists) { playlist in
                     NavigationLink(value: LibraryRoute.playlist(playlist.id)) {
-                        Label { VStack(alignment: .leading) {
-                            Text(playlist.name); Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
-                        } } icon: { Image(systemName: "music.note.list") }
+                        HStack {
+                            ArtworkView(track: library.coverTrack(for: playlist), root: library.root, size: 44)
+                            VStack(alignment: .leading) {
+                                Text(playlist.name)
+                                Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                     .swipeActions(allowsFullSwipe: false) {
+                        Button("重命名") { playlistName = playlist.name; renamingPlaylist = playlist }.tint(.orange)
                         Button("删除歌单", role: .destructive) { library.removePlaylist(playlist) }
                     }
                 }
@@ -201,17 +265,32 @@ struct LibraryView: View {
         }
     }
 
-    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil) -> some View {
-        let sorted = album ? tracks.sorted { a, b in
-            if a.trackNumber != b.trackNumber { return (a.trackNumber ?? Int.max) < (b.trackNumber ?? Int.max) }
-            return a.filename.localizedStandardCompare(b.filename) == .orderedAscending
-        } : (playlist == nil ? tracks.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } : tracks)
+    private func normalizedGenre(_ track: Track) -> String? {
+        let name = track.genre?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let name, !name.isEmpty else { return nil }
+        return name
+    }
+    private var genreNames: [String] {
+        Array(Set(library.tracks.compactMap(normalizedGenre))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+    private var years: [Int] { Array(Set(library.tracks.compactMap(\.year))).sorted(by: >) }
+
+    private func collection(_ tracks: [Track], title: String, album: Bool = false, playlist: Playlist? = nil, preserveOrder: Bool = false) -> some View {
+        let activeSort: LibrarySort? = {
+            if playlist != nil || preserveOrder { return nil }
+            if album { return LibrarySort(rawValue: albumSortRaw) ?? .album }
+            return LibrarySort(rawValue: sortRaw) ?? .title
+        }()
+        let sorted = activeSort?.sorted(tracks) ?? tracks
         return List {
             if album, let first = sorted.first {
                 VStack(spacing: 12) {
-                    ArtworkView(track: first, root: library.root, size: 210).padding(.top, 12)
-                    Text(first.album).font(.title2.bold()); Text(first.artist).foregroundStyle(.orange)
+                    ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 210).padding(.top, 12)
+                    Text(first.album).font(.title2.bold()); Text(first.albumArtistName).foregroundStyle(.orange)
                 }.frame(maxWidth: .infinity).listRowSeparator(.hidden)
+            }
+            if let playlist, let cover = library.coverTrack(for: playlist) {
+                ArtworkView(track: cover, root: library.root, size: 160).frame(maxWidth: .infinity).listRowSeparator(.hidden)
             }
             if !sorted.isEmpty {
                 HStack {
@@ -225,24 +304,63 @@ struct LibraryView: View {
             }
             ForEach(sorted) { track in
                 Button { player.load(track, context: sorted) } label: {
-                    SongRow(track: track, root: library.root, current: player.current?.id == track.id)
+                    SongRow(track: track, root: library.root, current: player.current?.id == track.id, indexLabel: album ? indexLabel(track) : nil)
                 }.buttonStyle(.plain)
-                .contextMenu { trackMenu(track) }
+                .contextMenu { trackMenu(track, playlist: playlist) }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button("移除", role: .destructive) {
                         if let playlist { library.removeFromPlaylist(track, playlist: playlist) } else { pendingDelete = track }
                     }
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button { library.toggleFavorite(track) } label: { Label("收藏", systemImage: "star") }.tint(.orange)
+                    Button { library.toggleFavorite(track) } label: { Label(track.favorite ? "取消收藏" : "收藏", systemImage: "star") }.tint(.orange)
                 }
                 .sensoryFeedback(.selection, trigger: track.favorite)
             }
+            .onMove { offsets, destination in
+                guard let playlist else { return }
+                library.moveTracks(in: playlist, displayed: sorted.map(\.id), from: offsets, to: destination)
+            }
             if sorted.isEmpty { ContentUnavailableView("还没有歌曲", systemImage: "music.note", description: Text("从资料库添加音乐，或更换搜索关键词。")) }
-        }.listStyle(.plain).navigationTitle(title)
+        }
+        .listStyle(.plain).navigationTitle(title)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if let playlist {
+                    EditButton()
+                    Menu {
+                        Button("重命名", systemImage: "pencil") { playlistName = playlist.name; renamingPlaylist = playlist }
+                        Button("导出 m3u", systemImage: "square.and.arrow.up") { beginExport(playlist, tracks: sorted) }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                } else if activeSort != nil {
+                    Menu {
+                        ForEach(LibrarySort.allCases.filter { album || $0 != .album }) { item in
+                            Button {
+                                if album { albumSortRaw = item.rawValue } else { sortRaw = item.rawValue }
+                            } label: {
+                                if item == activeSort { Label(item.label, systemImage: "checkmark") } else { Text(item.label) }
+                            }
+                        }
+                    } label: { Image(systemName: "arrow.up.arrow.down") }
+                    .accessibilityLabel("排序")
+                }
+            }
+        }
     }
 
-    @ViewBuilder private func trackMenu(_ track: Track) -> some View {
+    private func indexLabel(_ track: Track) -> String? {
+        guard let number = track.trackNumber else { return nil }
+        if let disc = track.discNumber, disc > 0 { return "\(disc)-\(number)" }
+        return "\(number)"
+    }
+
+    private func beginExport(_ playlist: Playlist, tracks: [Track]) {
+        exportText = PlaylistExchange.render(tracks)
+        exportName = playlist.name.replacingOccurrences(of: "/", with: "-")
+        exportPresented = true
+    }
+
+    @ViewBuilder private func trackMenu(_ track: Track, playlist: Playlist? = nil) -> some View {
         Button(track.favorite ? "取消收藏" : "收藏", systemImage: "star") { library.toggleFavorite(track) }
         Button("接下来播放", systemImage: "text.line.first.and.arrowtriangle.forward") { player.enqueue(track, next: true) }
         Button("最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) }
@@ -250,11 +368,17 @@ struct LibraryView: View {
             ForEach(library.snapshot.playlists) { list in Button(list.name) { library.add(track, to: list) } }
             Button("新建歌单") { playlistTrack = track; creatingPlaylist = true }
         }
+        if let playlist {
+            Button("设为歌单封面", systemImage: "photo") { library.setCover(track, for: playlist) }
+        }
         Button("从资料库移除", systemImage: "trash", role: .destructive) { pendingDelete = track }
     }
 }
 
-private enum LibraryRoute: Hashable { case songs, artists, albums, playlists, artist(String), album(String), playlist(UUID) }
+private enum LibraryRoute: Hashable {
+    case songs, artists, albums, playlists, genres, years, recent, unknownGenre, unknownYear
+    case artist(String), album(String), playlist(UUID), genre(String), year(Int)
+}
 struct AlbumGroup: Identifiable {
     var id: String
     var name: String
@@ -263,7 +387,7 @@ struct AlbumGroup: Identifiable {
     var latest: Date { tracks.compactMap(\.addedAt).max() ?? .distantPast }
     static func groups(_ tracks: [Track]) -> [Self] {
         Dictionary(grouping: tracks, by: \.albumID).map { id, tracks in
-            Self(id: id, name: tracks[0].album, artist: tracks[0].artist, tracks: tracks)
+            Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }
@@ -272,18 +396,26 @@ struct SongRow: View {
     let track: Track
     let root: URL
     var current = false
+    var indexLabel: String? = nil
     var body: some View {
         HStack(spacing: 12) {
+            if let indexLabel {
+                Text(indexLabel).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 36, alignment: .trailing)
+            }
             ArtworkView(track: track, root: root, size: 48)
             VStack(alignment: .leading, spacing: 4) {
                 Text(track.title).lineLimit(1).foregroundStyle(current ? Color.orange : Color.primary)
-                Text(track.available ? track.artist : "文件已失效 · 请重新扫描").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(track.available ? artistDetail : "文件已失效 · 请重新扫描").font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             if track.favorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.orange) }
             if current { Image(systemName: "waveform").foregroundStyle(.orange) }
             else { Text(clock(track.duration)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
         }.padding(.vertical, 4).opacity(track.available ? 1 : 0.5)
+    }
+    private var artistDetail: String {
+        guard track.playCount > 0 else { return track.artist }
+        return "\(track.artist) · \(track.playCount) 次"
     }
 }
 
@@ -335,6 +467,18 @@ struct MiniPlayer: View {
                 .accessibilityLabel(player.playing ? "暂停" : "播放")
             Button { player.skip() } label: { Image(systemName: "forward.end.fill").frame(width: 40, height: 44) }.accessibilityLabel("下一首")
         }.padding(.horizontal, 12).padding(.vertical, 5).foregroundStyle(.primary)
+    }
+}
+
+struct TextFileDocument: FileDocument {
+    static var readableContentTypes: [UTType] { PlaylistFileTypes.readable }
+    var text: String
+    init(text: String) { self.text = text }
+    init(configuration: ReadConfiguration) throws {
+        text = String(data: configuration.file.regularFileContents ?? Data(), encoding: .utf8) ?? ""
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 
