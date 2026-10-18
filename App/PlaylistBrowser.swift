@@ -108,7 +108,7 @@ struct PlaylistCover: View {
         let choice = Self.choice(for: playlist, in: library)
         GeometryReader { geo in
             if choice.single {
-                ArtworkView(track: choice.tracks.first, root: library.root, size: geo.size.width)
+                ArtworkView(track: choice.tracks.compactMap { $0 }.first, root: library.root, size: geo.size.width)
             } else {
                 let cell = max(0, (geo.size.width - 2) / 2)
                 VStack(spacing: 2) {
