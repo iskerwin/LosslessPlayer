@@ -85,7 +85,7 @@ struct CollectionPage: View {
                     playing: player.playing && player.current?.id == track.id,
                     indexLabel: kind == .album ? indexLabel(track) : nil,
                     showsMenu: !editing,
-                    emphasis: kind == .playlist ? .white : .accentColor,
+                    emphasis: kind == .playlist ? .white : MusicTheme.accent,
                     showsLocalStatus: kind == .playlist,
                     handlers: handlers
                 )
@@ -95,13 +95,13 @@ struct CollectionPage: View {
                     } else {
                         Button("从资料库中删除", role: .destructive) { onDelete([track]) }
                     }
-                    Button("添加到歌单") { onAddToPlaylist([track]) }.tint(.accentColor)
+                    Button("添加到歌单") { onAddToPlaylist([track]) }.tint(MusicTheme.accent)
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button { library.toggleFavorite(track) } label: {
                         Label(track.favorite ? "取消收藏" : "收藏", systemImage: "star")
                     }
-                    .tint(.accentColor)
+                    .tint(MusicTheme.accent)
                 }
             }
             .onMove { offsets, destination in
@@ -144,7 +144,7 @@ struct CollectionPage: View {
                     .padding(.top, 8)
                 Text(first.album).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
-                    Text(first.albumArtistName).font(.title3).foregroundStyle(Color.accentColor)
+                    Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
                 }
                 .buttonStyle(.plain)
                 Text(lengthText(sorted)).font(.subheadline).foregroundStyle(.secondary)

@@ -55,6 +55,7 @@ struct NowPlayingView: View {
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
+        .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
         // Our drag owns the 90pt threshold; prevent the zoom presentation from

@@ -279,7 +279,7 @@ struct LibraryView: View {
     private func libraryLink(_ title: String, icon: String, route: LibraryRoute) -> some View {
         NavigationLink(value: route) {
             HStack(spacing: 18) {
-                Image(systemName: icon).foregroundStyle(Color.accentColor).font(.title2).frame(width: 26)
+                Image(systemName: icon).foregroundStyle(MusicTheme.accent).font(.title2).frame(width: 26)
                 Text(title).font(.title3).foregroundStyle(.primary)
                 Spacer(); Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
             }
@@ -500,7 +500,7 @@ struct ArtworkView: View {
                 }
             } else {
                 ZStack {
-                    LinearGradient(colors: [Color.accentColor.opacity(0.85), .pink.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(colors: [MusicTheme.accent.opacity(0.85), .pink.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.9))
                 }
             }

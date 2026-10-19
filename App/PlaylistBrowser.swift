@@ -104,7 +104,7 @@ struct PlaylistHome: View {
                         .accessibilityLabel("更多操作")
                 }
                 .swipeActions(allowsFullSwipe: false) {
-                    Button("重命名") { onRename(playlist) }.tint(.accentColor)
+                    Button("重命名") { onRename(playlist) }.tint(MusicTheme.accent)
                     Button("删除歌单", role: .destructive) { library.removePlaylist(playlist) }
                 }
                 .modifier(ActionsContext(
@@ -246,7 +246,7 @@ struct AddToPlaylistSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
-        .tint(.accentColor)
+        .tint(MusicTheme.accent)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -292,7 +292,7 @@ struct SongPickerSheet: View {
                         HStack(spacing: 12) {
                             SongRow(track: track, root: library.root)
                             Image(systemName: selected.contains(track.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(selected.contains(track.id) ? Color.accentColor : Color.secondary)
+                                .foregroundStyle(selected.contains(track.id) ? MusicTheme.accent : Color.secondary)
                                 .font(.title3)
                                 .frame(width: RowMetrics.menuWidth)
                         }
@@ -319,7 +319,7 @@ struct SongPickerSheet: View {
             }
             .onAppear { searchFocused = true }
         }
-        .tint(.accentColor)
+        .tint(MusicTheme.accent)
     }
 
     private var visibleIDs: [UUID] { candidates.map(\.id) }
