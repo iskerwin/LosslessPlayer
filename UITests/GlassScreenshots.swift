@@ -61,6 +61,8 @@ final class GlassScreenshots: XCTestCase {
         queue.tap()
         XCTAssertTrue(queue.isSelected)
         XCTAssertTrue(app.staticTexts["接下来"].exists)
+        // Existence does not imply the outgoing artwork transition has finished.
+        sleep(1)
         save("now-playing-queue")
         queue.tap()
         XCTAssertFalse(queue.isSelected)
