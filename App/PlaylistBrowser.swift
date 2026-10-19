@@ -191,7 +191,7 @@ struct PlaylistCover: View {
         }
     }
 
-    private var automaticArtwork: some View {
+    @ViewBuilder private var automaticArtwork: some View {
         let choice = Self.choice(for: playlist, in: library)
         GeometryReader { geo in
             if choice.single {
