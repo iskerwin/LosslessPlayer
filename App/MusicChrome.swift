@@ -105,9 +105,9 @@ enum SongMenuCatalog {
     }
 }
 
-struct SectionsMenu<Label: View>: View {
+struct SectionsMenu<Trigger: View>: View {
     var sections: [MenuGroup]
-    @ViewBuilder var label: () -> Label
+    @ViewBuilder var label: () -> Trigger
 
     var body: some View {
         Menu {
