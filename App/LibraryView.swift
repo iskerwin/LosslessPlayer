@@ -576,6 +576,7 @@ private struct AccessoryMiniPlayer: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: toggle) {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .tint(.primary)
@@ -583,6 +584,7 @@ private struct AccessoryMiniPlayer: View {
             if !compact {
                 Button(action: skip) {
                     Image(systemName: "forward.fill").frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .tint(.primary)

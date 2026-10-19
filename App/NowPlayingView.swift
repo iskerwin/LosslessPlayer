@@ -157,6 +157,7 @@ struct NowPlayingView: View {
                         Image(systemName: current.favorite ? "star.fill" : "star")
                             .font(.title3)
                             .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
@@ -175,6 +176,7 @@ struct NowPlayingView: View {
                         Image(systemName: "ellipsis")
                             .font(.title3)
                             .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("更多")
@@ -189,6 +191,7 @@ struct NowPlayingView: View {
                         .padding(.vertical, 3)
                         .background(Color.white.opacity(0.16), in: Capsule())
                         .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("音质 \(current.qualityBadge)")
@@ -242,6 +245,7 @@ struct NowPlayingView: View {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .regular))
                 .frame(width: 64, height: 54)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
         .accessibilityLabel(label)
@@ -270,6 +274,7 @@ struct NowPlayingView: View {
                 .font(.title3)
                 .frame(width: 48, height: 44)
                 .foregroundStyle(.white.opacity(panelSymbolActive(symbol) ? 1 : 0.92))
+                .contentShape(Rectangle())
                 .background {
                     if panelSymbolActive(symbol) {
                         RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.16))
@@ -292,14 +297,14 @@ struct NowPlayingView: View {
                 Text("接下来").font(.headline)
                 Spacer()
                 Button { player.toggleShuffle() } label: {
-                    Image(systemName: "shuffle").frame(width: 44, height: 44)
+                    Image(systemName: "shuffle").frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(look.shuffleHighlighted ? 1 : 0.4))
                 .accessibilityLabel("切换随机播放")
                 .accessibilityValue(look.shuffleHighlighted ? "已开启" : "已关闭")
                 Button { player.cycleRepeat() } label: {
-                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 44)
+                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(look.repeatHighlighted ? 1 : 0.4))
