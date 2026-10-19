@@ -162,6 +162,7 @@ struct ImportCommands {
     var newPlaylist: () -> Void
     var importPlaylist: () -> Void
     var showFolders: () -> Void
+    var folderPlaylists: (() -> Void)? = nil
 }
 
 struct SongHandlers {
@@ -312,7 +313,7 @@ struct SongRow: View {
             ArtworkView(track: track, root: root, size: 48)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .font(.body)
+                    .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(current ? emphasis : Color.primary)
                 Text(track.available ? track.artist : "文件已失效 · 请重新扫描")
@@ -435,11 +436,15 @@ struct MediaPreview: View {
 }
 
 func importMenuGroup(_ commands: ImportCommands) -> MenuGroup {
-    MenuGroup(id: "import", entries: [
+    var entries = [
         MenuAction(id: "folder", title: "添加音乐文件夹", symbol: "folder.badge.plus", action: commands.addFolder),
         MenuAction(id: "files", title: "导入音乐文件", symbol: "square.and.arrow.down", action: commands.addFiles),
         MenuAction(id: "new", title: "新建歌单", symbol: "music.note.list", action: commands.newPlaylist),
         MenuAction(id: "playlist", title: "导入播放列表", symbol: "list.bullet.rectangle", action: commands.importPlaylist),
         MenuAction(id: "manage", title: "管理文件夹", symbol: "folder", action: commands.showFolders)
-    ])
+    ]
+    if let action = commands.folderPlaylists {
+        entries.insert(MenuAction(id: "folder-playlists", title: "从文件夹创建歌单", symbol: "folder.badge.plus", action: action), at: 1)
+    }
+    return MenuGroup(id: "import", entries: entries)
 }

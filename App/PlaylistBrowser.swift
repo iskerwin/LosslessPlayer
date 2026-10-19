@@ -10,6 +10,7 @@ struct PlaylistHome: View {
     var onAddSongs: (Playlist) -> Void
     var onAddToPlaylist: ([Track]) -> Void
     @AppStorage("playlistLayout") private var layoutRaw = PlaylistLayout.grid.rawValue
+    @State private var coverTarget: Playlist?
     private var layout: PlaylistLayout { PlaylistLayout(rawValue: layoutRaw) ?? .grid }
 
     var body: some View {
@@ -28,7 +29,19 @@ struct PlaylistHome: View {
                 list
             }
         }
+        .safeAreaInset(edge: .top) {
+            if library.importing {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: library.progress)
+                    Text(library.progressText).font(.caption).foregroundStyle(.secondary)
+                    Button("取消") { library.cancelScan() }.font(.caption)
+                }.padding(.horizontal, 22)
+            } else if let summary = library.scanSummary {
+                Text(summary).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 22)
+            }
+        }
         .softTopScrollEdge()
+        .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
         .navigationTitle("歌单")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass {
@@ -133,7 +146,8 @@ struct PlaylistHome: View {
             MenuGroup(id: "edit", entries: [
                 MenuAction(id: "add-playlist", title: "添加到歌单", symbol: "text.badge.plus") { onAddToPlaylist(tracks) },
                 MenuAction(id: "add-songs", title: "添加歌曲", symbol: "plus") { onAddSongs(playlist) },
-                MenuAction(id: "rename", title: "重命名", symbol: "pencil") { onRename(playlist) }
+                MenuAction(id: "rename", title: "重命名", symbol: "pencil") { onRename(playlist) },
+                    MenuAction(id: "cover", title: "修改封面", symbol: "photo") { coverTarget = playlist }
             ]),
             MenuGroup(id: "delete", entries: [
                 MenuAction(id: "delete", title: "删除歌单", symbol: "trash", role: .destructive) { library.removePlaylist(playlist) }
@@ -169,6 +183,15 @@ struct PlaylistCover: View {
     }
 
     @ViewBuilder private var artwork: some View {
+        if let name = playlist.customArtworkFilename,
+           let image = ArtworkCache.shared.image(at: library.root.appendingPathComponent(name)) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            automaticArtwork
+        }
+    }
+
+    private var automaticArtwork: some View {
         let choice = Self.choice(for: playlist, in: library)
         GeometryReader { geo in
             if choice.single {

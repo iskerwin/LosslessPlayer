@@ -255,6 +255,22 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         library.rememberQueue(queueIDs, contextOrder: ordering.context, shuffle: shuffle)
     }
 
+    var upcomingTracks: [Track] {
+        let tracks = queuedTracks
+        guard let id = current?.id, let index = tracks.firstIndex(where: { $0.id == id }) else { return tracks }
+        return Array(tracks.dropFirst(index + 1))
+    }
+
+    func removeUpcoming(at offsets: IndexSet) {
+        let start = queuedTracks.count - upcomingTracks.count
+        removeQueue(at: IndexSet(offsets.map { $0 + start }))
+    }
+
+    func moveUpcoming(from offsets: IndexSet, to destination: Int) {
+        let start = queuedTracks.count - upcomingTracks.count
+        moveQueue(from: IndexSet(offsets.map { $0 + start }), to: destination + start)
+    }
+
     func removeQueue(at offsets: IndexSet) {
         var ids = queuedTracks.map(\.id)
         let removed = Set(offsets.compactMap { ids.indices.contains($0) ? ids[$0] : nil })

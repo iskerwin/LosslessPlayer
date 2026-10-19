@@ -9,6 +9,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var duration: Double
     var sampleRate: Double
     var bitDepth: Int
+    var artists: [String]?
+    var contentHash: String?
     var favorite = false
     // Nil values preserve compatibility with the original copied-file library.
     var folderID: UUID?
@@ -34,6 +36,11 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
         let text = lyrics?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !text.isEmpty
     }
+    var artistNames: [String] {
+        let names = AudioTags.artistNames(from: artists ?? [artist])
+        return names.isEmpty ? ["未知艺术家"] : names
+    }
+    var primaryArtist: String { artistNames.first ?? artist }
     /// Album artist wins. A compilation flag with no album artist groups every track of that album name together.
     var albumArtistName: String {
         let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -42,14 +49,20 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
         return artist
     }
     var albumID: String {
+        let title = AudioTags.normalized(album)
+        // Untagged files in different folders are not one giant "Unknown Album".
+        if title.isEmpty || title == AudioTags.normalized("未知专辑") {
+            let directory = relativePath.map { ($0 as NSString).deletingLastPathComponent } ?? id.uuidString
+            return "unknown\u{1f}" + (folderID?.uuidString ?? "copy") + "\u{1f}" + directory
+        }
         let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if compilation == true, named.isEmpty { return "\u{1f}c\u{1f}" + album }
-        return albumArtistName + "\u{1f}" + album
+        if compilation == true, named.isEmpty { return "\u{1f}c\u{1f}" + title }
+        return AudioTags.normalized(albumArtistName) + "\u{1f}" + title
     }
     func matchesSearch(_ query: String) -> Bool {
         if query.isEmpty { return true }
         let yearText = year.map(String.init) ?? ""
-        let blob = [title, artist, album, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
+        let blob = [title, artist, artistNames.joined(separator: " "), album, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
         return blob.localizedCaseInsensitiveContains(query)
     }
     var specification: String {
@@ -81,16 +94,22 @@ struct Playlist: Identifiable, Equatable, Sendable {
     var name: String
     var trackIDs: [UUID] = []
     var coverTrackID: UUID?
+    var customArtworkFilename: String?
+    var sourceFolderID: UUID?
+    var sourceDirectory: String?
 }
 
 extension Playlist: Codable {
-    private enum CodingKeys: String, CodingKey { case id, name, trackIDs, coverTrackID }
+    private enum CodingKeys: String, CodingKey { case id, name, trackIDs, coverTrackID, customArtworkFilename, sourceFolderID, sourceDirectory }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decode(String.self, forKey: .name)
         trackIDs = try container.decodeIfPresent([UUID].self, forKey: .trackIDs) ?? []
         coverTrackID = try container.decodeIfPresent(UUID.self, forKey: .coverTrackID)
+        customArtworkFilename = try container.decodeIfPresent(String.self, forKey: .customArtworkFilename)
+        sourceFolderID = try container.decodeIfPresent(UUID.self, forKey: .sourceFolderID)
+        sourceDirectory = try container.decodeIfPresent(String.self, forKey: .sourceDirectory)
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -98,6 +117,9 @@ extension Playlist: Codable {
         try container.encode(name, forKey: .name)
         try container.encode(trackIDs, forKey: .trackIDs)
         try container.encodeIfPresent(coverTrackID, forKey: .coverTrackID)
+        try container.encodeIfPresent(customArtworkFilename, forKey: .customArtworkFilename)
+        try container.encodeIfPresent(sourceFolderID, forKey: .sourceFolderID)
+        try container.encodeIfPresent(sourceDirectory, forKey: .sourceDirectory)
     }
 }
 
