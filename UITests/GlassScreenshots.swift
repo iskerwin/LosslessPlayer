@@ -21,9 +21,12 @@ final class GlassScreenshots: XCTestCase {
         back.tap()
 
         app.tabBars.buttons["歌单"].tap()
-        let playlist = app.buttons["深夜"]
-        XCTAssertTrue(playlist.waitForExistence(timeout: 8))
-        playlist.tap()
+        let playlist = app.descendants(matching: .any)["playlist-深夜"]
+        if !playlist.waitForExistence(timeout: 8) {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "深夜")).firstMatch.tap()
+        } else {
+            playlist.tap()
+        }
         XCTAssertTrue(app.descendants(matching: .any)["playlist-detail"].waitForExistence(timeout: 8))
         save("playlist")
 

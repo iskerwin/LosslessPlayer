@@ -67,6 +67,7 @@ struct PlaylistHome: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(RowPressStyle())
+                    .accessibilityIdentifier("playlist-\(playlist.name)")
                     .modifier(ActionsContext(
                         sections: playlistGroups(playlist),
                         preview: MediaPreview(title: playlist.name, subtitle: "\(playlist.trackIDs.count) 首歌曲", artwork: coverTrack(playlist), root: library.root)
