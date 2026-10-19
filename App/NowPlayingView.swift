@@ -57,6 +57,9 @@ struct NowPlayingView: View {
         .preferredColorScheme(.dark)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
+        // Our drag owns the 90pt threshold; prevent the zoom presentation from
+        // independently dismissing a short, fast downward swipe.
+        .interactiveDismissDisabled()
         .onAppear(perform: refreshPalette)
         .onChange(of: current?.artworkFilename) { _, _ in refreshPalette() }
         .onChange(of: current?.id) { _, _ in scrubbing = false }
@@ -78,7 +81,7 @@ struct NowPlayingView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("收起播放器")
-            .simultaneousGesture(dismissGesture)
+            .highPriorityGesture(dismissGesture)
             stage
                 .frame(height: stageHeight)
                 .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
@@ -102,7 +105,7 @@ struct NowPlayingView: View {
     }
 
     private var dismissGesture: some Gesture {
-        DragGesture(minimumDistance: 16)
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .updating($dismissOffset) { value, offset, _ in
                 if value.translation.height > abs(value.translation.width) * 1.5 {
                     offset = max(0, value.translation.height)
@@ -129,7 +132,7 @@ struct NowPlayingView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
-                .simultaneousGesture(dismissGesture)
+                .highPriorityGesture(dismissGesture)
             } else if panel == .lyrics {
                 lyricsPanel
             } else {

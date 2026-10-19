@@ -47,7 +47,8 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         let progress = app.descendants(matching: .any)["playback-progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 8))
-        XCTAssertGreaterThanOrEqual(progress.frame.height, 44)
+        // Accessibility frames are screen-space floating-point conversions.
+        XCTAssertGreaterThanOrEqual(progress.frame.height, 44 - 0.001)
         let previous = progress.value as? String
         // Drag above the visible line to exercise the enlarged touch area.
         progress.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.2))

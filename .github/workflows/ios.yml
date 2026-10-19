@@ -64,6 +64,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/screenshots
+          # Preserve screenshots for diagnosis even when an interaction test fails.
+          trap 'if [ -d /tmp/lossless-screenshots ]; then cp -R /tmp/lossless-screenshots/. build/screenshots/; fi' EXIT
           xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -only-testing:LosslessPlayerUITests \
