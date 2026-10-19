@@ -236,8 +236,10 @@ struct LibraryView: View {
                                     Text(album.name).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
                                     Text(album.artist).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(RowPressStyle())
                             .modifier(ActionsContext(
                                 sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
                                 preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)
@@ -274,7 +276,10 @@ struct LibraryView: View {
                 Image(systemName: icon).foregroundStyle(.orange).font(.title2).frame(width: 26)
                 Text(title).font(.title3).foregroundStyle(.primary)
                 Spacer(); Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
-            }.padding(.vertical, 14)
+            }
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
     }
 
@@ -333,17 +338,22 @@ struct LibraryView: View {
                     }
                     Spacer(minLength: 4)
                 }
+                .padding(.vertical, 8)
+                .padding(.leading, RowMetrics.leadingInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RowPressStyle())
             SectionsMenu(sections: groups) { EllipsisLabel() }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("更多操作")
         }
         .modifier(ActionsContext(sections: groups, preview: MediaPreview(title: title, subtitle: subtitle, artwork: artwork, root: library.root)))
         .alignmentGuide(.listRowSeparatorLeading) { dimensions in
-            dimensions[.leading] + artSize + 12
+            dimensions[.leading] + RowMetrics.leadingInset + artSize + 12
         }
-        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 4))
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
     }
 
     private func page(_ tracks: [Track], title: String, kind: CollectionPage.Kind, playlist: Playlist? = nil, showsBack: Bool) -> some View {

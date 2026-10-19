@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 import AVFoundation
 @testable import LosslessPlayer
 
@@ -108,6 +109,18 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(looping.repeatTitle, "列表")
         XCTAssertTrue(looping.repeatHighlighted)
         XCTAssertFalse(looping.shuffleHighlighted)
+    }
+
+    func testBlankRowAreaPlaysAndEllipsisStaysMenu() {
+        let width: CGFloat = 390
+        let menu = RowMetrics.menuWidth
+        XCTAssertEqual(RowHitMap.zone(x: 0, width: width, menuWidth: menu), .play)
+        XCTAssertEqual(RowHitMap.zone(x: width * 0.7, width: width, menuWidth: menu), .play)
+        XCTAssertEqual(RowHitMap.zone(x: width - menu - 1, width: width, menuWidth: menu), .play)
+        XCTAssertEqual(RowHitMap.zone(x: width - menu, width: width, menuWidth: menu), .menu)
+        XCTAssertEqual(RowHitMap.zone(x: width - 1, width: width, menuWidth: menu), .menu)
+        XCTAssertEqual(RowHitMap.zone(x: 12, width: 0, menuWidth: menu), .play)
+        XCTAssertEqual(RowHitMap.zone(x: width - 4, width: width, menuWidth: 0), .play)
     }
 
     func testPlayNextInsertsAfterCurrentAndAddToQueueAppends() {

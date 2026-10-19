@@ -62,8 +62,10 @@ struct PlaylistHome: View {
                             Text(playlist.name).font(.subheadline.weight(.semibold)).lineLimit(1).foregroundStyle(.primary)
                             Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle())
                     .modifier(ActionsContext(
                         sections: playlistGroups(playlist),
                         preview: MediaPreview(title: playlist.name, subtitle: "\(playlist.trackIDs.count) 首歌曲", artwork: coverTrack(playlist), root: library.root)
@@ -88,8 +90,12 @@ struct PlaylistHome: View {
                             }
                             Spacer(minLength: 4)
                         }
+                        .padding(.vertical, 8)
+                        .padding(.leading, RowMetrics.leadingInset)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle())
                     SectionsMenu(sections: playlistGroups(playlist)) { EllipsisLabel() }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("更多操作")
@@ -102,8 +108,9 @@ struct PlaylistHome: View {
                     sections: playlistGroups(playlist),
                     preview: MediaPreview(title: playlist.name, subtitle: "\(playlist.trackIDs.count) 首歌曲", artwork: coverTrack(playlist), root: library.root)
                 ))
-                .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] + 56 + 12 }
-                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 4))
+                .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] + RowMetrics.leadingInset + 56 + 12 }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
@@ -306,9 +313,16 @@ struct SongPickerSheet: View {
                             Image(systemName: selected.contains(track.id) ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(selected.contains(track.id) ? Color.orange : Color.secondary)
                                 .font(.title3)
+                                .frame(width: RowMetrics.menuWidth)
                         }
+                        .padding(.trailing, 4)
+                        .padding(.leading, RowMetrics.leadingInset)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle())
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
                 .listStyle(.plain)
             }

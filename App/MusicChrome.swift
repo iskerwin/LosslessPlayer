@@ -310,12 +310,40 @@ struct PlayShuffleBar: View {
     }
 }
 
+/// The play control fills every point that is not the trailing menu.
+/// A tap at 70% of a normal row is still play, including padding and the gap before the ellipsis.
+enum RowMetrics {
+    static let menuWidth: CGFloat = 44
+    static let leadingInset: CGFloat = 16
+}
+
+enum RowHitZone: Equatable {
+    case play, menu
+}
+
+enum RowHitMap {
+    static func zone(x: CGFloat, width: CGFloat, menuWidth: CGFloat) -> RowHitZone {
+        guard width > 0 else { return .play }
+        if menuWidth > 0, x >= width - menuWidth { return .menu }
+        return .play
+    }
+}
+
+struct RowPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
+    }
+}
+
 struct EllipsisLabel: View {
     var body: some View {
         Image(systemName: "ellipsis")
             .font(.body.weight(.semibold))
             .foregroundStyle(.secondary)
-            .frame(width: 32, height: 44)
+            .frame(width: RowMetrics.menuWidth, height: 44)
             .contentShape(Rectangle())
     }
 }
@@ -354,7 +382,9 @@ struct SongRow: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .opacity(track.available ? 1 : 0.5)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(current ? "\(track.title)，\(track.artist)，正在播放" : "\(track.title)，\(track.artist)")
@@ -402,8 +432,9 @@ struct SongContextRow: View {
         HStack(spacing: 0) {
             Button { handlers.play(track) } label: {
                 SongRow(track: track, root: root, current: current, playing: playing, indexLabel: indexLabel)
+                    .padding(.leading, RowMetrics.leadingInset)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RowPressStyle())
             if showsMenu {
                 SectionsMenu(sections: sections) { EllipsisLabel() }
                     .buttonStyle(.borderless)
@@ -412,9 +443,10 @@ struct SongContextRow: View {
         }
         .modifier(ActionsContext(sections: sections, preview: SongMenuPreview(track: track, root: root)))
         .alignmentGuide(.listRowSeparatorLeading) { dimensions in
-            dimensions[.leading] + SongRow.separatorInset(showsIndex: indexLabel != nil)
+            dimensions[.leading] + RowMetrics.leadingInset + SongRow.separatorInset(showsIndex: indexLabel != nil)
         }
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 4))
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
         .sensoryFeedback(.selection, trigger: track.favorite)
     }
 

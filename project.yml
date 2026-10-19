@@ -21,10 +21,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.iskerwin.LosslessPlayer
         TARGETED_DEVICE_FAMILY: '1,2'
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Lossless
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: 原音
+        CFBundleDisplayName: Lossless
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
         UIFileSharingEnabled: true
