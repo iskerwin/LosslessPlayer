@@ -4,6 +4,15 @@ import AVKit
 import MediaPlayer
 import CoreImage
 
+/// Both tracks use the same thickness and horizontal endpoints.
+enum PlayerControlMetrics {
+    static let restingTrackHeight: CGFloat = 8
+    static let activeTrackHeight: CGFloat = 16
+    static let volumeIconWidth: CGFloat = 16
+    static let volumeIconSpacing: CGFloat = 10
+    static let trackInset = volumeIconWidth + volumeIconSpacing
+}
+
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -228,6 +237,7 @@ struct NowPlayingView: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.white.opacity(0.6))
         }
+        .padding(.horizontal, PlayerControlMetrics.trackInset)
     }
 
     private var transport: some View {
@@ -246,7 +256,7 @@ struct NowPlayingView: View {
     private func transportButton(_ symbol: String, label: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .regular))
+                .font(.system(size: size, weight: .bold, design: .rounded))
                 .frame(width: 64, height: 54)
                 .contentShape(Rectangle())
         }
@@ -444,7 +454,7 @@ struct ThinScrubber: View {
         GeometryReader { geo in
             let width = max(geo.size.width, 1)
             let fraction = ScrubberMap.fraction(value: value, in: range)
-            let thickness: CGFloat = dragging ? 8 : 4
+            let thickness = dragging ? PlayerControlMetrics.activeTrackHeight : PlayerControlMetrics.restingTrackHeight
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
                 Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
@@ -663,14 +673,17 @@ struct LyricsReader: View {
 
 struct SystemVolumeBar: View {
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: PlayerControlMetrics.volumeIconSpacing) {
             Image(systemName: "speaker.fill")
                 .font(.footnote)
+                .frame(width: PlayerControlMetrics.volumeIconWidth)
                 .accessibilityHidden(true)
             NativeVolumeView()
+                .frame(maxWidth: .infinity)
                 .frame(height: 44)
             Image(systemName: "speaker.wave.3.fill")
                 .font(.footnote)
+                .frame(width: PlayerControlMetrics.volumeIconWidth)
                 .accessibilityHidden(true)
         }
         .foregroundStyle(.white.opacity(0.6))
@@ -692,7 +705,7 @@ private final class MusicVolumeView: MPVolumeView {
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         let transparent = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
         for state in [UIControl.State.normal, .highlighted, .disabled] {
-            let height: CGFloat = state == .highlighted ? 8 : 4
+            let height = state == .highlighted ? PlayerControlMetrics.activeTrackHeight : PlayerControlMetrics.restingTrackHeight
             setVolumeThumbImage(transparent, for: state)
             setMinimumVolumeSliderImage(Self.track(height: height, alpha: 0.65), for: state)
             setMaximumVolumeSliderImage(Self.track(height: height, alpha: 0.28), for: state)
@@ -703,14 +716,17 @@ private final class MusicVolumeView: MPVolumeView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func volumeSliderRect(forBounds bounds: CGRect) -> CGRect {
-        CGRect(x: 0, y: bounds.midY - 4, width: bounds.width, height: 8)
+        let height = PlayerControlMetrics.activeTrackHeight
+        return CGRect(x: 0, y: bounds.midY - height / 2, width: bounds.width, height: height)
     }
 
     private static func track(height: CGFloat, alpha: CGFloat) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: 12, height: 8)).image { _ in
+        let canvasHeight = PlayerControlMetrics.activeTrackHeight
+        let width = canvasHeight * 2
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: canvasHeight)).image { _ in
             UIColor.white.withAlphaComponent(alpha).setFill()
-            UIBezierPath(roundedRect: CGRect(x: 0, y: (8 - height) / 2, width: 12, height: height), cornerRadius: height / 2).fill()
-        }.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 5), resizingMode: .stretch)
+            UIBezierPath(roundedRect: CGRect(x: 0, y: (canvasHeight - height) / 2, width: width, height: height), cornerRadius: height / 2).fill()
+        }.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: width / 2 - 1, bottom: 0, right: width / 2 - 1), resizingMode: .stretch)
     }
 }
 
