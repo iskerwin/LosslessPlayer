@@ -51,6 +51,7 @@ struct NowPlayingView: View {
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
         .onAppear(perform: refreshPalette)
         .onChange(of: current?.artworkFilename) { _, _ in refreshPalette() }

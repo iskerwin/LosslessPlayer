@@ -37,12 +37,14 @@ final class GlassScreenshots: XCTestCase {
     }
 
     func testProgressHitAreaAndPanelSelection() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
         let mini = app.descendants(matching: .any)["mini-player"]
         XCTAssertTrue(mini.waitForExistence(timeout: 20))
         mini.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         let progress = app.descendants(matching: .any)["playback-progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 8))
         XCTAssertGreaterThanOrEqual(progress.frame.height, 44)
