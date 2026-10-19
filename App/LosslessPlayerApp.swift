@@ -16,6 +16,7 @@ struct LosslessPlayerApp: App {
     var body: some Scene {
         WindowGroup {
             LibraryView(library: library, player: player)
+                .tint(.orange)
                 .onChange(of: library.tracks) { _, _ in player.reconcileLibrary() }
                 .onChange(of: scenePhase) { _, phase in
                     if phase != .active { library.remember(id: player.current?.id, position: player.position) }

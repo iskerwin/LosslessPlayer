@@ -242,6 +242,7 @@ struct LibraryView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(RowPressStyle())
+                            .tint(.primary)
                             .modifier(ActionsContext(
                                 sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
                                 preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)
@@ -286,6 +287,7 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func destination(_ route: LibraryRoute) -> some View {
