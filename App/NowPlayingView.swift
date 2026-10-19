@@ -6,18 +6,23 @@ struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     @ObservedObject private var playbackClock: PlaybackClock
+    var onOpen: (LibraryRoute) -> Void
+    var onDelete: (Track) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    init(library: LibraryStore, player: PlayerStore) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }) {
         self.library = library
         self.player = player
+        self.onOpen = onOpen
+        self.onDelete = onDelete
         _playbackClock = ObservedObject(wrappedValue: player.clock)
     }
     @State private var mode = 0
     @State private var scrubbing = false
     @State private var draft: Double = 0
     @State private var details = false
-    @State private var addToPlaylist = false
+    @State private var playlistTarget: Track?
+    @State private var lyricsTrack: Track?
     private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
 
     var body: some View {
@@ -38,14 +43,21 @@ struct NowPlayingView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(current?.title ?? "未在播放").font(.title2.bold()).lineLimit(2)
                                 Text(current?.artist ?? "选择一首歌曲").font(.title3).foregroundStyle(.secondary).lineLimit(1)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .modifier(ActionsContext(
+                                sections: current.map { SongMenuCatalog.groups(for: $0, handlers: handlers) } ?? [],
+                                preview: Group {
+                                    if let current { SongMenuPreview(track: current, root: library.root) }
+                                }
+                            ))
                             if let current {
                                 Button { library.toggleFavorite(current) } label: {
                                     Image(systemName: current.favorite ? "star.fill" : "star").frame(width: 44, height: 44)
                                 }.buttonStyle(.plain).modifier(GlassControl())
                                     .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
                                     .sensoryFeedback(.selection, trigger: current.favorite)
-                                Button { addToPlaylist = true } label: {
+                                Button { playlistTarget = current } label: {
                                     Image(systemName: "text.badge.plus").frame(width: 44, height: 44)
                                 }.buttonStyle(.plain).modifier(GlassControl())
                                     .accessibilityLabel("添加到歌单")
@@ -78,8 +90,11 @@ struct NowPlayingView: View {
             .toolbar { ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "chevron.down") }.accessibilityLabel("收起播放器")
             } }
-            .sheet(isPresented: $addToPlaylist) {
-                if let current { AddToPlaylistSheet(library: library, tracks: [current]) }
+            .sheet(item: $playlistTarget) { track in
+                AddToPlaylistSheet(library: library, tracks: [track])
+            }
+            .sheet(item: $lyricsTrack) { track in
+                LyricsReader(player: player, track: track)
             }
             .sheet(isPresented: $details) {
                 NavigationStack {
@@ -105,15 +120,7 @@ struct NowPlayingView: View {
             }.accessibilityLabel("播放进度")
             HStack { Text(clock(scrubbing ? draft : playbackClock.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - playbackClock.position))) }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            let queueIDs = player.contextIDs.isEmpty ? [player.current?.id].compactMap { $0 } : player.contextIDs
-            let look = CapsulePlayback.appearance(
-                listIDs: queueIDs,
-                contextIDs: queueIDs,
-                currentID: player.current?.id,
-                playing: player.playing,
-                shuffle: player.shuffle,
-                repeatMode: player.repeatMode
-            )
+            let look = NowPlayingTransport.state(playing: player.playing, shuffle: player.shuffle, repeatMode: player.repeatMode)
             HStack(spacing: 10) {
                 CapsuleButton(systemImage: "shuffle", active: look.shuffleHighlighted, iconPointSize: 18, accessibilityLabel: "切换随机播放") {
                     player.toggleShuffle()
@@ -141,30 +148,105 @@ struct NowPlayingView: View {
             Text("播放队列").font(.headline)
             List {
                 ForEach(player.queuedTracks) { track in
-                    Button { player.load(track) } label: { SongRow(track: track, root: library.root, current: track.id == current?.id) }.buttonStyle(.plain)
+                    SongContextRow(
+                        track: track,
+                        root: library.root,
+                        current: track.id == current?.id,
+                        playing: player.playing && track.id == current?.id,
+                        handlers: handlers
+                    )
                 }.onDelete { player.removeQueue(at: $0) }.onMove { player.moveQueue(from: $0, to: $1) }
             }.listStyle(.plain).frame(height: 230).environment(\.editMode, .constant(.active)).scrollContentBackground(.hidden)
         }
     }
 
     @ViewBuilder private var lyricsPanel: some View {
-        if let text = current?.lyrics, !text.isEmpty {
-            let lines = LyricsLine.parse(text)
-            let active = lines.lastIndex { ($0.time ?? -.infinity) <= playbackClock.position }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            Button { if let time = line.time { player.seek(time) } } label: {
-                                Text(line.text).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
-                                    .foregroundStyle(index == active || line.time == nil ? Color.primary : Color.secondary)
-                            }.buttonStyle(.plain).id(index)
-                        }
-                    }.padding(.vertical)
-                }.frame(height: 235)
-                    .onChange(of: active) { _, value in if let value { withAnimation { proxy.scrollTo(value, anchor: .center) } } }
-            }
+        if let text = current?.lyrics, current?.hasLyrics == true {
+            LyricsScroll(lines: LyricsLine.parse(text), position: playbackClock.position) { player.seek($0) }
+                .frame(height: 235)
         } else { ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。")) }
+    }
+
+    private var handlers: SongHandlers {
+        SongHandlers(
+            play: { player.load($0) },
+            favorite: { library.toggleFavorite($0) },
+            playlist: { playlistTarget = $0 },
+            playNext: { player.enqueue([$0], next: true) },
+            addToQueue: { player.enqueue([$0], next: false) },
+            album: { onOpen(.album($0.albumID)) },
+            artist: { onOpen(.artist($0.artist)) },
+            lyrics: { lyricsTrack = $0 },
+            delete: onDelete
+        )
+    }
+
+}
+
+struct LyricsScroll: View {
+    let lines: [LyricsLine]
+    var position: Double?
+    var seek: (Double) -> Void
+
+    var body: some View {
+        let active = position.flatMap { value in lines.lastIndex { ($0.time ?? -.infinity) <= value } }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        Button { if let time = line.time { seek(time) } } label: {
+                            Text(line.text).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(line.time == nil || index == active ? Color.primary : Color.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .id(index)
+                    }
+                }
+                .padding(.vertical)
+            }
+            .onChange(of: active) { _, value in
+                if let value { withAnimation { proxy.scrollTo(value, anchor: .center) } }
+            }
+        }
+    }
+}
+
+struct LyricsReader: View {
+    @ObservedObject var player: PlayerStore
+    @ObservedObject private var clock: PlaybackClock
+    let track: Track
+    @Environment(\.dismiss) private var dismiss
+
+    init(player: PlayerStore, track: Track) {
+        self.player = player
+        self.track = track
+        _clock = ObservedObject(wrappedValue: player.clock)
+    }
+
+    private var isCurrent: Bool { player.current?.id == track.id }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if track.hasLyrics, let text = track.lyrics {
+                    LyricsScroll(lines: LyricsLine.parse(text), position: isCurrent ? clock.position : nil) { time in
+                        if isCurrent || player.queueIDs.contains(track.id) {
+                            if isCurrent { player.seek(time) }
+                            else { player.load(track, at: time, keepTransport: true) }
+                        } else {
+                            player.load(track, at: time)
+                        }
+                    }
+                } else {
+                    ContentUnavailableView("暂无歌词", systemImage: "quote.bubble", description: Text("这首歌没有内嵌或同名的歌词。"))
+                }
+            }
+            .navigationTitle("歌词")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
+        }
+        .tint(.orange)
+        .presentationDragIndicator(.visible)
     }
 }
 

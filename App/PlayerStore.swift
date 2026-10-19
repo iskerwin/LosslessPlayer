@@ -221,18 +221,38 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func enqueue(_ track: Track, next: Bool) {
-        guard track.available, track.id != current?.id else { return }
-        var ids = queueIDs.filter { $0 != track.id }
-        ordering.context.removeAll { $0 == track.id }
-        if next, let id = current?.id, let index = ids.firstIndex(of: id) {
-            ids.insert(track.id, at: index + 1)
-            if let contextIndex = ordering.context.firstIndex(of: id) { ordering.context.insert(track.id, at: contextIndex + 1) }
-            else { ordering.context.append(track.id) }
-        } else {
-            ids.append(track.id)
-            ordering.context.append(track.id)
+        enqueue([track], next: next)
+    }
+
+    /// Play Next inserts after the current track. Add to Queue appends.
+    /// With nothing loaded, Play Next starts in list order and Add to Queue pauses on the first track.
+    /// Both of those idle cases turn shuffle off so the new queue order is the order the user asked for.
+    func enqueue(_ tracks: [Track], next: Bool) {
+        var seen = Set<UUID>()
+        let chosen = tracks.filter { track in
+            guard track.available, seen.insert(track.id).inserted else { return false }
+            if let current, track.id == current.id { return false }
+            return true
         }
-        setQueue(ids, replacingContext: false)
+        guard !chosen.isEmpty else { return }
+        if current == nil {
+            if next {
+                play(chosen, shuffled: false)
+            } else {
+                let ids = chosen.map(\.id)
+                ordering.applyPlay(orderedIDs: ids, queue: ids, shuffle: false)
+                shuffle = ordering.shuffle
+                queueIDs = ordering.queue
+                library.rememberQueue(queueIDs, contextOrder: ordering.context, shuffle: shuffle)
+                if let first = chosen.first { load(first, autoplay: false, keepTransport: true) }
+            }
+            return
+        }
+        ordering.queue = queueIDs
+        ordering.shuffle = shuffle
+        ordering.insert(chosen.map(\.id), after: current?.id, next: next)
+        queueIDs = ordering.queue
+        library.rememberQueue(queueIDs, contextOrder: ordering.context, shuffle: shuffle)
     }
 
     func removeQueue(at offsets: IndexSet) {

@@ -30,6 +30,10 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var missing: Bool?
     var lyrics: String?
     var available: Bool { missing != true }
+    var hasLyrics: Bool {
+        let text = lyrics?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !text.isEmpty
+    }
     /// Album artist wins. A compilation flag with no album artist groups every track of that album name together.
     var albumArtistName: String {
         let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -223,6 +227,31 @@ struct QueueOrdering: Equatable {
         for id in queue where !result.contains(id) { result.append(id) }
         return result
     }
+
+    /// Inserts tracks after the current one, or at the end. The current id is never moved.
+    /// Play Next stays immediately after `current` even while the queue is shuffled.
+    mutating func insert(_ incoming: [UUID], after current: UUID?, next: Bool) {
+        var seen = Set<UUID>()
+        let ids = incoming.filter { id in
+            if let current, id == current { return false }
+            return seen.insert(id).inserted
+        }
+        guard !ids.isEmpty else { return }
+        let drop = Set(ids)
+        queue.removeAll { drop.contains($0) }
+        context.removeAll { drop.contains($0) }
+        if next, let current, let index = queue.firstIndex(of: current) {
+            queue.insert(contentsOf: ids, at: index + 1)
+            if let contextIndex = context.firstIndex(of: current) {
+                context.insert(contentsOf: ids, at: contextIndex + 1)
+            } else {
+                context.append(contentsOf: ids)
+            }
+        } else {
+            queue.append(contentsOf: ids)
+            context.append(contentsOf: ids)
+        }
+    }
 }
 
 enum RemovalNotice {
@@ -239,6 +268,23 @@ enum RemovalNotice {
         }
         return "只移除资料库索引，不会删除文件夹里的原文件。之后重新扫描仍会隐藏这首歌。"
     }
+
+    static func title(for tracks: [Track]) -> String {
+        if tracks.count <= 1 { return title(for: tracks.first) }
+        return "从资料库中删除 \(tracks.count) 首歌曲？"
+    }
+
+    static func message(for tracks: [Track]) -> String {
+        if tracks.count <= 1 { return tracks.first.map(message(for:)) ?? "" }
+        let copies = tracks.filter(deletesAppCopy).count
+        if copies == tracks.count {
+            return "将删除已经复制到 App 里的 \(copies) 个副本。你在「文件」中的原始文件不会被改动。"
+        }
+        if copies == 0 {
+            return "只移除这 \(tracks.count) 首的资料库索引，不会删除文件夹里的原文件。"
+        }
+        return "将移除这 \(tracks.count) 首。其中 \(copies) 首会删除 App 内的副本，其余只移除索引，原文件都会保留。"
+    }
 }
 
 extension Sequence where Element == Track {
@@ -253,16 +299,12 @@ enum PlaybackContext {
     }
 }
 
-/// How the shared play / shuffle / repeat capsules should look for one collection.
-/// Shuffle and repeat always follow the player. Play shows pause only while this collection is the one being heard.
-struct CapsulePlaybackAppearance: Equatable {
+/// Now Playing is the only place shuffle and repeat draw their on/off state.
+/// The mapping takes the live player flags and no collection snapshot.
+struct NowPlayingTransportState: Equatable {
     var playTitle: String
     var playSymbol: String
     var playHighlighted: Bool
-    /// Pause the current audio instead of starting this collection.
-    var pauses: Bool
-    /// Resume the current audio instead of starting this collection over.
-    var resumes: Bool
     var shuffleHighlighted: Bool
     var repeatTitle: String
     var repeatSymbol: String
@@ -270,18 +312,12 @@ struct CapsulePlaybackAppearance: Equatable {
     var repeatAccessibility: String
 }
 
-enum CapsulePlayback {
-    static func appearance(listIDs: [UUID], contextIDs: [UUID], currentID: UUID?, playing: Bool, shuffle: Bool, repeatMode: RepeatMode) -> CapsulePlaybackAppearance {
-        let startedHere = PlaybackContext.matches(list: listIDs, context: contextIDs)
-        let currentHere = currentID.map { listIDs.contains($0) } ?? false
-        let owns = startedHere || currentHere
-        let showPause = owns && playing
-        return CapsulePlaybackAppearance(
-            playTitle: showPause ? "暂停" : "播放",
-            playSymbol: showPause ? "pause.fill" : "play.fill",
-            playHighlighted: showPause,
-            pauses: showPause,
-            resumes: owns && !playing && currentID != nil,
+enum NowPlayingTransport {
+    static func state(playing: Bool, shuffle: Bool, repeatMode: RepeatMode) -> NowPlayingTransportState {
+        NowPlayingTransportState(
+            playTitle: playing ? "暂停" : "播放",
+            playSymbol: playing ? "pause.fill" : "play.fill",
+            playHighlighted: playing,
             shuffleHighlighted: shuffle,
             repeatTitle: repeatMode.controlTitle,
             repeatSymbol: repeatMode.symbolName,

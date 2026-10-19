@@ -75,35 +75,100 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertFalse(PlaybackContext.matches(list: [], context: [a]))
     }
 
-    func testCapsuleStateFollowsGlobalShuffleAndRepeatOnEveryList() {
-        let here = UUID(), other = UUID(), current = UUID()
-        let playingElsewhere = CapsulePlayback.appearance(
-            listIDs: [here], contextIDs: [other], currentID: other, playing: true, shuffle: true, repeatMode: .all)
-        XCTAssertEqual(playingElsewhere.playTitle, "播放")
-        XCTAssertEqual(playingElsewhere.playSymbol, "play.fill")
-        XCTAssertFalse(playingElsewhere.playHighlighted)
-        XCTAssertTrue(playingElsewhere.shuffleHighlighted)
-        XCTAssertEqual(playingElsewhere.repeatSymbol, "repeat")
-        XCTAssertEqual(playingElsewhere.repeatTitle, "列表")
-        XCTAssertTrue(playingElsewhere.repeatHighlighted)
+    func testListCapsulesStayStateless() {
+        XCTAssertEqual(CollectionTransport.allCases.map(\.title), ["播放", "随机播放"])
+        XCTAssertEqual(CollectionTransport.allCases.map(\.symbol), ["play.fill", "shuffle"])
+        XCTAssertTrue(CollectionTransport.allCases.allSatisfy { !$0.reflectsPlaybackState })
+        let symbols = Set(CollectionTransport.allCases.map(\.symbol))
+        XCTAssertFalse(symbols.contains("pause.fill"))
+        XCTAssertFalse(symbols.contains("repeat"))
+        XCTAssertFalse(symbols.contains("repeat.1"))
+    }
 
-        let playingHere = CapsulePlayback.appearance(
-            listIDs: [here, current], contextIDs: [other, current], currentID: current, playing: true, shuffle: false, repeatMode: .one)
-        XCTAssertEqual(playingHere.playSymbol, "pause.fill")
-        XCTAssertEqual(playingHere.playTitle, "暂停")
-        XCTAssertTrue(playingHere.pauses)
-        XCTAssertFalse(playingHere.shuffleHighlighted)
-        XCTAssertEqual(playingHere.repeatSymbol, "repeat.1")
-        XCTAssertEqual(playingHere.repeatTitle, "单曲")
+    func testNowPlayingTransportReflectsGlobalShuffleAndRepeat() {
+        let playing = NowPlayingTransport.state(playing: true, shuffle: true, repeatMode: .one)
+        XCTAssertEqual(playing.playSymbol, "pause.fill")
+        XCTAssertEqual(playing.playTitle, "暂停")
+        XCTAssertTrue(playing.playHighlighted)
+        XCTAssertTrue(playing.shuffleHighlighted)
+        XCTAssertEqual(playing.repeatSymbol, "repeat.1")
+        XCTAssertEqual(playing.repeatTitle, "单曲")
+        XCTAssertTrue(playing.repeatHighlighted)
 
-        let pausedHere = CapsulePlayback.appearance(
-            listIDs: [current], contextIDs: [current], currentID: current, playing: false, shuffle: true, repeatMode: .off)
-        XCTAssertEqual(pausedHere.playTitle, "播放")
-        XCTAssertTrue(pausedHere.resumes)
-        XCTAssertFalse(pausedHere.playHighlighted)
-        XCTAssertTrue(pausedHere.shuffleHighlighted)
-        XCTAssertFalse(pausedHere.repeatHighlighted)
-        XCTAssertEqual(pausedHere.repeatTitle, "循环")
+        let paused = NowPlayingTransport.state(playing: false, shuffle: false, repeatMode: .off)
+        XCTAssertEqual(paused.playSymbol, "play.fill")
+        XCTAssertEqual(paused.playTitle, "播放")
+        XCTAssertFalse(paused.playHighlighted)
+        XCTAssertFalse(paused.shuffleHighlighted)
+        XCTAssertEqual(paused.repeatSymbol, "repeat")
+        XCTAssertEqual(paused.repeatTitle, "循环")
+        XCTAssertFalse(paused.repeatHighlighted)
+
+        let looping = NowPlayingTransport.state(playing: false, shuffle: false, repeatMode: .all)
+        XCTAssertEqual(looping.repeatTitle, "列表")
+        XCTAssertTrue(looping.repeatHighlighted)
+        XCTAssertFalse(looping.shuffleHighlighted)
+    }
+
+    func testPlayNextInsertsAfterCurrentAndAddToQueueAppends() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID(), e = UUID()
+        var ordering = QueueOrdering(queue: [a, b, c], context: [a, b, c], shuffle: false)
+        ordering.insert([d, e], after: b, next: true)
+        XCTAssertEqual(ordering.queue, [a, b, d, e, c])
+        XCTAssertEqual(ordering.context, [a, b, d, e, c])
+        ordering.insert([d], after: b, next: false)
+        XCTAssertEqual(ordering.queue, [a, b, e, c, d])
+        XCTAssertEqual(ordering.context, [a, b, e, c, d])
+    }
+
+    func testPlayNextWhileShuffledStaysImmediatelyAfterCurrent() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        var ordering = QueueOrdering(queue: [b, c, a], context: [a, b, c], shuffle: true)
+        ordering.insert([d], after: b, next: true)
+        XCTAssertEqual(ordering.queue, [b, d, c, a])
+        XCTAssertEqual(ordering.context, [a, b, d, c])
+        ordering.toggleShuffle(current: b)
+        XCTAssertFalse(ordering.shuffle)
+        XCTAssertEqual(ordering.queue, [a, b, d, c])
+    }
+
+    func testEnqueueSkipsTheCurrentTrackAndDuplicates() {
+        let a = UUID(), b = UUID(), c = UUID()
+        var ordering = QueueOrdering(queue: [a, b, c], context: [a, b, c], shuffle: false)
+        ordering.insert([b], after: b, next: true)
+        XCTAssertEqual(ordering.queue, [a, b, c])
+        ordering.insert([c, c], after: a, next: true)
+        XCTAssertEqual(ordering.queue, [a, c, b])
+        XCTAssertEqual(ordering.context, [a, c, b])
+    }
+
+    func testSongMenuUsesLibraryLabelsAndHidesMissingLyrics() {
+        var track = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        let plain = SongMenuCatalog.groups(for: track, handlers: .ignore).flatMap(\.entries).map(\.title)
+        XCTAssertEqual(plain, ["收藏", "添加到歌单", "下一首播放", "稍后播放", "前往专辑", "前往艺术家", "从资料库中删除"])
+        XCTAssertFalse(plain.contains("查看完整歌词"))
+        track.lyrics = "  hello  "
+        track.favorite = true
+        var handlers = SongHandlers.ignore
+        handlers.setCover = { _ in }
+        handlers.removeFromPlaylist = { _ in }
+        let loved = SongMenuCatalog.groups(for: track, handlers: handlers).flatMap(\.entries).map(\.title)
+        XCTAssertEqual(loved, ["取消收藏", "添加到歌单", "下一首播放", "稍后播放", "前往专辑", "前往艺术家", "查看完整歌词", "设为歌单封面", "从歌单中移除", "从资料库中删除"])
+        XCTAssertEqual(SongMenuModel.baseTitles.first, "收藏")
+        XCTAssertEqual(SongMenuModel.baseTitles.last, "从资料库中删除")
+    }
+
+    func testBulkRemovalNoticeMentionsCopiesAndOriginals() {
+        var copy = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        var indexed = copy
+        indexed.id = UUID()
+        indexed.folderID = UUID()
+        XCTAssertEqual(RemovalNotice.title(for: [copy]), RemovalNotice.title(for: copy))
+        let mixed = RemovalNotice.message(for: [copy, indexed])
+        XCTAssertTrue(mixed.contains("副本"))
+        XCTAssertTrue(mixed.contains("原文件"))
+        XCTAssertTrue(RemovalNotice.message(for: [copy, copy]).contains("副本"))
+        XCTAssertFalse(RemovalNotice.message(for: [indexed, indexed]).contains("副本"))
     }
 
     func testRepeatModeCyclesBetweenOffListAndOne() {

@@ -2,8 +2,13 @@ import SwiftUI
 
 struct PlaylistHome: View {
     @ObservedObject var library: LibraryStore
+    @ObservedObject var player: PlayerStore
+    var imports: ImportCommands
+    var onOpen: (LibraryRoute) -> Void
     var onRename: (Playlist) -> Void
     var onCreate: () -> Void
+    var onAddSongs: (Playlist) -> Void
+    var onAddToPlaylist: ([Track]) -> Void
     @AppStorage("playlistLayout") private var layoutRaw = PlaylistLayout.grid.rawValue
     private var layout: PlaylistLayout { PlaylistLayout(rawValue: layoutRaw) ?? .grid }
 
@@ -24,16 +29,26 @@ struct PlaylistHome: View {
             }
         }
         .navigationTitle("歌单")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    layoutRaw = layout.toggled.rawValue
-                } label: {
-                    Image(systemName: layout == .grid ? "list.bullet" : "square.grid.2x2")
-                }
-                .modifier(GlassControl())
-                .accessibilityLabel(layout == .grid ? "切换为列表" : "切换为网格")
+        .navigationBarTitleDisplayMode(.large)
+        .trailingGlass {
+            Button {
+                layoutRaw = layout.toggled.rawValue
+            } label: {
+                Image(systemName: layout == .grid ? "list.bullet" : "square.grid.2x2")
             }
+            .accessibilityLabel(layout == .grid ? "切换为列表" : "切换为网格")
+            .modifier(ToolbarChrome())
+        } more: {
+            SectionsMenu(sections: [
+                MenuGroup(id: "create", entries: [
+                    MenuAction(id: "new", title: "新建歌单", symbol: "music.note.list", action: onCreate)
+                ]),
+                importMenuGroup(imports)
+            ]) {
+                Image(systemName: "ellipsis")
+            }
+            .accessibilityLabel("更多")
+            .modifier(ToolbarChrome())
         }
     }
 
@@ -41,7 +56,7 @@ struct PlaylistHome: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 16)], spacing: 22) {
                 ForEach(library.snapshot.playlists) { playlist in
-                    NavigationLink(value: LibraryRoute.playlist(playlist.id)) {
+                    Button { onOpen(.playlist(playlist.id)) } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             PlaylistCover(playlist: playlist, library: library)
                             Text(playlist.name).font(.subheadline.weight(.semibold)).lineLimit(1).foregroundStyle(.primary)
@@ -49,7 +64,10 @@ struct PlaylistHome: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .contextMenu { playlistMenu(playlist) }
+                    .modifier(ActionsContext(
+                        sections: playlistGroups(playlist),
+                        preview: MediaPreview(title: playlist.name, subtitle: "\(playlist.trackIDs.count) 首歌曲", artwork: coverTrack(playlist), root: library.root)
+                    ))
                 }
             }
             .padding(22)
@@ -60,28 +78,65 @@ struct PlaylistHome: View {
     private var list: some View {
         List {
             ForEach(library.snapshot.playlists) { playlist in
-                NavigationLink(value: LibraryRoute.playlist(playlist.id)) {
-                    HStack(spacing: 12) {
-                        PlaylistCover(playlist: playlist, library: library).frame(width: 56, height: 56)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(playlist.name).lineLimit(1)
-                            Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    Button { onOpen(.playlist(playlist.id)) } label: {
+                        HStack(spacing: 12) {
+                            PlaylistCover(playlist: playlist, library: library).frame(width: 56, height: 56)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(playlist.name).lineLimit(1).foregroundStyle(.primary)
+                                Text("\(playlist.trackIDs.count) 首歌曲").font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
                         }
                     }
+                    .buttonStyle(.plain)
+                    SectionsMenu(sections: playlistGroups(playlist)) { EllipsisLabel() }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("更多操作")
                 }
                 .swipeActions(allowsFullSwipe: false) {
                     Button("重命名") { onRename(playlist) }.tint(.orange)
                     Button("删除歌单", role: .destructive) { library.removePlaylist(playlist) }
                 }
-                .contextMenu { playlistMenu(playlist) }
+                .modifier(ActionsContext(
+                    sections: playlistGroups(playlist),
+                    preview: MediaPreview(title: playlist.name, subtitle: "\(playlist.trackIDs.count) 首歌曲", artwork: coverTrack(playlist), root: library.root)
+                ))
+                .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] + 56 + 12 }
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 4))
             }
         }
         .listStyle(.plain)
     }
 
-    @ViewBuilder private func playlistMenu(_ playlist: Playlist) -> some View {
-        Button("重命名", systemImage: "pencil") { onRename(playlist) }
-        Button("删除歌单", systemImage: "trash", role: .destructive) { library.removePlaylist(playlist) }
+    private func playlistGroups(_ playlist: Playlist) -> [MenuGroup] {
+        let tracks = tracks(in: playlist)
+        return [
+            MenuGroup(id: "play", entries: [
+                MenuAction(id: "play", title: "播放", symbol: "play.fill") { player.play(tracks, shuffled: false) },
+                MenuAction(id: "shuffle", title: "随机播放", symbol: "shuffle") { player.play(tracks, shuffled: true) }
+            ]),
+            MenuGroup(id: "queue", entries: [
+                MenuAction(id: "next", title: "下一首播放", symbol: "text.insert") { player.enqueue(tracks, next: true) },
+                MenuAction(id: "later", title: "稍后播放", symbol: "text.append") { player.enqueue(tracks, next: false) }
+            ]),
+            MenuGroup(id: "edit", entries: [
+                MenuAction(id: "add-playlist", title: "添加到歌单", symbol: "text.badge.plus") { onAddToPlaylist(tracks) },
+                MenuAction(id: "add-songs", title: "添加歌曲", symbol: "plus") { onAddSongs(playlist) },
+                MenuAction(id: "rename", title: "重命名", symbol: "pencil") { onRename(playlist) }
+            ]),
+            MenuGroup(id: "delete", entries: [
+                MenuAction(id: "delete", title: "删除歌单", symbol: "trash", role: .destructive) { library.removePlaylist(playlist) }
+            ])
+        ]
+    }
+
+    private func tracks(in playlist: Playlist) -> [Track] {
+        playlist.trackIDs.compactMap { id in library.tracks.first { $0.id == id } }
+    }
+
+    private func coverTrack(_ playlist: Playlist) -> Track? {
+        library.coverTrack(for: playlist)
     }
 }
 
@@ -98,9 +153,9 @@ struct PlaylistCover: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay { artwork.clipped() }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
-            .shadow(color: .orange.opacity(0.16), radius: 10, y: 6)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 6)
             .accessibilityHidden(true)
     }
 
