@@ -413,7 +413,7 @@ struct ThinScrubber: View {
     var onCancel: () -> Void = {}
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var contrast
     @GestureState private var fingerDown = false
     @State private var dragging = false
 
