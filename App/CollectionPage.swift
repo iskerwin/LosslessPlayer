@@ -35,13 +35,22 @@ struct CollectionPage: View {
     @AppStorage("librarySort") private var sortRaw = LibrarySort.title.rawValue
     @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
     @State private var editing = false
+    @State private var palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let page = songList
-            .navigationTitle(title)
+            .navigationTitle(kind == .playlist ? "" : title)
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
+            .background {
+                if kind == .playlist { ArtworkBackdrop(colors: palette) }
+            }
+            .preferredColorScheme(kind == .playlist ? .dark : nil)
+            .toolbarBackground(kind == .playlist ? .hidden : .automatic, for: .navigationBar)
+            .onAppear(perform: refreshPalette)
+            .onChange(of: playlist?.coverTrackID) { _, _ in refreshPalette() }
+            .onChange(of: coverTrack?.artworkFilename) { _, _ in refreshPalette() }
         if editing {
             page.trailingGlass {
                 Button("完成") { editing = false }
@@ -60,7 +69,8 @@ struct CollectionPage: View {
     private var songList: some View {
         List {
             if (kind == .album && !sorted.isEmpty) || playlist != nil { header }
-            if showTransport {
+            if kind == .playlist { playlistTransport }
+            if showTransport && kind != .playlist {
                 PlayShuffleBar(enabled: sorted.contains(where: \.available), play: {
                     player.play(sorted, shuffled: false)
                 }, shuffle: {
@@ -75,6 +85,8 @@ struct CollectionPage: View {
                     playing: player.playing && player.current?.id == track.id,
                     indexLabel: kind == .album ? indexLabel(track) : nil,
                     showsMenu: !editing,
+                    emphasis: kind == .playlist ? .white : .accentColor,
+                    showsLocalStatus: kind == .playlist,
                     handlers: handlers
                 )
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -83,25 +95,35 @@ struct CollectionPage: View {
                     } else {
                         Button("从资料库中删除", role: .destructive) { onDelete([track]) }
                     }
-                    Button("添加到歌单") { onAddToPlaylist([track]) }.tint(.orange)
+                    Button("添加到歌单") { onAddToPlaylist([track]) }.tint(.accentColor)
                 }
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button { library.toggleFavorite(track) } label: {
                         Label(track.favorite ? "取消收藏" : "收藏", systemImage: "star")
                     }
-                    .tint(.orange)
+                    .tint(.accentColor)
                 }
             }
             .onMove { offsets, destination in
                 guard let playlist else { return }
                 library.moveTracks(in: playlist, displayed: sorted.map(\.id), from: offsets, to: destination)
             }
+            if kind == .playlist && !sorted.isEmpty {
+                Text(lengthText(sorted))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .padding(.vertical, 12)
+            }
             if sorted.isEmpty {
                 ContentUnavailableView("还没有歌曲", systemImage: "music.note", description: Text(emptyDescription))
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(kind == .playlist ? .hidden : .visible)
         .accessibilityIdentifier(kind == .playlist ? "playlist-detail" : kind == .songs ? "songs-list" : "collection-list")
         .modifier(PlaylistEditing(enabled: kind == .playlist, editing: editing))
     }
@@ -122,7 +144,7 @@ struct CollectionPage: View {
                     .padding(.top, 8)
                 Text(first.album).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
-                    Text(first.albumArtistName).font(.title3).foregroundStyle(.orange)
+                    Text(first.albumArtistName).font(.title3).foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
                 Text(lengthText(sorted)).font(.subheadline).foregroundStyle(.secondary)
@@ -131,17 +153,75 @@ struct CollectionPage: View {
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
         } else if let playlist {
-            VStack(spacing: 14) {
+            VStack(spacing: 0) {
                 PlaylistCover(playlist: playlist, library: library)
-                    .frame(width: 250)
-                    .padding(.top, 8)
-                Text(playlist.name).font(.title.bold()).multilineTextAlignment(.center)
-                Text(lengthText(sorted)).font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: 300)
+                    .containerRelativeFrame(.horizontal) { width, _ in min(300, width * 0.65) }
+                    .padding(.top, 16)
+                    .padding(.bottom, 24)
+                Text(playlist.name)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text("本地歌单 · \(sorted.count) 首歌曲")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
         }
+    }
+
+    private var coverTrack: Track? {
+        playlist.flatMap { library.coverTrack(for: $0) }
+    }
+
+    private func refreshPalette() {
+        let image = coverTrack?.artworkFilename.flatMap {
+            ArtworkCache.shared.image(at: library.root.appendingPathComponent($0))
+        }
+        palette = ArtworkColors.palette(from: image).map { Color(uiColor: $0) }
+    }
+
+    private var playlistTransport: some View {
+        HStack(spacing: 14) {
+            Button { player.play(sorted, shuffled: true) } label: {
+                Image(systemName: "shuffle")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 48, height: 48)
+                    .background(.white.opacity(0.1), in: Circle())
+            }
+            .disabled(!sorted.contains(where: \.available))
+            .accessibilityLabel("随机播放")
+            Button { player.play(sorted, shuffled: false) } label: {
+                Label("播放", systemImage: "play.fill")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .foregroundStyle(Color(white: 0.2))
+                    .background(.white, in: Capsule())
+            }
+            .disabled(!sorted.contains(where: \.available))
+            .accessibilityLabel("播放歌单")
+            Button {
+                if let playlist { onAddSongs(playlist) }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title3.weight(.medium))
+                    .frame(width: 48, height: 48)
+                    .background(.white.opacity(0.1), in: Circle())
+            }
+            .accessibilityLabel("添加歌曲")
+        }
+        .foregroundStyle(.white)
+        .buttonStyle(PressScaleStyle())
+        .listRowInsets(EdgeInsets(top: 0, leading: 52, bottom: 22, trailing: 52))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .accessibilityIdentifier("playlist-transport")
+        // Adding songs remains available even in an empty playlist.
+        .disabled(editing)
     }
 
     private var albumArtistRoute: String {

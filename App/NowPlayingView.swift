@@ -28,6 +28,7 @@ struct NowPlayingView: View {
     @State private var draft: Double = 0
     @State private var details = false
     @State private var playlistTarget: Track?
+    @GestureState private var dismissOffset: CGFloat = 0
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
     private var duration: Double {
@@ -48,6 +49,9 @@ struct NowPlayingView: View {
                 }
             }
         }
+        .offset(y: reduceMotion ? 0 : dismissOffset)
+        .background(Color(white: 0.08).ignoresSafeArea())
+        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -68,8 +72,8 @@ struct NowPlayingView: View {
             Button { dismiss() } label: {
                 Capsule()
                     .fill(Color.white.opacity(0.55))
-                    .frame(width: 36, height: 5)
-                    .frame(width: 60, height: 44)
+                    .frame(width: 60, height: 4)
+                    .frame(width: 90, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -78,42 +82,49 @@ struct NowPlayingView: View {
             stage
                 .frame(height: stageHeight)
                 .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
-                .padding(.bottom, 20)
+                .padding(.bottom, 24)
             VStack(spacing: 8) {
                 titleBlock
                 scrubber
                 transport
+                    .padding(.top, 18)
             }
             .fixedSize(horizontal: false, vertical: true)
             SystemVolumeBar()
-                .padding(.top, 16)
+                .padding(.top, 32)
             bottomRow
-                .padding(.top, 12)
+                .padding(.top, 18)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 32)
         .padding(.bottom, 12)
         .frame(maxWidth: 560, maxHeight: stageHeight == nil ? .infinity : nil)
         .frame(maxWidth: .infinity)
     }
 
     private var dismissGesture: some Gesture {
-        DragGesture(minimumDistance: 16).onEnded { value in
-            if value.translation.height > 90,
-               value.translation.height > abs(value.translation.width) * 1.5 {
-                dismiss()
+        DragGesture(minimumDistance: 16)
+            .updating($dismissOffset) { value, offset, _ in
+                if value.translation.height > abs(value.translation.width) * 1.5 {
+                    offset = max(0, value.translation.height)
+                }
             }
-        }
+            .onEnded { value in
+                if value.translation.height > 90,
+                   value.translation.height > abs(value.translation.width) * 1.5 {
+                    dismiss()
+                }
+            }
     }
 
     @ViewBuilder private var stage: some View {
         ZStack {
             if panel == .artwork {
                 GeometryReader { geometry in
-                    let side = max(0, min(geometry.size.width, geometry.size.height))
+                    let side = max(0, min(geometry.size.width * 0.90, geometry.size.height * 0.9))
                     ArtworkView(track: current, root: library.root, size: side, placeholder: .neutral)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
-                        .scaleEffect(player.playing ? 1 : 0.92)
+                        .scaleEffect(player.playing ? 1 : 0.86)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -133,9 +144,9 @@ struct NowPlayingView: View {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(current?.title ?? "未在播放")
-                        .font(.title2.bold())
+                        .font(.title3.bold())
                         .foregroundStyle(.white)
-                        .lineLimit(2)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .multilineTextAlignment(.leading)
                     if let current {
                         Button {
@@ -156,7 +167,7 @@ struct NowPlayingView: View {
                 if let current {
                     Button { library.toggleFavorite(current) } label: {
                         Image(systemName: current.favorite ? "star.fill" : "star")
-                            .font(.title3)
+                            .font(.system(size: 23, weight: .regular))
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
@@ -182,20 +193,6 @@ struct NowPlayingView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("更多")
                 }
-            }
-            if let current {
-                Button { details = true } label: {
-                    Text(current.qualityBadge)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.white.opacity(0.16), in: Capsule())
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("音质 \(current.qualityBadge)")
             }
         }
     }
@@ -238,7 +235,8 @@ struct NowPlayingView: View {
             Spacer()
             transportButton("forward.fill", label: "下一首", size: 34) { player.skip() }
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 10)
     }
 
     private func transportButton(_ symbol: String, label: String, size: CGFloat, action: @escaping () -> Void) -> some View {
@@ -422,7 +420,7 @@ struct ThinScrubber: View {
         GeometryReader { geo in
             let width = max(geo.size.width, 1)
             let fraction = ScrubberMap.fraction(value: value, in: range)
-            let thickness: CGFloat = dragging ? 7 : 3
+            let thickness: CGFloat = dragging ? 7 : 4
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
                 Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
@@ -511,7 +509,7 @@ enum ArtworkColors {
         guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
             return UIColor(white: 0.12, alpha: 1)
         }
-        return UIColor(hue: hue, saturation: min(0.7, saturation), brightness: min(0.36, max(0.10, brightness * 0.42)), alpha: 1)
+        return UIColor(hue: hue, saturation: min(0.48, saturation * 0.65), brightness: min(0.36, max(0.10, brightness * 0.60)), alpha: 1)
     }
 
     private static func average(_ image: CIImage, rect: CGRect) -> UIColor? {
@@ -543,6 +541,10 @@ struct ArtworkBackdrop: View {
             } else {
                 LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
             }
+        }
+        .overlay {
+            LinearGradient(colors: [.white.opacity(0.06), .clear, .black.opacity(0.32)],
+                           startPoint: .top, endPoint: .bottom)
         }
         .ignoresSafeArea()
         .onAppear { drift = true }
@@ -647,7 +649,7 @@ struct SystemVolumeBar: View {
                 .font(.footnote)
                 .accessibilityHidden(true)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.white.opacity(0.6))
     }
 }
 
@@ -656,20 +658,20 @@ private struct NativeVolumeView: UIViewRepresentable {
     func makeUIView(context: Context) -> MPVolumeView {
         let view = MPVolumeView(frame: .zero)
         view.showsRouteButton = false
-        view.tintColor = .white
+        view.tintColor = UIColor.white.withAlphaComponent(0.65)
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return view
     }
 
     func updateUIView(_ view: MPVolumeView, context: Context) {
-        view.tintColor = .white
+        view.tintColor = UIColor.white.withAlphaComponent(0.65)
     }
 }
 
 private struct RoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView()
-        view.tintColor = .white
+        view.tintColor = UIColor.white.withAlphaComponent(0.65)
         view.activeTintColor = .white
         return view
     }
