@@ -88,7 +88,7 @@ struct NowPlayingView: View {
                 .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
                 .padding(.bottom, 24)
             VStack(spacing: 8) {
-                titleBlock
+                if panel != .queue { titleBlock }
                 scrubber
                 transport
                     .padding(.top, 18)
@@ -148,17 +148,17 @@ struct NowPlayingView: View {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(current?.title ?? "未在播放")
-                        .font(.title3.bold())
+                        .font(panel == .queue ? .headline : .title2.bold())
                         .foregroundStyle(.white)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .multilineTextAlignment(.leading)
                     if let current {
                         Button {
-                            onOpen(.artist(current.artist))
+                            onOpen(.artist(current.primaryArtist))
                             dismiss()
                         } label: {
                             Text(current.artist)
-                                .font(.title3)
+                                .font(panel == .queue ? .subheadline : .title3)
                                 .foregroundStyle(.white.opacity(0.6))
                                 .lineLimit(1)
                         }
@@ -184,7 +184,7 @@ struct NowPlayingView: View {
                             dismiss()
                         }
                         Button("前往艺术家", systemImage: "music.mic") {
-                            onOpen(.artist(current.artist))
+                            onOpen(.artist(current.primaryArtist))
                             dismiss()
                         }
                         Button("歌曲信息", systemImage: "info.circle") { details = true }
@@ -280,7 +280,7 @@ struct NowPlayingView: View {
                 .contentShape(Rectangle())
                 .background {
                     if panelSymbolActive(symbol) {
-                        RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.16))
+                        Circle().fill(.white.opacity(0.3))
                     }
                 }
         }
@@ -295,41 +295,61 @@ struct NowPlayingView: View {
 
     private var queuePanel: some View {
         let look = NowPlayingTransport.state(playing: player.playing, shuffle: player.shuffle, repeatMode: player.repeatMode)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("接下来").font(.headline)
-                Spacer()
-                Button { player.toggleShuffle() } label: {
-                    Image(systemName: "shuffle").frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(look.shuffleHighlighted ? 1 : 0.4))
-                .accessibilityLabel("切换随机播放")
-                .accessibilityValue(look.shuffleHighlighted ? "已开启" : "已关闭")
-                Button { player.cycleRepeat() } label: {
-                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(look.repeatHighlighted ? 1 : 0.4))
-                .accessibilityLabel(look.repeatAccessibility)
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                ArtworkView(track: current, root: library.root, size: 72)
+                titleBlock
             }
-            List {
-                ForEach(player.queuedTracks) { track in
-                    SongContextRow(
-                        track: track,
-                        root: library.root,
-                        current: track.id == current?.id,
-                        playing: player.playing && track.id == current?.id,
-                        emphasis: .white,
-                        handlers: handlers
-                    )
-                }
-                .onDelete { player.removeQueue(at: $0) }
-                .onMove { player.moveQueue(from: $0, to: $1) }
+            HStack(spacing: 12) {
+                queueModeButton("shuffle", label: "切换随机播放", active: look.shuffleHighlighted) { player.toggleShuffle() }
+                    .accessibilityValue(look.shuffleHighlighted ? "已开启" : "已关闭")
+                queueModeButton(look.repeatSymbol, label: look.repeatAccessibility, active: look.repeatHighlighted) { player.cycleRepeat() }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            Text("接下来").font(.headline).padding(.top, 4)
+            if player.upcomingTracks.isEmpty {
+                Text("队列已播放完毕").font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                List {
+                    ForEach(player.upcomingTracks) { track in
+                        Button { player.load(track) } label: {
+                            SongRow(track: track, root: library.root, emphasis: .white)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .contextMenu {
+                            Button("从队列移除", systemImage: "minus.circle", role: .destructive) {
+                                if let index = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) {
+                                    player.removeUpcoming(at: IndexSet(integer: index))
+                                }
+                            }
+                        }
+                    }
+                    .onMove { player.moveUpcoming(from: $0, to: $1) }
+                }
+                .environment(\.editMode, .constant(.active))
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .contentMargins(.top, 0, for: .scrollContent)
+                .accessibilityIdentifier("upcoming-queue")
+            }
         }
+        .padding(.top, 4)
+    }
+
+    private func queueModeButton(_ symbol: String, label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .foregroundStyle(active ? Color(white: 0.18) : Color.white)
+                .background(active ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 
     @ViewBuilder private var lyricsPanel: some View {
@@ -371,7 +391,7 @@ struct NowPlayingView: View {
             playNext: { player.enqueue([$0], next: true) },
             addToQueue: { player.enqueue([$0], next: false) },
             album: { onOpen(.album($0.albumID)); dismiss() },
-            artist: { onOpen(.artist($0.artist)); dismiss() },
+            artist: { onOpen(.artist($0.primaryArtist)); dismiss() },
             lyrics: { _ in panel = .lyrics },
             delete: onDelete
         )
@@ -424,7 +444,7 @@ struct ThinScrubber: View {
         GeometryReader { geo in
             let width = max(geo.size.width, 1)
             let fraction = ScrubberMap.fraction(value: value, in: range)
-            let thickness: CGFloat = dragging ? 7 : 4
+            let thickness: CGFloat = dragging ? 8 : 4
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
                 Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
@@ -659,16 +679,38 @@ struct SystemVolumeBar: View {
 
 /// Let the system own volume changes, accessibility, hardware buttons, and fixed-volume routes.
 private struct NativeVolumeView: UIViewRepresentable {
-    func makeUIView(context: Context) -> MPVolumeView {
-        let view = MPVolumeView(frame: .zero)
-        view.showsRouteButton = false
-        view.tintColor = UIColor.white.withAlphaComponent(0.65)
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return view
+    func makeUIView(context: Context) -> MusicVolumeView { MusicVolumeView(frame: .zero) }
+    func updateUIView(_ view: MusicVolumeView, context: Context) { }
+}
+
+/// Public MPVolumeView appearance APIs retain native volume, hardware-key and
+/// route behavior. Transparent thumbs keep the slider's native touch handling.
+private final class MusicVolumeView: MPVolumeView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        showsRouteButton = false
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let transparent = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+        for state in [UIControl.State.normal, .highlighted, .disabled] {
+            let height: CGFloat = state == .highlighted ? 8 : 4
+            setVolumeThumbImage(transparent, for: state)
+            setMinimumVolumeSliderImage(Self.track(height: height, alpha: 0.65), for: state)
+            setMaximumVolumeSliderImage(Self.track(height: height, alpha: 0.28), for: state)
+        }
+        accessibilityLabel = "系统音量"
     }
 
-    func updateUIView(_ view: MPVolumeView, context: Context) {
-        view.tintColor = UIColor.white.withAlphaComponent(0.65)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func volumeSliderRect(forBounds bounds: CGRect) -> CGRect {
+        CGRect(x: 0, y: bounds.midY - 4, width: bounds.width, height: 8)
+    }
+
+    private static func track(height: CGFloat, alpha: CGFloat) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 12, height: 8)).image { _ in
+            UIColor.white.withAlphaComponent(alpha).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 0, y: (8 - height) / 2, width: 12, height: height), cornerRadius: height / 2).fill()
+        }.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 5), resizingMode: .stretch)
     }
 }
 

@@ -26,7 +26,7 @@ struct LibraryView: View {
     @State private var exportPresented = false
     @State private var exportText = ""
     @State private var exportName = "playlist"
-    enum ImportKind { case files, folders, playlist }
+    enum ImportKind { case files, folders, folderPlaylists, playlist }
 
     var body: some View {
         playerTabs
@@ -48,6 +48,7 @@ struct LibraryView: View {
                 case .success(let urls):
                     switch kind {
                     case .folders: library.startAddFolders(urls)
+                    case .folderPlaylists: library.startFolderPlaylists(urls)
                     case .files: library.startImport(urls)
                     case .playlist: library.startImportPlaylists(urls)
                     }
@@ -201,7 +202,8 @@ struct LibraryView: View {
             addFiles: { importKind = .files; pickerPresented = true },
             newPlaylist: { creatingPlaylist = true },
             importPlaylist: { importKind = .playlist; pickerPresented = true },
-            showFolders: { showSources = true }
+            showFolders: { showSources = true },
+            folderPlaylists: { importKind = .folderPlaylists; pickerPresented = true }
         )
     }
 
@@ -218,6 +220,7 @@ struct LibraryView: View {
                     libraryLink("最近播放", icon: "clock", route: .recent)
                 }
                 if library.importing { scanProgress }
+                if let summary = library.scanSummary { Text(summary).font(.footnote).foregroundStyle(.secondary) }
                 if library.tracks.isEmpty {
                     ContentUnavailableView("你的音乐，随身聆听", systemImage: "music.note.house",
                         description: Text("添加本地音乐文件夹，自动整理专辑、艺术家和歌曲。"))
@@ -259,7 +262,7 @@ struct LibraryView: View {
 
     private var pickerTypes: [UTType] {
         switch importKind {
-        case .folders: return [.folder]
+        case .folders, .folderPlaylists: return [.folder]
         case .files: return [.audio]
         case .playlist: return PlaylistFileTypes.readable
         }
@@ -295,7 +298,7 @@ struct LibraryView: View {
         case .songs: page(library.tracks, title: "歌曲", kind: .songs, showsBack: true)
         case .artists: artistIndex
         case .artist(let artist):
-            page(library.tracks.filter { $0.artist == artist }, title: artist, kind: .artist, showsBack: true)
+            page(library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }, title: artist, kind: .artist, showsBack: true)
         case .albums: albumIndex
         case .album(let id):
             page(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", kind: .album, showsBack: true)
@@ -308,8 +311,8 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        List(Array(Set(library.tracks.map(\.artist))).sorted(), id: \.self) { artist in
-            let tracks = library.tracks.filter { $0.artist == artist }
+        List(Array(Set(library.tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { artist in
+            let tracks = library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
             browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
                 open(.artist(artist))
             }
@@ -322,12 +325,27 @@ struct LibraryView: View {
     }
 
     private var albumIndex: some View {
-        List(AlbumGroup.groups(library.tracks)) { album in
-            browseRow(title: album.name, subtitle: album.artist, artwork: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first, artSize: 56, groups: collectionGroups(album.tracks, artist: artistRoute(for: album))) {
-                open(.album(album.id))
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
+                ForEach(AlbumGroup.groups(library.tracks)) { album in
+                    Button { open(.album(album.id)) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
+                                        root: library.root, size: nil)
+                                .aspectRatio(1, contentMode: .fit)
+                            Text(album.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                            Text(album.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(ActionsContext(sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
+                        preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)))
+                }
             }
+            .padding(22)
         }
-        .listStyle(.plain)
+        .accessibilityIdentifier("album-grid")
         .navigationTitle("专辑")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass { libraryMore }

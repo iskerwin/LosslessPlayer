@@ -61,6 +61,8 @@ final class GlassScreenshots: XCTestCase {
         queue.tap()
         XCTAssertTrue(queue.isSelected)
         XCTAssertTrue(app.staticTexts["接下来"].exists)
+        // Existence does not imply the outgoing artwork transition has finished.
+        sleep(1)
         save("now-playing-queue")
         queue.tap()
         XCTAssertFalse(queue.isSelected)
@@ -88,6 +90,27 @@ final class GlassScreenshots: XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
         XCTAssertTrue(mini.waitForExistence(timeout: 8))
         XCTAssertFalse(player.exists)
+    }
+
+    func testAlbumGridAndPlaylistArtworkEntry() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let albums = app.buttons["专辑"]
+        XCTAssertTrue(albums.waitForExistence(timeout: 20))
+        albums.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["album-grid"].waitForExistence(timeout: 8))
+        save("albums")
+        app.tabBars.buttons["歌单"].tap()
+        let playlist = app.descendants(matching: .any)["playlist-深夜"]
+        XCTAssertTrue(playlist.waitForExistence(timeout: 8))
+        playlist.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["playlist-detail"].waitForExistence(timeout: 8))
+        app.buttons["更多"].firstMatch.tap()
+        app.buttons["修改封面"].tap()
+        XCTAssertTrue(app.buttons["从文件选择"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["恢复自动封面"].exists)
     }
 
     private func save(_ name: String) {

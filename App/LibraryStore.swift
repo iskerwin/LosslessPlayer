@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import ImageIO
+import UniformTypeIdentifiers
 
 @MainActor
 final class LibraryStore: ObservableObject {
@@ -134,7 +136,10 @@ final class LibraryStore: ObservableObject {
         persist(s)
     }
     func removePlaylist(_ playlist: Playlist) {
-        var s = snapshot; s.playlists.removeAll { $0.id == playlist.id }; persist(s)
+        var s = snapshot
+        let cover = s.playlists.first { $0.id == playlist.id }?.customArtworkFilename
+        s.playlists.removeAll { $0.id == playlist.id }
+        if persist(s), let cover { try? FileManager.default.removeItem(at: root.appendingPathComponent(cover)) }
     }
     func removeFromPlaylist(_ track: Track, playlist: Playlist) {
         var s = snapshot
@@ -169,8 +174,82 @@ final class LibraryStore: ObservableObject {
     func setCover(_ track: Track, for playlist: Playlist) {
         var s = snapshot
         guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }), s.playlists[i].trackIDs.contains(track.id) else { return }
+        let previous = s.playlists[i].customArtworkFilename
+        s.playlists[i].customArtworkFilename = nil
         s.playlists[i].coverTrackID = track.id
-        persist(s)
+        if persist(s), let previous { try? FileManager.default.removeItem(at: root.appendingPathComponent(previous)) }
+    }
+
+    @discardableResult
+    func setPlaylistArtwork(_ data: Data, for playlist: Playlist) -> Bool {
+        guard data.count <= 20_000_000,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1000,
+                kCGImageSourceCreateThumbnailWithTransform: true
+              ] as CFDictionary) else { errorMessage = "无法读取封面图片，请选择 20MB 以内的图片。"; return false }
+        var s = snapshot
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return false }
+        let name = "playlist-" + UUID().uuidString + ".jpg"
+        let url = root.appendingPathComponent(name)
+        guard let target = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { return false }
+        CGImageDestinationAddImage(target, image, nil)
+        guard CGImageDestinationFinalize(target) else { return false }
+        let previous = s.playlists[i].customArtworkFilename
+        s.playlists[i].customArtworkFilename = name
+        guard persist(s) else { try? FileManager.default.removeItem(at: url); return false }
+        if let previous { try? FileManager.default.removeItem(at: root.appendingPathComponent(previous)) }
+        ArtworkCache.shared.removeAll()
+        return true
+    }
+
+    func resetPlaylistArtwork(_ playlist: Playlist) {
+        var s = snapshot
+        guard let i = s.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        let previous = s.playlists[i].customArtworkFilename
+        s.playlists[i].customArtworkFilename = nil
+        s.playlists[i].coverTrackID = nil
+        if persist(s), let previous { try? FileManager.default.removeItem(at: root.appendingPathComponent(previous)) }
+        ArtworkCache.shared.removeAll()
+    }
+
+    /// Every directory with direct audio children becomes one playlist, preserving
+    /// user-defined folders instead of inferring grouping from album tags.
+    func createPlaylistsFromFolder(_ folder: MusicFolder) {
+        let members = tracks.filter { $0.folderID == folder.id && $0.available }
+        let groups = Dictionary(grouping: members) { (($0.relativePath ?? "") as NSString).deletingLastPathComponent }
+        var s = snapshot
+        for directory in groups.keys.sorted() {
+            let songs = (groups[directory] ?? []).sorted { ($0.relativePath ?? "") < ($1.relativePath ?? "") }
+            let i: Int
+            if let existing = s.playlists.firstIndex(where: { $0.sourceFolderID == folder.id && $0.sourceDirectory == directory }) {
+                i = existing
+            } else {
+                var list = Playlist(name: directory.isEmpty ? folder.name : directory)
+                list.sourceFolderID = folder.id
+                list.sourceDirectory = directory
+                s.playlists.append(list)
+                i = s.playlists.count - 1
+            }
+            let known = Set(s.playlists[i].trackIDs)
+            s.playlists[i].trackIDs += songs.map(\.id).filter { !known.contains($0) }
+        }
+        if persist(s) { scanSummary = "已按文件夹整理 \(groups.count) 个歌单，共 \(members.count) 首歌曲" }
+    }
+
+    func startFolderPlaylists(_ urls: [URL]) {
+        guard !importing else { return }
+        job = Task {
+            for url in urls {
+                if Task.isCancelled { break }
+                await addFolder(url)
+                if Task.isCancelled { break }
+                if let folder = snapshot.folders.first(where: { (try? resolve($0).standardizedFileURL) == url.standardizedFileURL }), folder.lastScan != nil {
+                    createPlaylistsFromFolder(folder)
+                }
+            }
+        }
     }
 
     func coverTrack(for playlist: Playlist) -> Track? {
@@ -338,13 +417,29 @@ final class LibraryStore: ObservableObject {
         guard !importing else { return }
         importing = true; progress = 0
         defer { importing = false }
-        var failures: [String] = [], added = 0
+        var failures: [String] = [], added = 0, duplicates = 0
         for (i, source) in urls.enumerated() {
             if Task.isCancelled { break }
             updateProgress(i + 1, total: urls.count, name: source.lastPathComponent)
             do {
                 let track = try await scanner.importCopy(source)
-                if !tracks.contains(where: { $0.folderID == nil && $0.filename == track.filename }) {
+                let duplicate = tracks.contains { existing in
+                    guard existing.available else { return false }
+                    if let hash = track.contentHash {
+                        let legacyHash = (existing.filename as NSString).deletingPathExtension
+                        if existing.contentHash == hash || (existing.folderID == nil && legacyHash == hash) { return true }
+                    }
+                    return existing.folderID == nil && existing.filename == track.filename
+                }
+                if duplicate {
+                    duplicates += 1
+                    if !tracks.contains(where: { $0.folderID == nil && $0.filename == track.filename }) {
+                        try? FileManager.default.removeItem(at: root.appendingPathComponent(track.filename))
+                    }
+                    if let name = track.artworkFilename, !tracks.contains(where: { $0.artworkFilename == name }) {
+                        try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
+                    }
+                } else {
                     var s = snapshot; s.tracks.append(track)
                     if persist(s) { added += 1 }
                     else { try? FileManager.default.removeItem(at: root.appendingPathComponent(track.filename)) }
@@ -353,7 +448,7 @@ final class LibraryStore: ObservableObject {
             catch { failures.append("\(source.lastPathComponent)：\(error.localizedDescription)") }
         }
         ArtworkCache.shared.removeAll()
-        scanSummary = "导入 \(added) 首歌曲"
+        scanSummary = "导入 \(added) 首歌曲，跳过重复 \(duplicates) 首，失败 \(failures.count) 首"
         if !failures.isEmpty { errorMessage = failures.prefix(8).joined(separator: "\n") }
     }
 }

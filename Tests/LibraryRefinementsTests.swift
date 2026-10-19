@@ -1,0 +1,120 @@
+import XCTest
+import AVFoundation
+import UIKit
+@testable import LosslessPlayer
+
+final class ArtistTagTests: XCTestCase {
+    func testArtistAliasesAndMultiArtistBoundaries() {
+        XCTAssertEqual(AudioTags.role(for: "vorbis/ARTISTS"), .artists)
+        XCTAssertEqual(AudioTags.role(for: "vorbis/ARTIS"), .artist)
+        XCTAssertEqual(AudioTags.role(for: "id3/TPE1"), .artist)
+        XCTAssertEqual(AudioTags.role(for: "vorbis/ALBUMARTIST"), .albumArtist)
+        XCTAssertEqual(AudioTags.artistNames(from: ["Ada; Bea", " ada ", "AC/DC", "Earth, Wind & Fire"]),
+                       ["Ada", "Bea", "AC/DC", "Earth, Wind & Fire"])
+    }
+
+    func testVorbisCommentsPreserveRepeatedArtistsAndRejectTruncation() {
+        var data = Data()
+        func integer(_ value: Int) { var little = UInt32(value).littleEndian; withUnsafeBytes(of: &little) { data.append(contentsOf: $0) } }
+        integer(0)
+        integer(3)
+        for field in ["ARTISTS=Ada", "ARTISTS=Bea", "ALBUM=Record"] {
+            let bytes = Data(field.utf8); integer(bytes.count); data.append(bytes)
+        }
+        XCTAssertEqual(FLACComments.parse(data)["ARTISTS"], ["Ada", "Bea"])
+        XCTAssertTrue(FLACComments.parse(Data(data.dropLast())).isEmpty)
+    }
+
+    func testAlbumIdentityNormalizesTagsAndSeparatesUnknownDirectories() throws {
+        var a = Track(id: UUID(), filename: "a.wav", title: "A", artist: "Ada", album: " Record ", duration: 1, sampleRate: 44100, bitDepth: 16)
+        var b = a; b.id = UUID(); b.album = "record"; b.artist = "ada"
+        XCTAssertEqual(a.albumID, b.albumID)
+        a.album = "未知专辑"; b.album = "未知专辑"
+        a.folderID = UUID(); b.folderID = a.folderID
+        a.relativePath = "Morning/a.wav"; b.relativePath = "Evening/b.wav"
+        XCTAssertNotEqual(a.albumID, b.albumID)
+        a.artists = ["Ada", "Bea"]
+        let decoded = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(a))
+        XCTAssertEqual(decoded.artistNames, ["Ada", "Bea"])
+    }
+}
+
+@MainActor
+final class FolderPlaylistTests: XCTestCase {
+    private func wav(_ url: URL, sample: Float = 0) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+        buffer.frameLength = 128
+        for i in 0..<128 { buffer.floatChannelData![0][i] = sample }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
+
+    func testFoldersCreateSeparateStablePlaylistsAndKeepCustomCover() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = base.appendingPathComponent("Music")
+        try wav(source.appendingPathComponent("Morning/a.wav"))
+        try wav(source.appendingPathComponent("Evening/b.wav"), sample: 0.1)
+        let library = LibraryStore(root: base.appendingPathComponent("Library"))
+        await library.addFolder(source)
+        let folder = try XCTUnwrap(library.snapshot.folders.first)
+        library.createPlaylistsFromFolder(folder)
+        XCTAssertEqual(Set(library.snapshot.playlists.map(\.name)), ["Morning", "Evening"])
+        XCTAssertEqual(library.snapshot.playlists.map(\.trackIDs.count), [1, 1])
+        let playlist = try XCTUnwrap(library.snapshot.playlists.first)
+        let picture = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 30)).image { _ in UIColor.red.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 60, height: 30)) }
+        XCTAssertTrue(library.setPlaylistArtwork(try XCTUnwrap(picture.jpegData(compressionQuality: 0.8)), for: playlist))
+        let cover = try XCTUnwrap(library.snapshot.playlists.first?.customArtworkFilename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.root.appendingPathComponent(cover).path))
+        library.createPlaylistsFromFolder(folder)
+        XCTAssertEqual(library.snapshot.playlists.count, 2)
+        XCTAssertEqual(library.snapshot.playlists.first?.id, playlist.id)
+        let restored = LibraryStore(root: library.root)
+        XCTAssertEqual(restored.snapshot.playlists.first?.customArtworkFilename, cover)
+        library.resetPlaylistArtwork(playlist)
+        XCTAssertNil(library.snapshot.playlists.first?.customArtworkFilename)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: library.root.appendingPathComponent(cover).path))
+    }
+
+    func testCopiedImportSkipsIndexedContentAndReportsDuplicates() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = base.appendingPathComponent("Source/a.wav")
+        try wav(source)
+        let library = LibraryStore(root: base.appendingPathComponent("Library"))
+        await library.addFolder(source.deletingLastPathComponent())
+        let id = try XCTUnwrap(library.tracks.first?.id)
+        await library.importFiles([source])
+        XCTAssertEqual(library.tracks.count, 1)
+        XCTAssertEqual(library.tracks.first?.id, id)
+        XCTAssertTrue(library.scanSummary?.contains("重复 1 首") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testUpcomingMoveAndRemovalPreserveCurrentAndHistory() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let library = LibraryStore(root: base.appendingPathComponent("Library"))
+        var sources: [URL] = []
+        for index in 0..<4 {
+            let file = base.appendingPathComponent("Source/\(index).wav")
+            try wav(file, sample: Float(index) / 10)
+            sources.append(file)
+        }
+        await library.importFiles(sources)
+        let player = PlayerStore(library: library)
+        let tracks = library.tracks
+        XCTAssertEqual(tracks.count, 4)
+        player.play(tracks, shuffled: false)
+        player.load(tracks[1], autoplay: false, keepTransport: true)
+        XCTAssertEqual(player.upcomingTracks.map(\.id), Array(tracks.dropFirst(2)).map(\.id))
+        player.moveUpcoming(from: IndexSet(integer: 0), to: 2)
+        XCTAssertEqual(Array(player.queueIDs.prefix(2)), Array(tracks.prefix(2)).map(\.id))
+        XCTAssertEqual(player.upcomingTracks.map(\.id), [tracks[3].id, tracks[2].id])
+        player.removeUpcoming(at: IndexSet(integer: 0))
+        XCTAssertEqual(player.current?.id, tracks[1].id)
+        XCTAssertEqual(player.upcomingTracks.map(\.id), [tracks[2].id])
+    }
+}

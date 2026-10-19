@@ -87,6 +87,7 @@ actor AudioScanner {
                 if track.artworkFilename == nil, let image = artwork(beside: file) {
                     track.artworkFilename = storeThumbnail(at: image, id: track.id)
                 }
+                track.contentHash = try Self.digest(file)
                 track.folderID = folder.id; track.relativePath = relative
                 track.filename = file.lastPathComponent
                 track.favorite = old[relative]?.favorite ?? false
@@ -108,13 +109,7 @@ actor AudioScanner {
         try coordinateCopy(from: url, to: file)
         try Task.checkCancellation()
         // Content-address copies to prevent duplicates even when filenames differ.
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        var hash = SHA256()
-        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-            try Task.checkCancellation(); hash.update(data: chunk)
-        }
-        let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        let digest = try Self.digest(file)
         let target = root.appendingPathComponent(digest + "." + url.pathExtension.lowercased())
         var track = try await read(file, id: UUID())
         if track.artworkFilename == nil {
@@ -128,9 +123,21 @@ actor AudioScanner {
         track.title = track.title == file.deletingPathExtension().lastPathComponent ? url.deletingPathExtension().lastPathComponent : track.title
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: file) }
         else { try FileManager.default.moveItem(at: file, to: target) }
+        track.contentHash = digest
         track.filename = target.lastPathComponent
         finished = true
         return track
+    }
+
+    static func digest(_ file: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: chunk)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private func coordinateCopy(from source: URL, to target: URL) throws {
@@ -175,11 +182,17 @@ actor AudioScanner {
         }
         track.lyrics = sidecarLyrics(url)
         let fullMetadata = (try? await AVURLAsset(url: url).load(.metadata)) ?? []
+        var explicitArtists: [String] = []
+        var alternateArtist: [String] = []
         for item in fullMetadata {
             try Task.checkCancellation()
-            let key = item.identifier?.rawValue ?? ""
+            let key = item.identifier?.rawValue ?? (item.key as? String ?? "")
             guard let role = AudioTags.role(for: key) else { continue }
             switch role {
+            case .artist:
+                if let text = try? await item.load(.stringValue) { alternateArtist.append(text) }
+            case .artists:
+                if let text = try? await item.load(.stringValue) { explicitArtists.append(text) }
             case .track:
                 if track.trackNumber == nil { track.trackNumber = await number(from: item) }
             case .disc:
@@ -194,6 +207,14 @@ actor AudioScanner {
                 if track.compilation != true { track.compilation = await compilation(from: item) }
             }
         }
+        let comments = try FLACComments.read(url)
+        explicitArtists += comments["ARTISTS"] ?? []
+        alternateArtist += (comments["ARTIST"] ?? []) + (comments["ARTIS"] ?? [])
+        let names = AudioTags.artistNames(from: explicitArtists.isEmpty ? alternateArtist : explicitArtists)
+        if !names.isEmpty { track.artists = names; track.artist = names.joined(separator: ", ") }
+        if track.albumArtist == nil { track.albumArtist = (comments["ALBUMARTIST"] ?? comments["ALBUM ARTIST"])?.first }
+        if track.album == "未知专辑", let album = comments["ALBUM"]?.first { track.album = album }
+        if track.title == url.deletingPathExtension().lastPathComponent, let title = comments["TITLE"]?.first { track.title = title }
         track.catalogVersion = AudioTags.catalogVersion
         return track
     }

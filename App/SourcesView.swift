@@ -20,6 +20,7 @@ struct SourcesView: View {
                         Text("\(songs.count) 首歌曲 · \(songs.filter { !$0.available }.count) 首失效").font(.caption).foregroundStyle(.secondary)
                         if let date = folder.lastScan { Text("上次扫描 \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
                         if let error = folder.scanError { Text(error).font(.caption).foregroundStyle(.red) }
+                        Button("按文件夹创建歌单", systemImage: "music.note.list") { library.createPlaylistsFromFolder(folder) }.disabled(library.importing)
                         Button("重新扫描", systemImage: "arrow.clockwise") { library.startScan(folder.id) }.disabled(library.importing)
                         Button("取消授权并移除资料库条目", systemImage: "folder.badge.minus", role: .destructive) { removing = folder }.disabled(library.importing)
                     }

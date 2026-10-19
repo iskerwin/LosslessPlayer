@@ -35,6 +35,7 @@ struct CollectionPage: View {
     @AppStorage("librarySort") private var sortRaw = LibrarySort.title.rawValue
     @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
     @State private var editing = false
+    @State private var coverTarget: Playlist?
     @State private var palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
     @Environment(\.dismiss) private var dismiss
 
@@ -48,7 +49,9 @@ struct CollectionPage: View {
             }
             .preferredColorScheme(kind == .playlist ? .dark : nil)
             .toolbarBackground(kind == .playlist ? .hidden : .automatic, for: .navigationBar)
+            .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
             .onAppear(perform: refreshPalette)
+            .onChange(of: playlist?.customArtworkFilename) { _, _ in refreshPalette() }
             .onChange(of: playlist?.coverTrackID) { _, _ in refreshPalette() }
             .onChange(of: coverTrack?.artworkFilename) { _, _ in refreshPalette() }
         if editing {
@@ -179,7 +182,7 @@ struct CollectionPage: View {
     }
 
     private func refreshPalette() {
-        let image = coverTrack?.artworkFilename.flatMap {
+        let image = (playlist?.customArtworkFilename ?? coverTrack?.artworkFilename).flatMap {
             ArtworkCache.shared.image(at: library.root.appendingPathComponent($0))
         }
         palette = ArtworkColors.palette(from: image).map { Color(uiColor: $0) }
@@ -289,6 +292,7 @@ struct CollectionPage: View {
                     MenuAction(id: "add", title: "添加歌曲", symbol: "plus") { onAddSongs(playlist) },
                     MenuAction(id: "edit", title: "编辑", symbol: "pencil") { editing = true },
                     MenuAction(id: "rename", title: "重命名", symbol: "pencil") { onRename(playlist) },
+                    MenuAction(id: "cover", title: "修改封面", symbol: "photo") { coverTarget = playlist },
                     MenuAction(id: "export", title: "导出播放列表", symbol: "square.and.arrow.up") { onExport(playlist, sorted) }
                 ]),
                 MenuGroup(id: "delete", entries: [
@@ -332,7 +336,7 @@ struct CollectionPage: View {
             playNext: { player.enqueue([$0], next: true) },
             addToQueue: { player.enqueue([$0], next: false) },
             album: { onOpen(.album($0.albumID)) },
-            artist: { onOpen(.artist($0.artist)) },
+            artist: { onOpen(.artist($0.primaryArtist)) },
             lyrics: onLyrics,
             delete: { onDelete([$0]) },
             removeFromPlaylist: playlist.map { list in { track in library.removeFromPlaylist(track, playlist: list) } },

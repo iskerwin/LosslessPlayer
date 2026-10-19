@@ -46,19 +46,35 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 }
 
 enum AudioTags {
-    static let catalogVersion = 2
+    static let catalogVersion = 3
 
-    enum Role: Equatable { case track, disc, albumArtist, genre, year, compilation }
+    enum Role: Equatable { case track, disc, artist, artists, albumArtist, genre, year, compilation }
 
     static func role(for key: String) -> Role? {
         let value = key.lowercased()
         if value.hasSuffix("trkn") || value.hasSuffix("trck") || value.hasSuffix("tracknumber") || value.contains("track number") { return .track }
         if value.hasSuffix("disk") || value.hasSuffix("tpos") || value.hasSuffix("discnumber") || value.hasSuffix("/disc") || value.contains("disc number") { return .disc }
         if value.hasSuffix("aart") || value.hasSuffix("tpe2") || value.contains("albumartist") || value.contains("album artist") { return .albumArtist }
+        let leaf = value.split(separator: "/").last.map(String.init) ?? value
+        if leaf == "artists" || value.hasSuffix(":artists") { return .artists }
+        if ["artist", "artis", "tpe1", "©art"].contains(leaf) || value.hasSuffix(":artis") { return .artist }
         if value.hasSuffix("©gen") || value.hasSuffix("/gen") || value.hasSuffix("tcon") || value.hasSuffix("genre") { return .genre }
         if value.hasSuffix("©day") || value.hasSuffix("tdrc") || value.hasSuffix("tyer") || value.hasSuffix("/date") || value.hasSuffix("year") { return .year }
         if value.hasSuffix("cpil") || value.hasSuffix("tcmp") || value.contains("compilation") { return .compilation }
         return nil
+    }
+
+    static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    static func artistNames(from values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.flatMap { $0.replacingOccurrences(of: " / ", with: ";")
+            .components(separatedBy: CharacterSet(charactersIn: ";\0\n")) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert(normalized($0)).inserted }
     }
 
     static func number(from text: String) -> Int? {
@@ -239,7 +255,7 @@ enum PlaylistExchange {
 
 extension Track {
     private enum CodingKeys: String, CodingKey {
-        case id, filename, title, artist, album, duration, sampleRate, bitDepth, favorite
+        case id, filename, title, artist, artists, contentHash, album, duration, sampleRate, bitDepth, favorite
         case folderID, relativePath, fileSize, modifiedAt, addedAt, artworkFilename, trackNumber, missing, lyrics
         case albumArtist, genre, year, discNumber, compilation, playCount, lastPlayed, catalogVersion
     }
@@ -250,6 +266,8 @@ extension Track {
         filename = try container.decode(String.self, forKey: .filename)
         title = try container.decode(String.self, forKey: .title)
         artist = try container.decode(String.self, forKey: .artist)
+        artists = try container.decodeIfPresent([String].self, forKey: .artists)
+        contentHash = try container.decodeIfPresent(String.self, forKey: .contentHash)
         album = try container.decode(String.self, forKey: .album)
         duration = try container.decode(Double.self, forKey: .duration)
         sampleRate = try container.decode(Double.self, forKey: .sampleRate)
@@ -280,6 +298,8 @@ extension Track {
         try container.encode(filename, forKey: .filename)
         try container.encode(title, forKey: .title)
         try container.encode(artist, forKey: .artist)
+        try container.encodeIfPresent(artists, forKey: .artists)
+        try container.encodeIfPresent(contentHash, forKey: .contentHash)
         try container.encode(album, forKey: .album)
         try container.encode(duration, forKey: .duration)
         try container.encode(sampleRate, forKey: .sampleRate)
