@@ -36,6 +36,37 @@ final class GlassScreenshots: XCTestCase {
         save("now-playing")
     }
 
+    func testProgressHitAreaAndPanelSelection() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        mini.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
+        let progress = app.descendants(matching: .any)["playback-progress"]
+        XCTAssertTrue(progress.waitForExistence(timeout: 8))
+        XCTAssertGreaterThanOrEqual(progress.frame.height, 44)
+        let previous = progress.value as? String
+        // Drag above the visible line to exercise the enlarged touch area.
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.2))
+            .press(forDuration: 0.1, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.2)))
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in (progress.value as? String) != previous }, object: progress
+        )
+        wait(for: [changed], timeout: 5)
+        let queue = app.buttons["显示播放队列"]
+        queue.tap()
+        XCTAssertTrue(queue.isSelected)
+        XCTAssertTrue(app.staticTexts["接下来"].exists)
+        save("now-playing-queue")
+        queue.tap()
+        XCTAssertFalse(queue.isSelected)
+        app.buttons["收起播放器"].tap()
+        XCTAssertTrue(mini.waitForExistence(timeout: 8))
+    }
+
     private func save(_ name: String) {
         let shot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: shot)

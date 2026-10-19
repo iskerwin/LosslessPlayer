@@ -11,6 +11,8 @@ struct NowPlayingView: View {
     var onOpen: (LibraryRoute) -> Void
     var onDelete: (Track) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }) {
         self.library = library
@@ -28,61 +30,102 @@ struct NowPlayingView: View {
     @State private var playlistTarget: Track?
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
+    private var duration: Double {
+        let duration = current?.duration ?? 0
+        return duration.isFinite && duration > 0 ? duration : 0
+    }
 
     var body: some View {
         ZStack {
             ArtworkBackdrop(colors: palette)
-            VStack(spacing: 18) {
-                Capsule()
-                    .fill(Color.white.opacity(0.55))
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                    .gesture(DragGesture(minimumDistance: 8).onEnded { value in
-                        if value.translation.height > 70 { dismiss() }
-                    })
-                    .accessibilityLabel("收起播放器")
-                    .accessibilityAddTraits(.isButton)
-                    .onTapGesture { dismiss() }
-                stage
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                titleBlock
-                scrubber
-                transport
-                SystemVolumeBar()
-                bottomRow
+            GeometryReader { geometry in
+                if geometry.size.height < 600 || dynamicTypeSize.isAccessibilitySize {
+                    ScrollView {
+                        playerContent(stageHeight: min(260, max(120, geometry.size.width - 56)))
+                    }
+                } else {
+                    playerContent(stageHeight: nil)
+                }
             }
-            .padding(.horizontal, 28)
-            .padding(.bottom, 12)
         }
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
         .onAppear(perform: refreshPalette)
         .onChange(of: current?.artworkFilename) { _, _ in refreshPalette() }
+        .onChange(of: current?.id) { _, _ in scrubbing = false }
+        .accessibilityAction(.escape) { dismiss() }
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(library: library, tracks: [track])
         }
         .sheet(isPresented: $details) { detailsSheet }
     }
 
+    private func playerContent(stageHeight: CGFloat?) -> some View {
+        VStack(spacing: 0) {
+            Button { dismiss() } label: {
+                Capsule()
+                    .fill(Color.white.opacity(0.55))
+                    .frame(width: 36, height: 5)
+                    .frame(width: 60, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("收起播放器")
+            .simultaneousGesture(dismissGesture)
+            stage
+                .frame(height: stageHeight)
+                .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
+                .padding(.bottom, 20)
+            VStack(spacing: 8) {
+                titleBlock
+                scrubber
+                transport
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            SystemVolumeBar()
+                .padding(.top, 16)
+            bottomRow
+                .padding(.top, 12)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 12)
+        .frame(maxWidth: 560, maxHeight: stageHeight == nil ? .infinity : nil)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var dismissGesture: some Gesture {
+        DragGesture(minimumDistance: 16).onEnded { value in
+            if value.translation.height > 90,
+               value.translation.height > abs(value.translation.width) * 1.5 {
+                dismiss()
+            }
+        }
+    }
+
     @ViewBuilder private var stage: some View {
         ZStack {
             if panel == .artwork {
-                ArtworkView(track: current, root: library.root, size: nil, placeholder: .neutral)
-                    .frame(maxWidth: 340)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
-                    .scaleEffect(player.playing ? 1 : 0.92)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
-                    .padding(.horizontal, 8)
+                GeometryReader { geometry in
+                    let side = max(0, min(geometry.size.width, geometry.size.height))
+                    ArtworkView(track: current, root: library.root, size: side, placeholder: .neutral)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
+                        .scaleEffect(player.playing ? 1 : 0.92)
+                        .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .contentShape(Rectangle())
+                .simultaneousGesture(dismissGesture)
             } else if panel == .lyrics {
                 lyricsPanel
             } else {
                 queuePanel
             }
         }
-        .animation(.smooth(duration: 0.35), value: panel)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
     }
 
     private var titleBlock: some View {
@@ -114,7 +157,8 @@ struct NowPlayingView: View {
                     Button { library.toggleFavorite(current) } label: {
                         Image(systemName: current.favorite ? "star.fill" : "star")
                             .font(.title3)
-                            .frame(width: 36, height: 44)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
@@ -132,7 +176,8 @@ struct NowPlayingView: View {
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.title3)
-                            .frame(width: 36, height: 44)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("更多")
@@ -146,6 +191,8 @@ struct NowPlayingView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(Color.white.opacity(0.16), in: Capsule())
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("音质 \(current.qualityBadge)")
@@ -156,22 +203,26 @@ struct NowPlayingView: View {
     private var scrubber: some View {
         VStack(spacing: 4) {
             ThinScrubber(value: Binding(
-                get: { scrubbing ? draft : min(playbackClock.position, max(current?.duration ?? 0, 0.01)) },
+                get: { scrubbing ? draft : min(playbackClock.position, duration) },
                 set: { draft = $0 }
-            ), range: 0...max(current?.duration ?? 0, 0.01)) { editing in
+            ), range: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
                 if editing {
                     draft = playbackClock.position
                     scrubbing = true
                 } else {
-                    player.seek(draft)
+                    if scrubbing, duration > 0 { player.seek(draft) }
                     scrubbing = false
                 }
-            }
+            }, onCancel: { scrubbing = false })
+            .id(current?.id)
+            .disabled(duration == 0)
             .accessibilityLabel("播放进度")
+            .accessibilityValue(duration > 0 ? "\(clock(scrubbing ? draft : playbackClock.position))，共 \(clock(duration))" : "时长未知")
+            .accessibilityIdentifier("playback-progress")
             HStack {
-                Text(clock(scrubbing ? draft : playbackClock.position))
+                Text(duration > 0 ? clock(scrubbing ? draft : playbackClock.position) : "--:--")
                 Spacer()
-                Text("−" + clock(max(0, (current?.duration ?? 0) - (scrubbing ? draft : playbackClock.position))))
+                Text(duration > 0 ? "−" + clock(max(0, duration - (scrubbing ? draft : playbackClock.position))) : "--:--")
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.white.opacity(0.6))
@@ -195,6 +246,7 @@ struct NowPlayingView: View {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .regular))
                 .frame(width: 64, height: 54)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
         .accessibilityLabel(label)
@@ -210,7 +262,7 @@ struct NowPlayingView: View {
                 .frame(width: 48, height: 44)
                 .accessibilityLabel("选择音频输出")
             Spacer()
-            bottomButton(panel == .queue ? "list.bullet" : "list.bullet", label: "显示播放队列") {
+            bottomButton("list.bullet", label: "显示播放队列") {
                 panel = panel == .queue ? .artwork : .queue
             }
         }
@@ -223,9 +275,16 @@ struct NowPlayingView: View {
                 .font(.title3)
                 .frame(width: 48, height: 44)
                 .foregroundStyle(.white.opacity(panelSymbolActive(symbol) ? 1 : 0.92))
+                .contentShape(Rectangle())
+                .background {
+                    if panelSymbolActive(symbol) {
+                        RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.16))
+                    }
+                }
         }
         .buttonStyle(PressScaleStyle())
         .accessibilityLabel(label)
+        .accessibilityAddTraits(panelSymbolActive(symbol) ? .isSelected : [])
     }
 
     private func panelSymbolActive(_ symbol: String) -> Bool {
@@ -239,13 +298,14 @@ struct NowPlayingView: View {
                 Text("接下来").font(.headline)
                 Spacer()
                 Button { player.toggleShuffle() } label: {
-                    Image(systemName: "shuffle").frame(width: 44, height: 36)
+                    Image(systemName: "shuffle").frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(look.shuffleHighlighted ? 1 : 0.4))
                 .accessibilityLabel("切换随机播放")
+                .accessibilityValue(look.shuffleHighlighted ? "已开启" : "已关闭")
                 Button { player.cycleRepeat() } label: {
-                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 36)
+                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(look.repeatHighlighted ? 1 : 0.4))
@@ -322,24 +382,26 @@ struct NowPlayingView: View {
 }
 
 struct PressScaleStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.82 : 1)
-            .opacity(configuration.isPressed ? 0.55 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 
 enum ScrubberMap {
     static func fraction(value: Double, in range: ClosedRange<Double>) -> Double {
         let span = range.upperBound - range.lowerBound
-        guard span > 0, value.isFinite else { return 0 }
+        guard span.isFinite, span > 0, range.lowerBound.isFinite, value.isFinite else { return 0 }
         return min(1, max(0, (value - range.lowerBound) / span))
     }
 
     static func value(x: CGFloat, width: CGFloat, in range: ClosedRange<Double>) -> Double {
         let span = range.upperBound - range.lowerBound
-        guard width > 0, span > 0 else { return range.lowerBound }
+        guard width.isFinite, x.isFinite, width > 0, span.isFinite, span > 0 else { return range.lowerBound }
         let fraction = min(1, max(0, Double(x / width)))
         return range.lowerBound + fraction * span
     }
@@ -349,6 +411,11 @@ struct ThinScrubber: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
     var onEditingChanged: (Bool) -> Void = { _ in }
+    var onCancel: () -> Void = {}
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+    @GestureState private var fingerDown = false
     @State private var dragging = false
 
     var body: some View {
@@ -357,14 +424,16 @@ struct ThinScrubber: View {
             let fraction = ScrubberMap.fraction(value: value, in: range)
             let thickness: CGFloat = dragging ? 7 : 3
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.28)).frame(height: thickness)
-                Capsule().fill(Color.white).frame(width: max(thickness, width * fraction), height: thickness)
+                Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
+                Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
+                    .updating($fingerDown) { _, state, _ in state = true }
                     .onChanged { gesture in
+                        guard isEnabled else { return }
                         if !dragging {
                             dragging = true
                             onEditingChanged(true)
@@ -372,12 +441,46 @@ struct ThinScrubber: View {
                         value = ScrubberMap.value(x: gesture.location.x, width: width, in: range)
                     }
                     .onEnded { _ in
+                        guard dragging else { return }
                         dragging = false
-                        onEditingChanged(false)
+                        if isEnabled { onEditingChanged(false) }
+                        else { onCancel() }
                     }
             )
         }
-        .frame(height: 28)
+        .frame(height: 44)
+        .opacity(isEnabled ? 1 : 0.45)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: dragging)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
+            let step = min(10, range.upperBound - range.lowerBound)
+            let delta: Double
+            switch direction {
+            case .increment: delta = step
+            case .decrement: delta = -step
+            @unknown default: return
+            }
+            let next = min(range.upperBound, max(range.lowerBound, value + delta))
+            onEditingChanged(true)
+            value = next
+            onEditingChanged(false)
+        }
+        .onChange(of: fingerDown) { _, active in
+            if !active && dragging {
+                dragging = false
+                onCancel()
+            }
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled && dragging {
+                dragging = false
+                onCancel()
+            }
+        }
+        .onDisappear {
+            if dragging { onCancel() }
+        }
     }
 }
 
@@ -461,6 +564,7 @@ struct ArtworkBackdrop: View {
 }
 
 struct LyricsScroll: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let lines: [LyricsLine]
     var position: Double?
     var seek: (Double) -> Void
@@ -482,7 +586,11 @@ struct LyricsScroll: View {
                 .padding(.vertical)
             }
             .onChange(of: active) { _, value in
-                if let value { withAnimation { proxy.scrollTo(value, anchor: .center) } }
+                if let value {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(value, anchor: .center)
+                    }
+                }
             }
         }
     }
@@ -527,53 +635,34 @@ struct LyricsReader: View {
     }
 }
 
-@MainActor
-final class SystemVolumeModel: ObservableObject {
-    @Published var level: Double = 0
-    private var observation: NSKeyValueObservation?
-    init() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default)
-        try? session.setActive(true)
-        level = Double(session.outputVolume)
-        observation = session.observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
-            let value = Double(session.outputVolume)
-            Task { @MainActor in self?.level = value }
-        }
-    }
-    func set(_ value: Double) { level = min(1, max(0, value)) }
-}
-
 struct SystemVolumeBar: View {
-    @StateObject private var model = SystemVolumeModel()
-
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "speaker.fill").font(.footnote)
-            ThinScrubber(value: Binding(get: { model.level }, set: { model.set($0) }))
-            Image(systemName: "speaker.wave.3.fill").font(.footnote)
-        }
-        .foregroundStyle(.white)
-        .background {
-            SystemVolumeBridge(level: model.level)
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
+            Image(systemName: "speaker.fill")
+                .font(.footnote)
+                .accessibilityHidden(true)
+            NativeVolumeView()
+                .frame(height: 44)
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.footnote)
                 .accessibilityHidden(true)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("系统音量")
+        .foregroundStyle(.white)
     }
 }
 
-private struct SystemVolumeBridge: UIViewRepresentable {
-    var level: Double
-    func makeUIView(context: Context) -> MPVolumeView { MPVolumeView(frame: CGRect(x: 0, y: 0, width: 1, height: 1)) }
+/// Let the system own volume changes, accessibility, hardware buttons, and fixed-volume routes.
+private struct NativeVolumeView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let view = MPVolumeView(frame: .zero)
+        view.showsRouteButton = false
+        view.tintColor = .white
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
     func updateUIView(_ view: MPVolumeView, context: Context) {
-        DispatchQueue.main.async {
-            guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
-            let next = Float(level)
-            if abs(slider.value - next) > 0.01 { slider.value = next }
-        }
+        view.tintColor = .white
     }
 }
 
