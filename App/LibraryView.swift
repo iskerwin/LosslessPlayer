@@ -575,14 +575,14 @@ private struct AccessoryMiniPlayer: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: toggle) {
-                Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 36, height: 44)
+                Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
             }
             .buttonStyle(.borderless)
             .tint(.primary)
             .accessibilityLabel(playing ? "暂停" : "播放")
             if !compact {
                 Button(action: skip) {
-                    Image(systemName: "forward.fill").frame(width: 32, height: 44)
+                    Image(systemName: "forward.fill").frame(width: 44, height: 44)
                 }
                 .buttonStyle(.borderless)
                 .tint(.primary)

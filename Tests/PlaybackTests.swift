@@ -137,6 +137,19 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(RowHitMap.zone(x: width - 4, width: width, menuWidth: 0), .play)
     }
 
+    func testScrubberClampsEndpointsAndRejectsNonFiniteGeometry() {
+        XCTAssertEqual(ScrubberMap.fraction(value: -1, in: 0...211), 0)
+        XCTAssertEqual(ScrubberMap.fraction(value: 300, in: 0...211), 1)
+        XCTAssertEqual(ScrubberMap.fraction(value: .nan, in: 0...211), 0)
+        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...0), 0)
+        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...Double.infinity), 0)
+        XCTAssertEqual(ScrubberMap.value(x: -20, width: 100, in: 5...15), 5)
+        XCTAssertEqual(ScrubberMap.value(x: 120, width: 100, in: 5...15), 15)
+        XCTAssertEqual(ScrubberMap.value(x: 50, width: 0, in: 5...15), 5)
+        XCTAssertEqual(ScrubberMap.value(x: .nan, width: 100, in: 5...15), 5)
+        XCTAssertEqual(ScrubberMap.value(x: 50, width: .infinity, in: 5...15), 5)
+    }
+
     func testPlayNextInsertsAfterCurrentAndAddToQueueAppends() {
         let a = UUID(), b = UUID(), c = UUID(), d = UUID(), e = UUID()
         var ordering = QueueOrdering(queue: [a, b, c], context: [a, b, c], shuffle: false)
