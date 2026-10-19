@@ -679,6 +679,7 @@ struct SystemVolumeBar: View {
                 .frame(width: PlayerControlMetrics.volumeIconWidth)
                 .accessibilityHidden(true)
             NativeVolumeView()
+                .frame(maxWidth: .infinity)
                 .frame(height: 44)
             Image(systemName: "speaker.wave.3.fill")
                 .font(.footnote)
