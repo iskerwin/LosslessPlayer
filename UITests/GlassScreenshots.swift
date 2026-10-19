@@ -47,7 +47,8 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         let progress = app.descendants(matching: .any)["playback-progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 8))
-        XCTAssertGreaterThanOrEqual(progress.frame.height, 44)
+        // Accessibility frames are screen-space floating-point conversions.
+        XCTAssertGreaterThanOrEqual(progress.frame.height, 44 - 0.001)
         let previous = progress.value as? String
         // Drag above the visible line to exercise the enlarged touch area.
         progress.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.2))
@@ -65,6 +66,28 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(queue.isSelected)
         app.buttons["收起播放器"].tap()
         XCTAssertTrue(mini.waitForExistence(timeout: 8))
+    }
+
+    func testPlayerPullDownThreshold() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        mini.tap()
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        let handle = app.buttons["收起播放器"]
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 45)))
+        XCTAssertTrue(player.exists, "Below-threshold drag must preserve the player")
+        // Horizontal gestures must not dismiss the player either.
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 100, dy: 15)))
+        XCTAssertTrue(player.exists)
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
+        XCTAssertTrue(mini.waitForExistence(timeout: 8))
+        XCTAssertFalse(player.exists)
     }
 
     private func save(_ name: String) {

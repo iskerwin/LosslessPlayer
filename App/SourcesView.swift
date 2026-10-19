@@ -54,6 +54,6 @@ struct SourcesView: View {
             .alert("无法扫描", isPresented: Binding(get: { library.errorMessage != nil }, set: { if !$0 { library.errorMessage = nil } })) {
                 Button("好") { library.errorMessage = nil }
             } message: { Text(library.errorMessage ?? "") }
-        }.tint(.orange)
+        }.tint(MusicTheme.accent)
     }
 }

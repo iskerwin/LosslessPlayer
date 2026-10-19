@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Explicit color also keeps native glass tabs consistent when presented in dark mode.
+enum MusicTheme {
+    static let accent = Color(red: 1, green: 45.0 / 255, blue: 85.0 / 255)
+}
+
 /// List pages only offer these two actions. Neither one reads pause, shuffle, or repeat.
 enum CollectionTransport: String, CaseIterable, Hashable {
     case playFromStart
@@ -226,7 +231,7 @@ struct PlayShuffleBar: View {
                 } label: {
                     Label(item.title, systemImage: item.symbol)
                         .font(.body.weight(.medium))
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(MusicTheme.accent)
                         .frame(maxWidth: .infinity)
                 }
                 .modifier(CollectionGlassButton())
@@ -294,7 +299,7 @@ struct SongRow: View {
     var current = false
     var playing = false
     var indexLabel: String? = nil
-    var emphasis: Color = .orange
+    var emphasis: Color = MusicTheme.accent
 
     var body: some View {
         HStack(spacing: 12) {
@@ -367,7 +372,8 @@ struct SongContextRow: View {
     var playing = false
     var indexLabel: String? = nil
     var showsMenu = true
-    var emphasis: Color = .orange
+    var emphasis: Color = MusicTheme.accent
+    var showsLocalStatus = false
     var handlers: SongHandlers
 
     var body: some View {
@@ -377,6 +383,13 @@ struct SongContextRow: View {
                     .padding(.leading, RowMetrics.leadingInset)
             }
             .buttonStyle(RowPressStyle())
+            if showsLocalStatus && track.available {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 20)
+                    .accessibilityLabel("已在本地")
+            }
             if showsMenu {
                 SectionsMenu(sections: sections) { EllipsisLabel() }
                     .buttonStyle(.borderless)
