@@ -1,6 +1,8 @@
 import SwiftUI
+import AVFoundation
 import AVKit
 import MediaPlayer
+import CoreImage
 
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
@@ -17,135 +19,238 @@ struct NowPlayingView: View {
         self.onDelete = onDelete
         _playbackClock = ObservedObject(wrappedValue: player.clock)
     }
-    @State private var mode = 0
+
+    private enum Panel { case artwork, lyrics, queue }
+    @State private var panel = Panel.artwork
     @State private var scrubbing = false
     @State private var draft: Double = 0
     @State private var details = false
     @State private var playlistTarget: Track?
-    @State private var lyricsTrack: Track?
+    @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(colors: [Color.orange.opacity(0.24), Color(uiColor: .systemBackground), Color.red.opacity(0.12)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
-                ScrollView {
-                    VStack(spacing: 25) {
-                        if mode == 0 {
-                            ArtworkView(track: current, root: library.root, size: nil)
-                                .frame(maxWidth: 340).padding(.horizontal, 8)
-                                .scaleEffect(player.playing ? 1 : 0.9)
-                                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: player.playing)
-                                .shadow(color: .black.opacity(0.16), radius: 20, y: 12)
-                        }
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(current?.title ?? "未在播放").font(.title2.bold()).lineLimit(2)
-                                Text(current?.artist ?? "选择一首歌曲").font(.title3).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .modifier(ActionsContext(
-                                sections: current.map { SongMenuCatalog.groups(for: $0, handlers: handlers) } ?? [],
-                                preview: Group {
-                                    if let current { SongMenuPreview(track: current, root: library.root) }
-                                }
-                            ))
-                            if let current {
-                                Button { library.toggleFavorite(current) } label: {
-                                    Image(systemName: current.favorite ? "star.fill" : "star").frame(width: 44, height: 44)
-                                }.buttonStyle(.plain).modifier(GlassControl())
-                                    .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
-                                    .sensoryFeedback(.selection, trigger: current.favorite)
-                                Button { playlistTarget = current } label: {
-                                    Image(systemName: "text.badge.plus").frame(width: 44, height: 44)
-                                }.buttonStyle(.plain).modifier(GlassControl())
-                                    .accessibilityLabel("添加到歌单")
-                            }
-                            Button { details = true } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-                                .buttonStyle(.plain).modifier(GlassControl()).accessibilityLabel("歌曲信息")
-                        }
-                        if mode == 1 { lyricsPanel }
-                        if mode == 2 { queuePanel }
-                        transport
-                        VolumeControl().frame(height: 36).accessibilityLabel("系统音量")
-                        HStack {
-                            Button { mode = mode == 1 ? 0 : 1 } label: {
-                                Image(systemName: "quote.bubble").frame(width: 48, height: 44)
-                                    .foregroundStyle(mode == 1 ? Color.orange : Color.primary)
-                            }.modifier(GlassControl()).accessibilityLabel("显示歌词")
-                            Spacer()
-                            RoutePicker().frame(width: 48, height: 44).modifier(GlassControl()).accessibilityLabel("选择音频输出")
-                            Spacer()
-                            Button { mode = mode == 2 ? 0 : 2 } label: {
-                                Image(systemName: "list.bullet").frame(width: 48, height: 44)
-                                    .foregroundStyle(mode == 2 ? Color.orange : Color.primary)
-                            }.modifier(GlassControl()).accessibilityLabel("显示播放队列")
-                        }.buttonStyle(.plain)
-                        Text(player.output).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }.padding(26).frame(maxWidth: 620).frame(maxWidth: .infinity)
-                }
+        ZStack {
+            ArtworkBackdrop(colors: palette)
+            VStack(spacing: 18) {
+                Capsule()
+                    .fill(Color.white.opacity(0.55))
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 8)
+                    .gesture(DragGesture(minimumDistance: 8).onEnded { value in
+                        if value.translation.height > 70 { dismiss() }
+                    })
+                    .accessibilityLabel("收起播放器")
+                    .accessibilityAddTraits(.isButton)
+                    .onTapGesture { dismiss() }
+                stage
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                titleBlock
+                scrubber
+                transport
+                SystemVolumeBar()
+                bottomRow
             }
-            .navigationTitle("正在播放").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "chevron.down") }.accessibilityLabel("收起播放器")
-            } }
-            .sheet(item: $playlistTarget) { track in
-                AddToPlaylistSheet(library: library, tracks: [track])
-            }
-            .sheet(item: $lyricsTrack) { track in
-                LyricsReader(player: player, track: track)
-            }
-            .sheet(isPresented: $details) {
-                NavigationStack {
-                    List {
-                        if let current {
-                            LabeledContent("专辑", value: current.album)
-                            LabeledContent("音源", value: current.specification)
-                            LabeledContent("文件", value: current.relativePath ?? current.filename)
-                            Text("高音质本地播放，声音经过 iOS 系统混音。文件格式和输出采样率都不表示逐位还原。").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.navigationTitle("歌曲信息").navigationBarTitleDisplayMode(.inline)
-                }.presentationDetents([.medium]).presentationDragIndicator(.visible)
-            }
-        }.tint(.orange).presentationDragIndicator(.visible)
+            .padding(.horizontal, 28)
+            .padding(.bottom, 12)
+        }
+        .foregroundStyle(.white)
+        .tint(.white)
+        .preferredColorScheme(.dark)
+        .accessibilityIdentifier("now-playing")
+        .onAppear(perform: refreshPalette)
+        .onChange(of: current?.artworkFilename) { _, _ in refreshPalette() }
+        .sheet(item: $playlistTarget) { track in
+            AddToPlaylistSheet(library: library, tracks: [track])
+        }
+        .sheet(isPresented: $details) { detailsSheet }
     }
 
-    private var transport: some View {
-        VStack(spacing: 12) {
-            Slider(value: Binding(get: { scrubbing ? draft : min(playbackClock.position, max(current?.duration ?? 0, 0.01)) },
-                set: { draft = $0 }), in: 0...max(current?.duration ?? 0, 0.01)) { editing in
-                if editing { draft = playbackClock.position; scrubbing = true }
-                else { player.seek(draft); scrubbing = false }
-            }.accessibilityLabel("播放进度")
-            HStack { Text(clock(scrubbing ? draft : playbackClock.position)); Spacer(); Text("−" + clock(max(0, (current?.duration ?? 0) - playbackClock.position))) }
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            let look = NowPlayingTransport.state(playing: player.playing, shuffle: player.shuffle, repeatMode: player.repeatMode)
-            HStack(spacing: 10) {
-                CapsuleButton(systemImage: "shuffle", active: look.shuffleHighlighted, iconPointSize: 18, accessibilityLabel: "切换随机播放") {
-                    player.toggleShuffle()
+    @ViewBuilder private var stage: some View {
+        ZStack {
+            if panel == .artwork {
+                ArtworkView(track: current, root: library.root, size: nil, placeholder: .neutral)
+                    .frame(maxWidth: 340)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
+                    .scaleEffect(player.playing ? 1 : 0.92)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
+                    .padding(.horizontal, 8)
+            } else if panel == .lyrics {
+                lyricsPanel
+            } else {
+                queuePanel
+            }
+        }
+        .animation(.smooth(duration: 0.35), value: panel)
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(current?.title ?? "未在播放")
+                        .font(.title2.bold())
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if let current {
+                        Button {
+                            onOpen(.artist(current.artist))
+                            dismiss()
+                        } label: {
+                            Text(current.artist)
+                                .font(.title3)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text("选择一首歌曲").font(.title3).foregroundStyle(.white.opacity(0.6))
+                    }
                 }
-                Spacer(minLength: 4)
-                CapsuleButton(systemImage: "backward.fill", iconPointSize: 20, accessibilityLabel: "上一首") {
-                    player.skip(backwards: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if let current {
+                    Button { library.toggleFavorite(current) } label: {
+                        Image(systemName: current.favorite ? "star.fill" : "star")
+                            .font(.title3)
+                            .frame(width: 36, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(current.favorite ? "取消收藏" : "收藏")
+                    Menu {
+                        Button("添加到歌单", systemImage: "text.badge.plus") { playlistTarget = current }
+                        Button("前往专辑", systemImage: "music.note") {
+                            onOpen(.album(current.albumID))
+                            dismiss()
+                        }
+                        Button("前往艺术家", systemImage: "music.mic") {
+                            onOpen(.artist(current.artist))
+                            dismiss()
+                        }
+                        Button("歌曲信息", systemImage: "info.circle") { details = true }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.title3)
+                            .frame(width: 36, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("更多")
                 }
-                CapsuleButton(systemImage: look.playSymbol, active: look.playHighlighted, iconPointSize: 28, accessibilityLabel: look.playTitle) {
-                    player.toggle()
+            }
+            if let current {
+                Button { details = true } label: {
+                    Text(current.qualityBadge)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.16), in: Capsule())
                 }
-                CapsuleButton(systemImage: "forward.fill", iconPointSize: 20, accessibilityLabel: "下一首") {
-                    player.skip()
-                }
-                Spacer(minLength: 4)
-                CapsuleButton(systemImage: look.repeatSymbol, active: look.repeatHighlighted, iconPointSize: 18, accessibilityLabel: look.repeatAccessibility) {
-                    player.cycleRepeat()
-                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("音质 \(current.qualityBadge)")
             }
         }
     }
 
+    private var scrubber: some View {
+        VStack(spacing: 4) {
+            ThinScrubber(value: Binding(
+                get: { scrubbing ? draft : min(playbackClock.position, max(current?.duration ?? 0, 0.01)) },
+                set: { draft = $0 }
+            ), range: 0...max(current?.duration ?? 0, 0.01)) { editing in
+                if editing {
+                    draft = playbackClock.position
+                    scrubbing = true
+                } else {
+                    player.seek(draft)
+                    scrubbing = false
+                }
+            }
+            .accessibilityLabel("播放进度")
+            HStack {
+                Text(clock(scrubbing ? draft : playbackClock.position))
+                Spacer()
+                Text("−" + clock(max(0, (current?.duration ?? 0) - (scrubbing ? draft : playbackClock.position))))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    private var transport: some View {
+        let symbol = player.playing ? "pause.fill" : "play.fill"
+        return HStack {
+            transportButton("backward.fill", label: "上一首", size: 34) { player.skip(backwards: true) }
+            Spacer()
+            transportButton(symbol, label: player.playing ? "暂停" : "播放", size: 44) { player.toggle() }
+            Spacer()
+            transportButton("forward.fill", label: "下一首", size: 34) { player.skip() }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func transportButton(_ symbol: String, label: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .regular))
+                .frame(width: 64, height: 54)
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(label)
+    }
+
+    private var bottomRow: some View {
+        HStack {
+            bottomButton(panel == .lyrics ? "quote.bubble.fill" : "quote.bubble", label: "显示歌词") {
+                panel = panel == .lyrics ? .artwork : .lyrics
+            }
+            Spacer()
+            RoutePicker()
+                .frame(width: 48, height: 44)
+                .accessibilityLabel("选择音频输出")
+            Spacer()
+            bottomButton(panel == .queue ? "list.bullet" : "list.bullet", label: "显示播放队列") {
+                panel = panel == .queue ? .artwork : .queue
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func bottomButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .frame(width: 48, height: 44)
+                .foregroundStyle(.white.opacity(panelSymbolActive(symbol) ? 1 : 0.92))
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(label)
+    }
+
+    private func panelSymbolActive(_ symbol: String) -> Bool {
+        (symbol.contains("quote") && panel == .lyrics) || (symbol.contains("list") && panel == .queue)
+    }
+
     private var queuePanel: some View {
-        VStack(alignment: .leading) {
-            Text("播放队列").font(.headline)
+        let look = NowPlayingTransport.state(playing: player.playing, shuffle: player.shuffle, repeatMode: player.repeatMode)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("接下来").font(.headline)
+                Spacer()
+                Button { player.toggleShuffle() } label: {
+                    Image(systemName: "shuffle").frame(width: 44, height: 36)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(look.shuffleHighlighted ? 1 : 0.4))
+                .accessibilityLabel("切换随机播放")
+                Button { player.cycleRepeat() } label: {
+                    Image(systemName: look.repeatSymbol).frame(width: 44, height: 36)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(look.repeatHighlighted ? 1 : 0.4))
+                .accessibilityLabel(look.repeatAccessibility)
+            }
             List {
                 ForEach(player.queuedTracks) { track in
                     SongContextRow(
@@ -153,18 +258,47 @@ struct NowPlayingView: View {
                         root: library.root,
                         current: track.id == current?.id,
                         playing: player.playing && track.id == current?.id,
+                        emphasis: .white,
                         handlers: handlers
                     )
-                }.onDelete { player.removeQueue(at: $0) }.onMove { player.moveQueue(from: $0, to: $1) }
-            }.listStyle(.plain).frame(height: 230).environment(\.editMode, .constant(.active)).scrollContentBackground(.hidden)
+                }
+                .onDelete { player.removeQueue(at: $0) }
+                .onMove { player.moveQueue(from: $0, to: $1) }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
     }
 
     @ViewBuilder private var lyricsPanel: some View {
         if let text = current?.lyrics, current?.hasLyrics == true {
             LyricsScroll(lines: LyricsLine.parse(text), position: playbackClock.position) { player.seek($0) }
-                .frame(height: 235)
-        } else { ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。")) }
+        } else {
+            ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。"))
+        }
+    }
+
+    private var detailsSheet: some View {
+        NavigationStack {
+            List {
+                if let current {
+                    LabeledContent("标记", value: current.qualityBadge)
+                    LabeledContent("位深", value: current.bitDepth > 0 ? "\(current.bitDepth)-bit" : "未知")
+                    LabeledContent("采样率", value: String(format: "%.1f kHz", current.sampleRate / 1000))
+                    LabeledContent("格式", value: (current.filename as NSString).pathExtension.uppercased())
+                    LabeledContent("输出", value: player.output.isEmpty ? "未知" : player.output)
+                    LabeledContent("文件", value: current.relativePath ?? current.filename)
+                    Text("高音质本地播放，声音经过 iOS 系统混音。文件格式和输出采样率都不表示逐位还原。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("歌曲信息")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { details = false } } }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
     }
 
     private var handlers: SongHandlers {
@@ -174,13 +308,156 @@ struct NowPlayingView: View {
             playlist: { playlistTarget = $0 },
             playNext: { player.enqueue([$0], next: true) },
             addToQueue: { player.enqueue([$0], next: false) },
-            album: { onOpen(.album($0.albumID)) },
-            artist: { onOpen(.artist($0.artist)) },
-            lyrics: { lyricsTrack = $0 },
+            album: { onOpen(.album($0.albumID)); dismiss() },
+            artist: { onOpen(.artist($0.artist)); dismiss() },
+            lyrics: { _ in panel = .lyrics },
             delete: onDelete
         )
     }
 
+    private func refreshPalette() {
+        let image = current?.artworkFilename.flatMap { ArtworkCache.shared.image(at: library.root.appendingPathComponent($0)) }
+        palette = ArtworkColors.palette(from: image).map { Color(uiColor: $0) }
+    }
+}
+
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.82 : 1)
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+enum ScrubberMap {
+    static func fraction(value: Double, in range: ClosedRange<Double>) -> Double {
+        let span = range.upperBound - range.lowerBound
+        guard span > 0, value.isFinite else { return 0 }
+        return min(1, max(0, (value - range.lowerBound) / span))
+    }
+
+    static func value(x: CGFloat, width: CGFloat, in range: ClosedRange<Double>) -> Double {
+        let span = range.upperBound - range.lowerBound
+        guard width > 0, span > 0 else { return range.lowerBound }
+        let fraction = min(1, max(0, Double(x / width)))
+        return range.lowerBound + fraction * span
+    }
+}
+
+struct ThinScrubber: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double> = 0...1
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    @State private var dragging = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let fraction = ScrubberMap.fraction(value: value, in: range)
+            let thickness: CGFloat = dragging ? 7 : 3
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.28)).frame(height: thickness)
+                Capsule().fill(Color.white).frame(width: max(thickness, width * fraction), height: thickness)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        if !dragging {
+                            dragging = true
+                            onEditingChanged(true)
+                        }
+                        value = ScrubberMap.value(x: gesture.location.x, width: width, in: range)
+                    }
+                    .onEnded { _ in
+                        dragging = false
+                        onEditingChanged(false)
+                    }
+            )
+        }
+        .frame(height: 28)
+    }
+}
+
+enum ArtworkColors {
+    static let fallback: [UIColor] = [
+        UIColor(red: 0.08, green: 0.12, blue: 0.20, alpha: 1),
+        UIColor(red: 0.14, green: 0.18, blue: 0.30, alpha: 1),
+        UIColor(red: 0.06, green: 0.09, blue: 0.16, alpha: 1),
+        UIColor(red: 0.11, green: 0.15, blue: 0.24, alpha: 1)
+    ]
+
+    static func palette(from image: UIImage?) -> [UIColor] {
+        guard let image, let ci = CIImage(image: image) else { return fallback }
+        let extent = ci.extent.integral
+        guard extent.width > 1, extent.height > 1 else { return fallback }
+        let regions = [
+            CGRect(x: extent.minX, y: extent.midY, width: extent.width / 2, height: extent.height / 2),
+            CGRect(x: extent.midX, y: extent.midY, width: extent.width / 2, height: extent.height / 2),
+            CGRect(x: extent.minX, y: extent.minY, width: extent.width / 2, height: extent.height / 2),
+            CGRect(x: extent.midX, y: extent.minY, width: extent.width / 2, height: extent.height / 2)
+        ]
+        let colors = regions.compactMap { average(ci, rect: $0) }.map(darkened)
+        return colors.count == 4 ? colors : fallback
+    }
+
+    static func darkened(_ color: UIColor) -> UIColor {
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
+            return UIColor(white: 0.12, alpha: 1)
+        }
+        return UIColor(hue: hue, saturation: min(0.7, saturation), brightness: min(0.36, max(0.10, brightness * 0.42)), alpha: 1)
+    }
+
+    private static func average(_ image: CIImage, rect: CGRect) -> UIColor? {
+        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: rect), forKey: kCIInputExtentKey)
+        guard let output = filter.outputImage else { return nil }
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        CIContext(options: [.workingColorSpace: NSNull()]).render(
+            output,
+            toBitmap: &bitmap,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        return UIColor(red: CGFloat(bitmap[0]) / 255, green: CGFloat(bitmap[1]) / 255, blue: CGFloat(bitmap[2]) / 255, alpha: 1)
+    }
+}
+
+struct ArtworkBackdrop: View {
+    var colors: [Color]
+    @State private var drift = false
+
+    var body: some View {
+        Group {
+            if #available(iOS 18, *) {
+                MeshGradient(width: 3, height: 3, points: points, colors: meshColors)
+            } else {
+                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }
+        .ignoresSafeArea()
+        .onAppear { drift = true }
+    }
+
+    private var meshColors: [Color] {
+        let base = colors.isEmpty ? ArtworkColors.fallback.map { Color(uiColor: $0) } : colors
+        return (0..<9).map { base[$0 % base.count] }
+    }
+
+    private var points: [SIMD2<Float>] {
+        let nudge: Float = drift ? 0.08 : -0.04
+        return [
+            SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(1, 0),
+            SIMD2(0, 0.5 + nudge), SIMD2(0.5 + nudge, 0.48), SIMD2(1, 0.5 - nudge),
+            SIMD2(0, 1), SIMD2(0.5, 1), SIMD2(1, 1)
+        ]
+    }
 }
 
 struct LyricsScroll: View {
@@ -196,7 +473,7 @@ struct LyricsScroll: View {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                         Button { if let time = line.time { seek(time) } } label: {
                             Text(line.text).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
-                                .foregroundStyle(line.time == nil || index == active ? Color.primary : Color.secondary)
+                                .foregroundStyle(line.time == nil || index == active ? Color.white : Color.white.opacity(0.45))
                         }
                         .buttonStyle(.plain)
                         .id(index)
@@ -245,26 +522,72 @@ struct LyricsReader: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
         }
-        .tint(.orange)
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 }
 
-struct GlassControl: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency { content.glassEffect(.regular.interactive(), in: Capsule()) }
-        else { content.background(.regularMaterial, in: Capsule()) }
+@MainActor
+final class SystemVolumeModel: ObservableObject {
+    @Published var level: Double = 0
+    private var observation: NSKeyValueObservation?
+    init() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default)
+        try? session.setActive(true)
+        level = Double(session.outputVolume)
+        observation = session.observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
+            let value = Double(session.outputVolume)
+            Task { @MainActor in self?.level = value }
+        }
+    }
+    func set(_ value: Double) { level = min(1, max(0, value)) }
+}
+
+struct SystemVolumeBar: View {
+    @StateObject private var model = SystemVolumeModel()
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "speaker.fill").font(.footnote)
+            ThinScrubber(value: Binding(get: { model.level }, set: { model.set($0) }))
+            Image(systemName: "speaker.wave.3.fill").font(.footnote)
+        }
+        .foregroundStyle(.white)
+        .background {
+            SystemVolumeBridge(level: model.level)
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("系统音量")
+    }
+}
+
+private struct SystemVolumeBridge: UIViewRepresentable {
+    var level: Double
+    func makeUIView(context: Context) -> MPVolumeView { MPVolumeView(frame: CGRect(x: 0, y: 0, width: 1, height: 1)) }
+    func updateUIView(_ view: MPVolumeView, context: Context) {
+        DispatchQueue.main.async {
+            guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
+            let next = Float(level)
+            if abs(slider.value - next) > 0.01 { slider.value = next }
+        }
     }
 }
 
 private struct RoutePicker: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView { AVRoutePickerView() }
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
-}
-private struct VolumeControl: UIViewRepresentable {
-    func makeUIView(context: Context) -> MPVolumeView { let view = MPVolumeView(); view.showsRouteButton = false; return view }
-    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.tintColor = .white
+        view.activeTintColor = .white
+        return view
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.tintColor = .white
+        uiView.activeTintColor = .white
+    }
 }
 
 struct LyricsLine: Equatable {

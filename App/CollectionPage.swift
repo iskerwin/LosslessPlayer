@@ -41,7 +41,7 @@ struct CollectionPage: View {
         let page = songList
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
-            .circularBackButton(showsBack)
+            .softTopScrollEdge()
         if editing {
             page.trailingGlass {
                 Button("完成") { editing = false }
@@ -102,6 +102,7 @@ struct CollectionPage: View {
             }
         }
         .listStyle(.plain)
+        .accessibilityIdentifier(kind == .playlist ? "playlist-detail" : kind == .songs ? "songs-list" : "collection-list")
         .modifier(PlaylistEditing(enabled: kind == .playlist, editing: editing))
     }
 

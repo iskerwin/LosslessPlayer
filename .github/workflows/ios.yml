@@ -12,13 +12,25 @@ concurrency:
 jobs:
   test:
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          chosen=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "${chosen}" ]; then
+            echo "Xcode 26 is not installed on this runner" >&2
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$chosen"
+          xcodebuild -version
+          xcodebuild -showsdks
       - name: Select an available iPhone simulator
         run: |
           python3 - <<'PY'
@@ -40,29 +52,42 @@ jobs:
         run: >-
           xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer
           -destination "platform=iOS Simulator,id=$SIMULATOR_ID"
+          -only-testing:LosslessPlayerTests
           -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1
           -derivedDataPath build/simulator -resultBundlePath TestResults.xcresult
           CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
-      - name: Capture library screen
+      - name: Capture iOS 26 screenshots
         if: success()
+        timeout-minutes: 12
+        env:
+          TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/build/screenshots
         run: |
-          xcrun simctl boot "$SIMULATOR_ID" || true
-          xcrun simctl bootstatus "$SIMULATOR_ID" -b
-          xcrun simctl install "$SIMULATOR_ID" build/simulator/Build/Products/Debug-iphonesimulator/LosslessPlayer.app
-          xcrun simctl launch "$SIMULATOR_ID" com.iskerwin.LosslessPlayer
-          sleep 3
-          xcrun simctl io "$SIMULATOR_ID" screenshot library-screen.png
+          set -euo pipefail
+          mkdir -p build/screenshots
+          xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:LosslessPlayerUITests \
+            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+            -derivedDataPath build/simulator -resultBundlePath build/UIResults.xcresult \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
+          if [ -d /tmp/lossless-screenshots ]; then cp -R /tmp/lossless-screenshots/. build/screenshots/; fi
+          find build/screenshots -type f -print
+          test -s build/screenshots/library.png
+          test -s build/screenshots/songs.png
+          test -s build/screenshots/playlist.png
+          test -s build/screenshots/now-playing.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ios-test-results
           path: |
             TestResults.xcresult
-            library-screen.png
+            build/UIResults.xcresult
+            build/screenshots
   development-ipa:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: xcode-27
+    runs-on: macos-26
     timeout-minutes: 20
     permissions:
       contents: write
@@ -72,6 +97,18 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          chosen=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "${chosen}" ]; then
+            echo "Xcode 26 is not installed on this runner" >&2
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$chosen"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -E 'iphoneos|Simulator'
       - name: Build unsigned development app for physical iPhone
         run: >-
           xcodebuild build -project LosslessPlayer.xcodeproj -scheme LosslessPlayer
@@ -92,6 +129,10 @@ jobs:
           assert 'iPhoneOS' in info['CFBundleSupportedPlatforms']
           assert 'audio' in info['UIBackgroundModes']
           assert info['CFBundleIcons']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
+          assert str(info['DTSDKName']).startswith('iphoneos26'), info['DTSDKName']
+          assert str(info['DTXcode']).startswith('26'), info['DTXcode']
+          assert info['MinimumOSVersion'] == '17.0'
+          print('release SDK', info['DTSDKName'], 'Xcode', info['DTXcode'], info.get('DTXcodeBuild'))
           binary = app / info['CFBundleExecutable']
           assert binary.is_file()
           subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)

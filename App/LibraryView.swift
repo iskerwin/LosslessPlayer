@@ -9,7 +9,7 @@ struct LibraryView: View {
     @State private var playlistPath = NavigationPath()
     @State private var favoritesPath = NavigationPath()
     @State private var searchPath = NavigationPath()
-    @FocusState private var searchFieldFocused: Bool
+    @State private var searchFieldFocused = false
     @State private var showPlayer = false
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
@@ -22,6 +22,7 @@ struct LibraryView: View {
     @State private var pendingDelete: [Track] = []
     @State private var lyricsTrack: Track?
     @State private var renamingPlaylist: Playlist?
+    @Namespace private var playerZoom
     @State private var exportPresented = false
     @State private var exportText = ""
     @State private var exportName = "playlist"
@@ -29,14 +30,18 @@ struct LibraryView: View {
 
     var body: some View {
         playerTabs
-            .tint(.orange)
-            .sheet(isPresented: $showPlayer) {
+            .fullScreenCover(isPresented: $showPlayer) {
                 NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
                     showPlayer = false
                     pendingDelete = [track]
                 })
+                .modifier(PlayerZoom(namespace: playerZoom))
             }
-            .sheet(isPresented: $showSources) { SourcesView(library: library, player: player) }
+            .sheet(isPresented: $showSources) {
+                SourcesView(library: library, player: player)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
             .fileImporter(isPresented: $pickerPresented, allowedContentTypes: pickerTypes, allowsMultipleSelection: true) { result in
                 let kind = importKind
                 switch result {
@@ -97,92 +102,89 @@ struct LibraryView: View {
             message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
     }
 
+    private var miniPlayer: some View {
+        MiniPlayer(library: library, player: player, zoom: playerZoom) { showPlayer = true }
+    }
+
     @ViewBuilder private var playerTabs: some View {
         if #available(iOS 26.1, *) {
-            tabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory(isEnabled: player.current != nil) {
-                MiniPlayer(library: library, player: player) { showPlayer = true }
+            glassTabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory(isEnabled: player.current != nil) {
+                miniPlayer
             }
         } else if #available(iOS 26.0, *) {
-            tabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory {
-                if player.current != nil { MiniPlayer(library: library, player: player) { showPlayer = true } }
+            glassTabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory {
+                if player.current != nil { miniPlayer }
             }
         } else {
-            tabs.safeAreaInset(edge: .bottom) {
+            legacyTabs.safeAreaInset(edge: .bottom, spacing: 0) {
                 if player.current != nil {
-                    MiniPlayer(library: library, player: player) { showPlayer = true }
-                        .padding(.horizontal, 4)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 6)
+                    miniPlayer.background(Color(.secondarySystemBackground))
                 }
             }
         }
     }
 
-    private var tabs: some View {
+    @available(iOS 26, *)
+    private var glassTabs: some View {
         TabView(selection: $tab) {
-            NavigationStack(path: $libraryPath) {
-                libraryHome
-                    .navigationTitle("资料库")
-                    .navigationBarTitleDisplayMode(.large)
-                    .trailingGlass { libraryMore }
-                    .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            }.tabItem { Label("资料库", systemImage: "square.stack.fill") }.tag(AppTab.library)
-            NavigationStack(path: $playlistPath) {
-                PlaylistHome(library: library, player: player, imports: imports, onOpen: open, onRename: beginRename, onCreate: {
-                    creatingPlaylist = true
-                }, onAddSongs: { songPicker = $0 }, onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) })
+            Tab("资料库", systemImage: "square.stack", value: AppTab.library) { libraryStack }
+            Tab("歌单", systemImage: "music.note.list", value: AppTab.playlists) { playlistStack }
+            Tab("收藏", systemImage: "star.fill", value: AppTab.favorites) { favoritesStack }
+            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: .search) { searchStack }
+        }
+        .searchReselect(title: "搜索") { searchFieldFocused = true }
+    }
+
+    private var legacyTabs: some View {
+        TabView(selection: $tab) {
+            libraryStack.tabItem { Label("资料库", systemImage: "square.stack") }.tag(AppTab.library)
+            playlistStack.tabItem { Label("歌单", systemImage: "music.note.list") }.tag(AppTab.playlists)
+            favoritesStack.tabItem { Label("收藏", systemImage: "star.fill") }.tag(AppTab.favorites)
+            searchStack.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
+        }
+        .searchReselect(title: "搜索") { searchFieldFocused = true }
+    }
+
+    private var libraryStack: some View {
+        NavigationStack(path: $libraryPath) {
+            libraryHome
+                .navigationTitle("资料库")
+                .navigationBarTitleDisplayMode(.large)
+                .trailingGlass { libraryMore }
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            }.tabItem { Label("歌单", systemImage: "music.note.list") }.tag(AppTab.playlists)
-            NavigationStack(path: $favoritesPath) {
-                page(library.tracks.filter(\.favorite), title: "收藏", kind: .favorites, showsBack: false)
-                    .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            }.tabItem { Label("收藏", systemImage: "star.fill") }.tag(AppTab.favorites)
-            NavigationStack(path: $searchPath) {
-                searchPage
-                    .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            }.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
         }
-        .background {
-            SearchTabReselect(title: "搜索") { searchFieldFocused = true }
+    }
+
+    private var playlistStack: some View {
+        NavigationStack(path: $playlistPath) {
+            PlaylistHome(library: library, player: player, imports: imports, onOpen: open, onRename: beginRename, onCreate: {
+                creatingPlaylist = true
+            }, onAddSongs: { songPicker = $0 }, onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) })
+            .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
-        .onChange(of: tab) { _, new in
-            if new != .search { searchFieldFocused = false }
+    }
+
+    private var favoritesStack: some View {
+        NavigationStack(path: $favoritesPath) {
+            page(library.tracks.filter(\.favorite), title: "收藏", kind: .favorites, showsBack: false)
+                .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+        }
+    }
+
+    private var searchStack: some View {
+        NavigationStack(path: $searchPath) {
+            searchPage
+                .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
     }
 
     private var searchPage: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("歌曲、艺术家、专辑", text: $query)
-                    .focused($searchFieldFocused)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                        searchFieldFocused = true
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("清除搜索")
-                }
+        page(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索", kind: .search, showsBack: false)
+            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑")
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: tab) { _, new in
+                if new != .search { searchFieldFocused = false }
             }
-            .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
-            .contentShape(Rectangle())
-            .onTapGesture { searchFieldFocused = true }
-            page(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索", kind: .search, showsBack: false)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(Color(uiColor: .systemBackground))
-        .scrollDismissesKeyboard(.interactively)
     }
 
     private var libraryMore: some View {
@@ -248,7 +250,10 @@ struct LibraryView: View {
                     }
                 }
             }.padding(.horizontal, 22).padding(.bottom, 24)
-        }.background(Color(uiColor: .systemBackground))
+        }
+        .background(Color(.systemBackground))
+        .softTopScrollEdge()
+        .accessibilityIdentifier("library-home")
     }
 
     private var pickerTypes: [UTType] {
@@ -267,7 +272,7 @@ struct LibraryView: View {
             HStack { Text("正在整理音乐").font(.headline); Spacer(); Button("取消") { library.cancelScan() } }
             ProgressView(value: library.progress)
             Text(library.progressText).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-        }.padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 18))
+        }.padding(.vertical, 8)
     }
 
     private func libraryLink(_ title: String, icon: String, route: LibraryRoute) -> some View {
@@ -310,8 +315,8 @@ struct LibraryView: View {
         .listStyle(.plain)
         .navigationTitle("艺术家")
         .navigationBarTitleDisplayMode(.large)
-        .circularBackButton()
         .trailingGlass { libraryMore }
+        .softTopScrollEdge()
     }
 
     private var albumIndex: some View {
@@ -323,8 +328,8 @@ struct LibraryView: View {
         .listStyle(.plain)
         .navigationTitle("专辑")
         .navigationBarTitleDisplayMode(.large)
-        .circularBackButton()
         .trailingGlass { libraryMore }
+        .softTopScrollEdge()
     }
 
     private func browseRow(title: String, subtitle: String, artwork: Track?, artSize: CGFloat = 48, groups: [MenuGroup], openRow: @escaping () -> Void) -> some View {
@@ -346,6 +351,7 @@ struct LibraryView: View {
             .buttonStyle(RowPressStyle())
             SectionsMenu(sections: groups) { EllipsisLabel() }
                 .buttonStyle(.borderless)
+                .tint(.primary)
                 .accessibilityLabel("更多操作")
         }
         .modifier(ActionsContext(sections: groups, preview: MediaPreview(title: title, subtitle: subtitle, artwork: artwork, root: library.root)))
@@ -476,13 +482,20 @@ final class ArtworkCache {
 }
 
 struct ArtworkView: View {
+    enum Placeholder { case accent, neutral }
     let track: Track?
     let root: URL
     var size: CGFloat?
+    var placeholder: Placeholder = .accent
     var body: some View {
         Group {
             if let name = track?.artworkFilename, let image = ArtworkCache.shared.image(at: root.appendingPathComponent(name)) {
                 Image(uiImage: image).resizable().scaledToFill()
+            } else if placeholder == .neutral {
+                ZStack {
+                    Color(white: 0.16)
+                    Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.85))
+                }
             } else {
                 ZStack {
                     LinearGradient(colors: [.orange.opacity(0.85), .red.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -496,7 +509,7 @@ struct ArtworkView: View {
 
     private var artworkCorner: CGFloat {
         let side = size ?? 150
-        if side <= 56 { return 6 }
+        if side <= 64 { return 6 }
         if side < 120 { return 8 }
         return 12
     }
@@ -505,47 +518,111 @@ struct ArtworkView: View {
 struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
+    var zoom: Namespace.ID
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
 
     var body: some View {
+        if #available(iOS 26, *) {
+            AccessoryPlacement(title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open)
+                .modifier(ZoomSource(namespace: zoom))
+        } else {
+            AccessoryMiniPlayer(compact: false, title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open)
+                .modifier(ZoomSource(namespace: zoom))
+        }
+    }
+}
+
+@available(iOS 26, *)
+private struct AccessoryPlacement: View {
+    var title: String
+    var artist: String
+    var track: Track?
+    var root: URL
+    var playing: Bool
+    var toggle: () -> Void
+    var skip: () -> Void
+    var open: () -> Void
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+
+    var body: some View {
+        AccessoryMiniPlayer(compact: placement == .inline, title: title, artist: artist, track: track, root: root, playing: playing, toggle: toggle, skip: skip, open: open)
+    }
+}
+
+private struct AccessoryMiniPlayer: View {
+    var compact: Bool
+    var title: String
+    var artist: String
+    var track: Track?
+    var root: URL
+    var playing: Bool
+    var toggle: () -> Void
+    var skip: () -> Void
+    var open: () -> Void
+
+    var body: some View {
         HStack(spacing: 12) {
-            ArtworkView(track: player.current, root: library.root, size: 40)
+            ArtworkView(track: track, root: root, size: compact ? 28 : 40)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                if !artist.isEmpty {
-                    Text(artist)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
+                if !compact, !artist.isEmpty {
+                    Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(title)，\(artist)。打开正在播放")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction(.default, open)
-            Button { player.toggle() } label: {
-                Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 36, height: 44)
+            Button(action: toggle) {
+                Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 36, height: 44)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(player.playing ? "暂停" : "播放")
-            Button { player.skip() } label: {
-                Image(systemName: "forward.fill").frame(width: 32, height: 44)
+            .tint(.primary)
+            .accessibilityLabel(playing ? "暂停" : "播放")
+            if !compact {
+                Button(action: skip) {
+                    Image(systemName: "forward.fill").frame(width: 32, height: 44)
+                }
+                .buttonStyle(.borderless)
+                .tint(.primary)
+                .accessibilityLabel("下一首")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("下一首")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, minHeight: 56)
+        .padding(.vertical, compact ? 0 : 6)
+        .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("mini-player")
+    }
+}
+
+private struct ZoomSource: ViewModifier {
+    var namespace: Namespace.ID
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.matchedTransitionSource(id: "nowPlaying", in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PlayerZoom: ViewModifier {
+    var namespace: Namespace.ID
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.navigationTransition(.zoom(sourceID: "nowPlaying", in: namespace))
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    func searchReselect(title: String, onReselect: @escaping () -> Void) -> some View {
+        background { SearchTabReselect(title: title, onReselect: onReselect) }
     }
 }
 

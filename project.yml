@@ -37,10 +37,20 @@ targets:
     sources: [Tests]
     dependencies:
       - target: LosslessPlayer
+  LosslessPlayerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: LosslessPlayer
 schemes:
   LosslessPlayer:
     build:
       targets:
         LosslessPlayer: all
+        LosslessPlayerTests: [test]
+        LosslessPlayerUITests: [test]
     test:
-      targets: [LosslessPlayerTests]
+      targets:
+        - LosslessPlayerTests
+        - LosslessPlayerUITests

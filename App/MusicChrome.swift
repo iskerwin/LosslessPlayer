@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// List pages only offer these two actions. Neither one reads pause, shuffle, or repeat.
 enum CollectionTransport: String, CaseIterable, Hashable {
@@ -176,11 +175,7 @@ struct SongHandlers {
 
 struct ToolbarChrome: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(iOS 26, *) {
-            content
-        } else {
-            content.buttonStyle(.plain).padding(.horizontal, 10).frame(minHeight: 36)
-        }
+        content.tint(.primary)
     }
 }
 
@@ -192,94 +187,28 @@ extension View {
     func trailingGlass<S: View, M: View>(@ViewBuilder sort: () -> S, @ViewBuilder more: () -> M) -> some View {
         modifier(TrailingGlassModifier<S, M>(sort: sort(), more: more()))
     }
-
-    func circularBackButton(_ enabled: Bool = true) -> some View {
-        modifier(CircularBackModifier(enabled: enabled))
-    }
 }
 
 private struct TrailingGlassModifier<Sort: View, More: View>: ViewModifier {
     var sort: Sort?
     var more: More
 
-    @ViewBuilder func body(content: Content) -> some View {
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if let sort { sort }
+                more
+            }
+        }
+    }
+}
+
+extension View {
+    @ViewBuilder func softTopScrollEdge() -> some View {
         if #available(iOS 26, *) {
-            content.toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if let sort { sort }
-                    more
-                }
-            }
+            self.scrollEdgeEffectStyle(.soft, for: .top)
         } else {
-            content.toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 0) {
-                        if let sort {
-                            sort
-                            Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 1, height: 16)
-                        }
-                        more
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .background(.regularMaterial, in: Capsule())
-                }
-            }
-        }
-    }
-}
-
-private struct CircularBackModifier: ViewModifier {
-    var enabled: Bool
-    @Environment(\.dismiss) private var dismiss
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if !enabled {
-            content
-        } else if #available(iOS 26, *) {
-            content
-        } else {
-            content
-                .navigationBarBackButtonHidden(true)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { dismiss() } label: {
-                            Image(systemName: "chevron.backward")
-                                .font(.system(size: 17, weight: .semibold))
-                                .frame(width: 36, height: 36)
-                        }
-                        .buttonStyle(.plain)
-                        .background(.regularMaterial, in: Circle())
-                        .accessibilityLabel("返回")
-                    }
-                }
-                .background { PopGestureEnabler().frame(width: 0, height: 0).allowsHitTesting(false) }
-        }
-    }
-}
-
-/// Keeps the swipe-back gesture after the system back button is replaced on iOS 17.
-private struct PopGestureEnabler: UIViewControllerRepresentable {
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let controller = UIViewController()
-        controller.view.isUserInteractionEnabled = false
-        controller.view.backgroundColor = .clear
-        return controller
-    }
-
-    func updateUIViewController(_ controller: UIViewController, context: Context) {
-        DispatchQueue.main.async {
-            guard let gesture = controller.navigationController?.interactivePopGestureRecognizer else { return }
-            gesture.isEnabled = true
-            gesture.delegate = context.coordinator
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            let count = (gestureRecognizer.view?.next as? UINavigationController)?.viewControllers.count ?? 2
-            return count > 1
+            self
         }
     }
 }
@@ -292,15 +221,16 @@ struct PlayShuffleBar: View {
     var body: some View {
         HStack(spacing: 12) {
             ForEach(CollectionTransport.allCases, id: \.self) { item in
-                CapsuleButton(
-                    title: item.title,
-                    systemImage: item.symbol,
-                    chrome: .collection,
-                    expands: true,
-                    accessibilityLabel: item.title
-                ) {
+                Button {
                     if item == .playFromStart { play() } else { shuffle() }
+                } label: {
+                    Label(item.title, systemImage: item.symbol)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.orange)
+                        .frame(maxWidth: .infinity)
                 }
+                .modifier(CollectionGlassButton())
+                .accessibilityLabel(item.title)
             }
         }
         .disabled(!enabled)
@@ -342,9 +272,19 @@ struct EllipsisLabel: View {
     var body: some View {
         Image(systemName: "ellipsis")
             .font(.body.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
             .frame(width: RowMetrics.menuWidth, height: 44)
             .contentShape(Rectangle())
+    }
+}
+
+private struct CollectionGlassButton: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.buttonStyle(.glass).buttonBorderShape(.capsule).controlSize(.large).tint(.primary)
+        } else {
+            content.buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.large).tint(.primary)
+        }
     }
 }
 
@@ -354,6 +294,7 @@ struct SongRow: View {
     var current = false
     var playing = false
     var indexLabel: String? = nil
+    var emphasis: Color = .orange
 
     var body: some View {
         HStack(spacing: 12) {
@@ -368,7 +309,7 @@ struct SongRow: View {
                 Text(track.title)
                     .font(.body)
                     .lineLimit(1)
-                    .foregroundStyle(current ? Color.orange : Color.primary)
+                    .foregroundStyle(current ? emphasis : Color.primary)
                 Text(track.available ? track.artist : "文件已失效 · 请重新扫描")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -378,7 +319,7 @@ struct SongRow: View {
             if current && playing {
                 Image(systemName: "waveform")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(emphasis)
                     .accessibilityHidden(true)
             }
         }
@@ -426,18 +367,20 @@ struct SongContextRow: View {
     var playing = false
     var indexLabel: String? = nil
     var showsMenu = true
+    var emphasis: Color = .orange
     var handlers: SongHandlers
 
     var body: some View {
         HStack(spacing: 0) {
             Button { handlers.play(track) } label: {
-                SongRow(track: track, root: root, current: current, playing: playing, indexLabel: indexLabel)
+                SongRow(track: track, root: root, current: current, playing: playing, indexLabel: indexLabel, emphasis: emphasis)
                     .padding(.leading, RowMetrics.leadingInset)
             }
             .buttonStyle(RowPressStyle())
             if showsMenu {
                 SectionsMenu(sections: sections) { EllipsisLabel() }
                     .buttonStyle(.borderless)
+                    .tint(.primary)
                     .accessibilityLabel("更多操作")
             }
         }

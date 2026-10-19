@@ -28,6 +28,7 @@ struct PlaylistHome: View {
                 list
             }
         }
+        .softTopScrollEdge()
         .navigationTitle("歌单")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass {
@@ -98,6 +99,7 @@ struct PlaylistHome: View {
                     .buttonStyle(RowPressStyle())
                     SectionsMenu(sections: playlistGroups(playlist)) { EllipsisLabel() }
                         .buttonStyle(.borderless)
+                        .tint(.primary)
                         .accessibilityLabel("更多操作")
                 }
                 .swipeActions(allowsFullSwipe: false) {
@@ -161,7 +163,6 @@ struct PlaylistCover: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay { artwork.clipped() }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.12), radius: 10, y: 6)
             .accessibilityHidden(true)
     }
@@ -262,7 +263,7 @@ struct SongPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var selected: Set<UUID> = []
-    @FocusState private var searchFocused: Bool
+    @State private var searchFocused = false
 
     private var candidates: [Track] {
         let existing = Set(playlist.trackIDs)
@@ -274,27 +275,6 @@ struct SongPickerSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("搜索要添加的歌曲", text: $query)
-                        .focused($searchFocused)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.search)
-                    if !query.isEmpty {
-                        Button { query = ""; searchFocused = true } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("清除搜索")
-                    }
-                }
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .onTapGesture { searchFocused = true }
                 HStack {
                     Text("已选 \(selected.count) 首").font(.subheadline.weight(.semibold))
                     Spacer()
@@ -325,6 +305,7 @@ struct SongPickerSheet: View {
                     .listRowBackground(Color.clear)
                 }
                 .listStyle(.plain)
+                .searchable(text: $query, isPresented: $searchFocused, prompt: "搜索要添加的歌曲")
             }
             .navigationTitle("添加歌曲")
             .navigationBarTitleDisplayMode(.inline)
@@ -335,7 +316,7 @@ struct SongPickerSheet: View {
                         .disabled(selected.isEmpty)
                 }
             }
-            .onAppear { focusSoon() }
+            .onAppear { searchFocused = true }
         }
         .tint(.orange)
     }
@@ -353,10 +334,4 @@ struct SongPickerSheet: View {
         dismiss()
     }
 
-    private func focusSoon() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            searchFocused = true
-        }
-    }
 }

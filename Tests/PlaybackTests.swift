@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import CoreGraphics
 import AVFoundation
 @testable import LosslessPlayer
@@ -109,6 +110,19 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(looping.repeatTitle, "列表")
         XCTAssertTrue(looping.repeatHighlighted)
         XCTAssertFalse(looping.shuffleHighlighted)
+    }
+
+    func testQualityBadgeAndDarkArtworkPalette() {
+        let lossless = Track(id: UUID(), filename: "a.flac", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 48000, bitDepth: 24)
+        let mp3 = Track(id: UUID(), filename: "b.mp3", title: "B", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 0)
+        XCTAssertEqual(lossless.qualityBadge, "Lossless")
+        XCTAssertEqual(mp3.qualityBadge, "MP3")
+        var brightness: CGFloat = 1
+        let dark = ArtworkColors.darkened(UIColor(hue: 0.6, saturation: 0.9, brightness: 1, alpha: 1))
+        XCTAssertTrue(dark.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil))
+        XCTAssertLessThanOrEqual(brightness, 0.36)
+        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...211), 4 / 211, accuracy: 0.0001)
+        XCTAssertEqual(ScrubberMap.value(x: 50, width: 100, in: 0...10), 5, accuracy: 0.0001)
     }
 
     func testBlankRowAreaPlaysAndEllipsisStaysMenu() {

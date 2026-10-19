@@ -56,6 +56,15 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
         let depth = bitDepth > 0 ? "\(bitDepth)-bit · " : ""
         return "\(depth)\(String(format: "%.1f", sampleRate / 1000)) kHz · \((filename as NSString).pathExtension.uppercased())"
     }
+
+    /// Short badge under the Now Playing title. Lossless is a file fact, not a claim of bit-perfect output.
+    var qualityBadge: String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let lossless: Set<String> = ["flac", "alac", "wav", "aiff", "aif", "caf"]
+        if lossless.contains(ext) || (ext == "m4a" && bitDepth >= 16) { return "Lossless" }
+        if ext.isEmpty { return "音频" }
+        return ext.uppercased()
+    }
 }
 
 struct MusicFolder: Identifiable, Codable, Equatable, Sendable {
