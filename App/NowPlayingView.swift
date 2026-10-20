@@ -4,13 +4,16 @@ import AVKit
 import MediaPlayer
 import CoreImage
 
-/// Both tracks use the same thickness and horizontal endpoints.
+/// Progress spans the volume row, including its two speaker icons.
 enum PlayerControlMetrics {
     static let restingTrackHeight: CGFloat = 8
     static let activeTrackHeight: CGFloat = 16
-    static let volumeIconWidth: CGFloat = 16
+    static let minimumHitHeight: CGFloat = 44
+    static let volumeIconWidth: CGFloat = 28
     static let volumeIconSpacing: CGFloat = 10
-    static let trackInset = volumeIconWidth + volumeIconSpacing
+    static let timestampGap: CGFloat = 6
+    // Let timestamps overlap only the invisible lower portion of the hit area.
+    static let timestampOverlap = (minimumHitHeight - activeTrackHeight) / 2 - timestampGap
 }
 
 struct NowPlayingView: View {
@@ -211,7 +214,7 @@ struct NowPlayingView: View {
     }
 
     private var scrubber: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: -PlayerControlMetrics.timestampOverlap) {
             ThinScrubber(value: Binding(
                 get: { scrubbing ? draft : min(playbackClock.position, duration) },
                 set: { draft = $0 }
@@ -236,8 +239,8 @@ struct NowPlayingView: View {
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.white.opacity(0.6))
+            .allowsHitTesting(false)
         }
-        .padding(.horizontal, PlayerControlMetrics.trackInset)
     }
 
     private var transport: some View {
@@ -480,7 +483,7 @@ struct ThinScrubber: View {
                     }
             )
         }
-        .frame(height: 44)
+        .frame(height: PlayerControlMetrics.minimumHitHeight)
         .opacity(isEnabled ? 1 : 0.45)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: dragging)
         .accessibilityElement(children: .ignore)
@@ -674,19 +677,31 @@ struct LyricsReader: View {
 struct SystemVolumeBar: View {
     var body: some View {
         HStack(spacing: PlayerControlMetrics.volumeIconSpacing) {
-            Image(systemName: "speaker.fill")
-                .font(.footnote)
-                .frame(width: PlayerControlMetrics.volumeIconWidth)
-                .accessibilityHidden(true)
+            VolumeSpeaker(symbol: "speaker.fill", alignment: .leading)
             NativeVolumeView()
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.footnote)
-                .frame(width: PlayerControlMetrics.volumeIconWidth)
-                .accessibilityHidden(true)
+                .frame(height: PlayerControlMetrics.minimumHitHeight)
+            VolumeSpeaker(symbol: "speaker.wave.3.fill", alignment: .trailing)
         }
         .foregroundStyle(.white.opacity(0.6))
+    }
+}
+
+private struct VolumeSpeaker: View {
+    let symbol: String
+    let alignment: Alignment
+
+    var body: some View {
+        let image = UIImage(systemName: symbol) ?? UIImage()
+        let height = PlayerControlMetrics.activeTrackHeight
+        let width = height * image.size.width / max(1, image.size.height)
+        Image(uiImage: image)
+            .resizable()
+            .renderingMode(.template)
+            .frame(width: width, height: height)
+            .frame(width: PlayerControlMetrics.volumeIconWidth,
+                   height: PlayerControlMetrics.minimumHitHeight, alignment: alignment)
+            .accessibilityHidden(true)
     }
 }
 
