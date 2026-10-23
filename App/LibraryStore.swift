@@ -15,11 +15,31 @@ final class LibraryStore: ObservableObject {
     private let scanner: AudioScanner
     private var job: Task<Void, Never>?
     private var indexURL: URL { root.appendingPathComponent("library.json") }
+    private var backupURL: URL { root.appendingPathComponent("library.backup.json") }
     private var playbackURL: URL { root.appendingPathComponent("playback.json") }
     /// Resume point, queue, shuffle, and repeat. Not `@Published`, so playback ticks do not refresh the library UI.
     private(set) var playback = PlaybackState()
     var tracks: [Track] { snapshot.tracks }
+    /// ID → track index for render paths. Queues, playlists and pages used to
+    /// linear-scan `tracks` for every ID on every view update — O(n²) on a
+    /// large library. The index is rebuilt wherever `snapshot` is replaced
+    /// (init and `persist`, the only two places), so it cannot go stale.
+    private(set) var trackByID: [UUID: Track] = [:]
     static let extensions = AudioScanner.extensions
+
+    func track(_ id: UUID?) -> Track? {
+        guard let id else { return nil }
+        return trackByID[id]
+    }
+
+    /// The tracks for `ids`, in the order asked for, skipping unknown IDs.
+    func tracks(for ids: [UUID]) -> [Track] {
+        ids.compactMap { trackByID[$0] }
+    }
+
+    private func rebuildIndex() {
+        trackByID = Dictionary(snapshot.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -28,8 +48,20 @@ final class LibraryStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: indexURL.path) {
-                snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: indexURL))
+                do {
+                    snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(contentsOf: indexURL))
+                } catch {
+                    // A corrupt main file must not take the whole library
+                    // with it: fall back to the last known-good backup and
+                    // rewrite the main file from it.
+                    guard let data = try? Data(contentsOf: backupURL),
+                          let recovered = try? JSONDecoder().decode(LibrarySnapshot.self, from: data) else { throw error }
+                    snapshot = recovered
+                    errorMessage = "资料库主文件损坏，已从备份恢复"
+                    persist(snapshot)
+                }
             }
+            rebuildIndex()
             loadPlayback()
         } catch { errorMessage = "资料库读取失败：\(error.localizedDescription)" }
     }
@@ -77,9 +109,23 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     private func persist(_ candidate: LibrarySnapshot) -> Bool {
         do {
+            var candidate = candidate
+            candidate.version = LibrarySnapshot.currentVersion
+            rotateBackup()
             try JSONEncoder().encode(candidate).write(to: indexURL, options: .atomic)
-            snapshot = candidate; return true
+            snapshot = candidate
+            rebuildIndex()
+            return true
         } catch { errorMessage = "资料库保存失败：\(error.localizedDescription)"; return false }
+    }
+
+    /// Keeps the last known-good main file as `library.backup.json` before
+    /// it is replaced. A file that no longer decodes never rotates in, so a
+    /// corrupt main cannot overwrite a good backup.
+    private func rotateBackup() {
+        guard let data = try? Data(contentsOf: indexURL),
+              (try? JSONDecoder().decode(LibrarySnapshot.self, from: data)) != nil else { return }
+        try? data.write(to: backupURL, options: .atomic)
     }
 
     func remember(id: UUID?, position: Double) {
@@ -253,8 +299,8 @@ final class LibraryStore: ObservableObject {
     }
 
     func coverTrack(for playlist: Playlist) -> Track? {
-        if let id = playlist.coverTrackID, let track = tracks.first(where: { $0.id == id }) { return track }
-        let members = playlist.trackIDs.compactMap { id in tracks.first { $0.id == id } }
+        if let track = track(playlist.coverTrackID) { return track }
+        let members = tracks(for: playlist.trackIDs)
         return members.first { $0.artworkFilename != nil } ?? members.first
     }
 

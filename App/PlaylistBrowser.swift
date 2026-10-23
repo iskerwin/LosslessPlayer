@@ -156,7 +156,7 @@ struct PlaylistHome: View {
     }
 
     private func tracks(in playlist: Playlist) -> [Track] {
-        playlist.trackIDs.compactMap { id in library.tracks.first { $0.id == id } }
+        library.tracks(for: playlist.trackIDs)
     }
 
     private func coverTrack(_ playlist: Playlist) -> Track? {
@@ -211,10 +211,10 @@ struct PlaylistCover: View {
     }
 
     static func choice(for playlist: Playlist, in library: LibraryStore) -> (tracks: [Track?], single: Bool) {
-        let members = playlist.trackIDs.compactMap { id in library.tracks.first { $0.id == id } }
+        let members = library.tracks(for: playlist.trackIDs)
         if let coverID = playlist.coverTrackID,
            !members.contains(where: { $0.id == coverID }),
-           let cover = library.tracks.first(where: { $0.id == coverID }) {
+           let cover = library.track(coverID) {
             return ([cover], true)
         }
         return choice(coverTrackID: playlist.coverTrackID, members: members)

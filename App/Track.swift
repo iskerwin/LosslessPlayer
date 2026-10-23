@@ -123,6 +123,11 @@ extension Playlist: Codable {
 }
 
 struct LibrarySnapshot: Codable {
+    /// On-disk format version. Legacy files have no field and decode as 0;
+    /// every save writes the current version, so migrations can key off it
+    /// instead of guessing from which fields happen to be present.
+    static let currentVersion = 1
+    var version: Int = LibrarySnapshot.currentVersion
     var tracks: [Track] = []
     var currentID: UUID?
     var position: Double = 0
@@ -130,9 +135,10 @@ struct LibrarySnapshot: Codable {
     var playlists: [Playlist] = []
     var queueIDs: [UUID] = []
     init() {}
-    private enum CodingKeys: CodingKey { case tracks, currentID, position, folders, playlists, queueIDs }
+    private enum CodingKeys: CodingKey { case version, tracks, currentID, position, folders, playlists, queueIDs }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 0
         tracks = try c.decodeIfPresent([Track].self, forKey: .tracks) ?? []
         currentID = try c.decodeIfPresent(UUID.self, forKey: .currentID)
         position = try c.decodeIfPresent(Double.self, forKey: .position) ?? 0
