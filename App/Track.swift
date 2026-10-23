@@ -72,9 +72,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
 
     /// Short badge under the Now Playing title. Lossless is a file fact, not a claim of bit-perfect output.
     var qualityBadge: String {
+        if isLosslessSource { return "Lossless" }
         let ext = (filename as NSString).pathExtension.lowercased()
-        let lossless: Set<String> = ["flac", "alac", "wav", "aiff", "aif", "caf"]
-        if lossless.contains(ext) || (ext == "m4a" && bitDepth >= 16) { return "Lossless" }
         if ext.isEmpty { return "音频" }
         return ext.uppercased()
     }

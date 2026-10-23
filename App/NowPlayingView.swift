@@ -382,8 +382,9 @@ struct NowPlayingView: View {
                     LabeledContent("采样率", value: String(format: "%.1f kHz", current.sampleRate / 1000))
                     LabeledContent("格式", value: (current.filename as NSString).pathExtension.uppercased())
                     LabeledContent("输出", value: player.output.isEmpty ? "未知" : player.output)
+                    LabeledContent("播放路径", value: player.pathAssessment?.title ?? "未知")
                     LabeledContent("文件", value: current.relativePath ?? current.filename)
-                    Text("高音质本地播放，声音经过 iOS 系统混音。文件格式和输出采样率都不表示逐位还原。")
+                    Text(player.pathAssessment?.detail ?? "高音质本地播放，声音经过 iOS 系统混音。文件格式和输出采样率都不表示逐位还原。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

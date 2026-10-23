@@ -13,7 +13,7 @@ final class PlaybackClock: ObservableObject {
 }
 
 @MainActor
-final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
+final class PlayerStore: NSObject, ObservableObject {
     @Published private(set) var current: Track?
     @Published private(set) var playing = false
     /// Drives the now-playing slider only. Library screens do not observe this clock.
@@ -23,6 +23,9 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         set { clock.set(newValue) }
     }
     @Published private(set) var output = ""
+    /// End-to-end judgement of the current playback chain, refreshed
+    /// whenever the track, route or actual session rate may have changed.
+    @Published private(set) var pathAssessment: AudioPathAssessment?
     @Published private(set) var shuffle = false
     @Published var repeatMode: RepeatMode = .all {
         didSet { if playbackReady, oldValue != repeatMode { library.rememberTransport(shuffle: shuffle, repeatMode: repeatMode) } }
@@ -37,7 +40,7 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     var contextIDs: [UUID] { ordering.context }
     @Published var errorMessage: String?
     private let library: LibraryStore
-    private var player: AVAudioPlayer?
+    private let engine = EnginePlayer()
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
@@ -55,6 +58,10 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         queueIDs = ordering.queue
         shuffle = saved.shuffle
         repeatMode = saved.repeatMode
+        engine.onFinish = { [weak self] in
+            guard let self else { return }
+            if self.repeatMode == .one { self.seek(0); self.resume() } else { self.skip() }
+        }
         configureRemote()
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -108,7 +115,14 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let scoped = newAccess?.startAccessingSecurityScopedResource() == true
             var accepted = false
             defer { if scoped && !accepted { newAccess?.stopAccessingSecurityScopedResource() } }
-            let next = try AVAudioPlayer(contentsOf: library.url(for: track))
+            // Ask the session for this track's own sample rate before the
+            // engine connects, so the mixer does not have to resample a
+            // 44.1 kHz file to 48 kHz (or a 96 kHz file down) by default.
+            // The request is only a preference; `updateOutput` re-reads the
+            // actual rate afterwards and the path assessment judges that.
+            if autoplay { try prepareSession(for: track, activate: true) }
+            else { prepareSessionPassively(for: track) }
+            try engine.load(url: library.url(for: track), at: time)
             accessRoot?.stopAccessingSecurityScopedResource()
             accessRoot = scoped ? newAccess : nil
             accepted = true
@@ -121,13 +135,10 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     setQueue(library.tracks.filter(\.available).map(\.id), replacingContext: true)
                 }
             }
-            next.delegate = self
-            next.prepareToPlay()
-            player = next
             current = track
-            position = min(max(0, time), next.duration)
-            next.currentTime = position
+            position = min(max(0, time), engine.duration)
             library.remember(id: track.id, position: position)
+            updateOutput()
             updateNowPlaying()
             if autoplay {
                 resume()
@@ -138,7 +149,7 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func toggle() {
         if playing { pause() }
-        else if player != nil { resume() }
+        else if engine.hasFile { resume() }
         else if let first = library.tracks.firstPlayable() { load(first) }
     }
 
@@ -158,41 +169,55 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func resume() {
-        guard let player else { return }
+        guard engine.hasFile else { return }
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
-            playing = player.play()
+            if let current { try prepareSession(for: current, activate: true) }
+            playing = try engine.play()
             if !playing { errorMessage = "音频设备无法开始播放" }
             updateOutput()
             updateNowPlaying()
         } catch { errorMessage = "音频会话启动失败：\(error.localizedDescription)" }
     }
 
+    /// Points the session at the track's sample rate. With `activate` the
+    /// session is (re)activated so the preference can take effect; the
+    /// passive variant only records the preference, so restoring a paused
+    /// track at launch does not interrupt other apps' audio.
+    private func prepareSession(for track: Track, activate: Bool) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .default)
+        if track.sampleRate > 0 { try session.setPreferredSampleRate(track.sampleRate) }
+        if activate { try session.setActive(true) }
+    }
+
+    private func prepareSessionPassively(for track: Track) {
+        try? prepareSession(for: track, activate: false)
+    }
+
     func pause() {
-        player?.pause()
+        position = engine.hasFile ? engine.currentTime : position
+        engine.pause()
         playing = false
-        position = player?.currentTime ?? position
         if let current { library.remember(id: current.id, position: position) }
         updateNowPlaying()
     }
 
     func stopIfCurrent(_ track: Track) {
         guard current?.id == track.id else { return }
-        pause()
-        player = nil
+        engine.stop()
+        playing = false
         accessRoot?.stopAccessingSecurityScopedResource(); accessRoot = nil
         current = nil
         position = 0
+        pathAssessment = nil
         library.remember(id: nil, position: 0)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     func seek(_ time: Double) {
-        guard let player, time.isFinite else { return }
-        position = min(max(0, time), player.duration)
-        player.currentTime = position
+        guard engine.hasFile, time.isFinite else { return }
+        position = min(max(0, time), engine.duration)
+        engine.seek(to: position)
         library.remember(id: current?.id, position: position)
         updateNowPlaying()
     }
@@ -312,15 +337,27 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private func tick() {
         guard playing else { return }
-        position = player?.currentTime ?? 0
+        position = engine.currentTime
         ticks += 1
-        if ticks % 10 == 0 { library.remember(id: current?.id, position: position) }
+        if ticks % 10 == 0 { library.remember(id: current?.id, position: position); updateOutput() }
     }
 
     private func updateOutput() {
         let session = AVAudioSession.sharedInstance()
-        let names = session.currentRoute.outputs.map(\.portName).joined(separator: ", ")
+        let outputs = session.currentRoute.outputs
+        let names = outputs.map(\.portName).joined(separator: ", ")
         output = "\(names.isEmpty ? "系统输出" : names) · \(String(format: "%.1f", session.sampleRate / 1000)) kHz"
+        // The engine's digital volume is pinned at 1.0 (see EnginePlayer);
+        // the system volume shown in the player is the output device gain,
+        // not a scaling of the samples inside the engine.
+        if let current {
+            pathAssessment = AudioPathAssessment.assess(
+                isLosslessSource: current.isLosslessSource,
+                sourceSampleRate: current.sampleRate,
+                sessionSampleRate: session.sampleRate,
+                route: outputs.first.map { AudioRouteKind.from($0.portType) } ?? .other,
+                digitalVolume: 1.0)
+        }
     }
 
     private func updateNowPlaying() {
@@ -361,20 +398,5 @@ final class PlayerStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             return .success
         }
         remoteTargets.append((center.changePlaybackPositionCommand, target))
-    }
-
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            guard let self, self.player === player else { return }
-            if flag {
-                if self.repeatMode == .one { self.seek(0); self.resume() } else { self.skip() }
-            }
-            else { self.pause(); self.errorMessage = "音频播放意外结束" }
-        }
-    }
-
-    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        let message = error?.localizedDescription ?? "无法解码音频"
-        Task { @MainActor [weak self] in self?.pause(); self?.errorMessage = message }
     }
 }

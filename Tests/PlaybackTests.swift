@@ -703,3 +703,66 @@ final class PlaylistManagementTests: XCTestCase {
         XCTAssertEqual(library.snapshot.playlists.first?.trackIDs, [first.id, second.id])
     }
 }
+
+final class AudioPathTests: XCTestCase {
+    private func assess(lossless: Bool = true, source: Double = 44100, session: Double = 44100,
+                        route: AudioRouteKind = .usb, volume: Float = 1.0) -> AudioPathAssessment {
+        AudioPathAssessment.assess(isLosslessSource: lossless, sourceSampleRate: source,
+                                   sessionSampleRate: session, route: route, digitalVolume: volume)
+    }
+
+    func testBitPerfectOnlyWhenEveryConditionHolds() {
+        XCTAssertEqual(assess().level, .bitPerfectPossible)
+        XCTAssertEqual(assess(source: 96000, session: 96000, route: .wired).level, .bitPerfectPossible)
+    }
+
+    func testResampledSessionIsNotBitPerfect() {
+        let path = assess(source: 96000, session: 48000)
+        XCTAssertEqual(path.level, .resampled)
+        XCTAssertTrue(path.detail.contains("96.0 kHz"))
+        XCTAssertTrue(path.detail.contains("48.0 kHz"))
+    }
+
+    func testWirelessRoutesAreNeverBitPerfect() {
+        XCTAssertEqual(assess(route: .bluetooth).level, .wireless)
+        XCTAssertEqual(assess(route: .airPlay).level, .wireless)
+    }
+
+    func testDigitalVolumeBelowUnityBreaksBitPerfect() {
+        XCTAssertEqual(assess(volume: 0.5).level, .digitalVolume)
+        XCTAssertEqual(assess(volume: 0.999).level, .bitPerfectPossible)
+    }
+
+    func testLossySourceDominatesIdealOutput() {
+        XCTAssertEqual(assess(lossless: false).level, .lossySource)
+        XCTAssertEqual(assess(lossless: false, route: .bluetooth).level, .lossySource)
+    }
+
+    func testSpeakerWithMatchedRateIsDirectButNotBitPerfect() {
+        XCTAssertEqual(assess(route: .speaker).level, .directLossless)
+        XCTAssertEqual(assess(session: 0).level, .unknown)
+    }
+
+    func testLosslessSourceDetectionUsesCodecFactsNotJustExtension() {
+        func track(_ file: String, depth: Int) -> Track {
+            Track(id: UUID(), filename: file, title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: depth)
+        }
+        XCTAssertTrue(track("a.flac", depth: 24).isLosslessSource)
+        XCTAssertTrue(track("a.wav", depth: 16).isLosslessSource)
+        XCTAssertTrue(track("a.m4a", depth: 24).isLosslessSource)
+        XCTAssertFalse(track("a.m4a", depth: 0).isLosslessSource)
+        XCTAssertFalse(track("a.mp3", depth: 0).isLosslessSource)
+        XCTAssertFalse(track("a.aac", depth: 0).isLosslessSource)
+        // The badge keeps following the same fact after the refactor.
+        XCTAssertEqual(track("a.flac", depth: 24).qualityBadge, "Lossless")
+        XCTAssertEqual(track("a.mp3", depth: 0).qualityBadge, "MP3")
+    }
+
+    func testRouteKindMappingCoversWirelessAndUSBPorts() {
+        XCTAssertEqual(AudioRouteKind.from(.bluetoothA2DP), .bluetooth)
+        XCTAssertEqual(AudioRouteKind.from(.airPlay), .airPlay)
+        XCTAssertEqual(AudioRouteKind.from(.usbAudio), .usb)
+        XCTAssertEqual(AudioRouteKind.from(.headphones), .wired)
+        XCTAssertEqual(AudioRouteKind.from(.builtInSpeaker), .speaker)
+    }
+}
