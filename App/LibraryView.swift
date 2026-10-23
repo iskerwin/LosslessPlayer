@@ -305,7 +305,7 @@ struct LibraryView: View {
         case .recent: page(recentlyPlayed, title: "最近播放", kind: .recent, showsBack: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
-            page((playlist?.trackIDs ?? []).compactMap { trackID in library.tracks.first { $0.id == trackID } },
+            page(library.tracks(for: playlist?.trackIDs ?? []),
                  title: playlist?.name ?? "歌单", kind: .playlist, playlist: playlist, showsBack: true)
         }
     }
@@ -491,11 +491,19 @@ struct AlbumGroup: Identifiable {
 final class ArtworkCache {
     static let shared = ArtworkCache()
     private let images = NSCache<NSString, UIImage>()
+    init() {
+        // Thumbnails are small, but an unbounded cache grows with every
+        // album ever scrolled past. Cap count and total decoded cost so a
+        // large library cannot push the app into memory pressure.
+        images.countLimit = 300
+        images.totalCostLimit = 64 * 1024 * 1024
+    }
     func image(at url: URL) -> UIImage? {
         let key = url.path as NSString
         if let cached = images.object(forKey: key) { return cached }
         guard let image = UIImage(contentsOfFile: url.path) else { return nil }
-        images.setObject(image, forKey: key)
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        images.setObject(image, forKey: key, cost: cost)
         return image
     }
     func removeAll() { images.removeAllObjects() }

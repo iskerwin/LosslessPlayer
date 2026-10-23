@@ -42,7 +42,7 @@ struct NowPlayingView: View {
     @State private var playlistTarget: Track?
     @GestureState private var dismissOffset: CGFloat = 0
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
-    private var current: Track? { library.tracks.first { $0.id == player.current?.id } }
+    private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
         let duration = current?.duration ?? 0
         return duration.isFinite && duration > 0 ? duration : 0

@@ -118,3 +118,83 @@ final class FolderPlaylistTests: XCTestCase {
         XCTAssertEqual(player.upcomingTracks.map(\.id), [tracks[2].id])
     }
 }
+
+@MainActor
+final class LibraryIndexAndPersistenceTests: XCTestCase {
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+
+    private func writeWAV(to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441))
+        buffer.frameLength = 441
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
+
+    func testIndexResolvesIDsInOrderAndSkipsUnknown() async throws {
+        let base = tempRoot()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        let source = base.appendingPathComponent("song.wav")
+        try writeWAV(to: source)
+        await library.importFiles([source])
+        let track = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(library.track(track.id)?.id, track.id)
+        XCTAssertNil(library.track(nil))
+        XCTAssertNil(library.track(UUID()))
+        XCTAssertEqual(library.tracks(for: [UUID(), track.id]).map(\.id), [track.id])
+        XCTAssertEqual(library.trackByID.count, 1)
+        // The index follows mutations: removing the track must not leave a stale entry.
+        library.remove(track)
+        XCTAssertNil(library.track(track.id))
+        XCTAssertTrue(library.trackByID.isEmpty)
+    }
+
+    func testPersistStampsCurrentVersionAndRotatesBackup() async throws {
+        let base = tempRoot()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("Index")
+        let library = LibraryStore(root: root)
+        let source = base.appendingPathComponent("song.wav")
+        try writeWAV(to: source)
+        await library.importFiles([source])
+        XCTAssertEqual(library.tracks.count, 1)
+        let mainData = try Data(contentsOf: root.appendingPathComponent("library.json"))
+        let decoded = try JSONDecoder().decode(LibrarySnapshot.self, from: mainData)
+        XCTAssertEqual(decoded.version, LibrarySnapshot.currentVersion)
+        // A second save rotates the previous good main file into the backup.
+        _ = library.createPlaylist("Mix")
+        let backupData = try Data(contentsOf: root.appendingPathComponent("library.backup.json"))
+        let backup = try JSONDecoder().decode(LibrarySnapshot.self, from: backupData)
+        XCTAssertEqual(backup.tracks.count, 1)
+        XCTAssertTrue(backup.playlists.isEmpty)
+    }
+
+    func testCorruptMainRecoversFromBackup() async throws {
+        let base = tempRoot()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("Index")
+        let library = LibraryStore(root: root)
+        let source = base.appendingPathComponent("song.wav")
+        try writeWAV(to: source)
+        await library.importFiles([source])
+        _ = library.createPlaylist("Mix") // second save creates the backup
+        XCTAssertEqual(library.tracks.count, 1)
+        try Data("not json".utf8).write(to: root.appendingPathComponent("library.json"))
+        let recovered = LibraryStore(root: root)
+        XCTAssertEqual(recovered.tracks.count, 1)
+        XCTAssertTrue(recovered.errorMessage?.contains("备份") == true)
+        // Recovery rewrites a decodable main file.
+        let mainData = try Data(contentsOf: root.appendingPathComponent("library.json"))
+        XCTAssertEqual(try JSONDecoder().decode(LibrarySnapshot.self, from: mainData).tracks.count, 1)
+    }
+
+    func testLegacySnapshotWithoutVersionDecodesAsZero() throws {
+        let legacy = #"{"tracks":[],"folders":[],"playlists":[],"queueIDs":[]}"#
+        let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(legacy.utf8))
+        XCTAssertEqual(snapshot.version, 0)
+    }
+}

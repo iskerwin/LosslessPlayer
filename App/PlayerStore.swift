@@ -35,7 +35,7 @@ final class PlayerStore: NSObject, ObservableObject {
     private var interruptedWhilePlaying = false
     private var ordering = QueueOrdering()
     private var playbackReady = false
-    var queuedTracks: [Track] { queueIDs.compactMap { id in library.tracks.first { $0.id == id && $0.available } } }
+    var queuedTracks: [Track] { library.tracks(for: queueIDs).filter(\.available) }
     /// The list the user started, in its pre-shuffle order.
     var contextIDs: [UUID] { ordering.context }
     @Published var errorMessage: String?
@@ -88,7 +88,7 @@ final class PlayerStore: NSObject, ObservableObject {
             Task { @MainActor [weak self] in self?.tick() }
         }
         playbackReady = true
-        if let track = library.tracks.first(where: { $0.id == saved.currentID && $0.available }) {
+        if let track = library.track(saved.currentID), track.available {
             load(track, autoplay: false, at: saved.position, keepTransport: true)
         }
         updateOutput()
@@ -320,7 +320,7 @@ final class PlayerStore: NSObject, ObservableObject {
         ordering.context.removeAll { !live.contains($0) }
         setQueue(queueIDs.filter { live.contains($0) }, replacingContext: false)
         if let old = current {
-            if let track = library.tracks.first(where: { $0.id == old.id }) {
+            if let track = library.track(old.id) {
                 current = track
                 if !track.available { pause() }
             } else { stopIfCurrent(old) }
@@ -331,7 +331,7 @@ final class PlayerStore: NSObject, ObservableObject {
         if backwards && position > 3 { seek(0); return }
         let id = PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off)
             .next(after: current?.id, backwards: backwards)
-        if let track = library.tracks.first(where: { $0.id == id && $0.available }) { load(track) }
+        if let track = library.track(id), track.available { load(track) }
         else { pause(); seek(0) }
     }
 
