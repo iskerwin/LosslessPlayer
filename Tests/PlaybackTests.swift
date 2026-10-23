@@ -766,3 +766,37 @@ final class AudioPathTests: XCTestCase {
         XCTAssertEqual(AudioRouteKind.from(.builtInSpeaker), .speaker)
     }
 }
+
+final class SearchResultsTests: XCTestCase {
+    private func track(_ title: String, artist: String, album: String, file: String) -> Track {
+        Track(id: UUID(), filename: file, title: title, artist: artist, album: album, duration: 1, sampleRate: 44100, bitDepth: 16)
+    }
+
+    private var library: [Track] {
+        [track("Blue Sky", artist: "Ada", album: "Horizons", file: "a.flac"),
+         track("Ocean", artist: "Blue Band", album: "Deep", file: "b.flac"),
+         track("River", artist: "Cora", album: "Blue Notes", file: "c.flac"),
+         track("Mountain", artist: "Ada", album: "Horizons", file: "d.flac")]
+    }
+
+    func testSearchGroupsArtistsAlbumsAndRankedSongs() {
+        let results = SearchResults.group(tracks: library, query: "blue")
+        XCTAssertEqual(results.artists, ["Blue Band"])
+        XCTAssertEqual(results.albums.map(\.name), ["Blue Notes", "Deep", "Horizons"])
+        // Title match first, then artist match, then album match.
+        XCTAssertEqual(results.songs.map(\.title), ["Blue Sky", "Ocean", "River"])
+    }
+
+    func testSearchByAlbumNameFindsTheAlbumAndItsSongs() {
+        let results = SearchResults.group(tracks: library, query: "Horizons")
+        XCTAssertEqual(results.albums.map(\.name), ["Horizons"])
+        XCTAssertEqual(Set(results.songs.map(\.title)), ["Blue Sky", "Mountain"])
+        XCTAssertTrue(results.artists.isEmpty)
+    }
+
+    func testEmptyAndUnknownQueriesReturnNoResults() {
+        XCTAssertTrue(SearchResults.group(tracks: library, query: "").isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: library, query: "   ").isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: library, query: "zzzz").isEmpty)
+    }
+}

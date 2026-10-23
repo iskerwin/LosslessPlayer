@@ -180,12 +180,92 @@ struct LibraryView: View {
     }
 
     private var searchPage: some View {
-        page(library.tracks.filter { $0.matchesSearch(query) }, title: "搜索", kind: .search, showsBack: false)
+        searchResults
             .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑")
             .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("搜索")
+            .navigationBarTitleDisplayMode(.large)
             .onChange(of: tab) { _, new in
                 if new != .search { searchFieldFocused = false }
             }
+    }
+
+    /// Grouped results the way Music presents them — artists, albums, then
+    /// songs — instead of one flat song list where albums and artists only
+    /// exist implicitly through their songs. An empty query shows the
+    /// search prompt, not the whole library.
+    @ViewBuilder private var searchResults: some View {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
+                                   description: Text("输入歌曲、艺术家或专辑名称"))
+        } else {
+            let results = SearchResults.group(tracks: library.tracks, query: query)
+            if results.isEmpty {
+                ContentUnavailableView.search(text: query)
+            } else {
+                List {
+                    if !results.artists.isEmpty {
+                        Section("艺术家") {
+                            ForEach(results.artists, id: \.self) { artist in
+                                let tracks = results.songs.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
+                                browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first,
+                                          groups: collectionGroups(tracks, order: .title)) {
+                                    open(.artist(artist))
+                                }
+                            }
+                        }
+                    }
+                    if !results.albums.isEmpty {
+                        Section("专辑") {
+                            ForEach(results.albums) { album in
+                                browseRow(title: album.name, subtitle: album.artist,
+                                          artwork: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
+                                          groups: collectionGroups(album.tracks, artist: artistRoute(for: album))) {
+                                    open(.album(album.id))
+                                }
+                            }
+                        }
+                    }
+                    if !results.songs.isEmpty {
+                        Section("歌曲") {
+                            ForEach(results.songs) { track in
+                                SongContextRow(track: track, root: library.root,
+                                               current: player.current?.id == track.id,
+                                               playing: player.playing && player.current?.id == track.id,
+                                               handlers: searchHandlers(results.songs))
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        Button("从资料库中删除", role: .destructive) { pendingDelete = [track] }
+                                        Button("添加到歌单") { playlistBatch = TrackBatch(tracks: [track]) }.tint(MusicTheme.accent)
+                                    }
+                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                        Button { library.toggleFavorite(track) } label: {
+                                            Label(track.favorite ? "取消收藏" : "收藏", systemImage: "star")
+                                        }
+                                        .tint(MusicTheme.accent)
+                                    }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .accessibilityIdentifier("search-results")
+            }
+        }
+    }
+
+    private func searchHandlers(_ songs: [Track]) -> SongHandlers {
+        SongHandlers(
+            play: { player.load($0, context: songs) },
+            favorite: { library.toggleFavorite($0) },
+            playlist: { playlistBatch = TrackBatch(tracks: [$0]) },
+            playNext: { player.enqueue([$0], next: true) },
+            addToQueue: { player.enqueue([$0], next: false) },
+            album: { open(.album($0.albumID)) },
+            artist: { open(.artist($0.primaryArtist)) },
+            lyrics: { lyricsTrack = $0 },
+            delete: { pendingDelete = [$0] }
+        )
     }
 
     private var libraryMore: some View {
@@ -473,6 +553,38 @@ enum LibraryRoute: Hashable {
 
 private enum AppTab: Hashable {
     case library, playlists, favorites, search
+}
+
+/// Search results grouped the way Music presents them: matching artists
+/// and albums become their own results (tappable through to their pages),
+/// and songs are ranked title match first, then artist, then album, so the
+/// thing the user most likely typed is at the top.
+struct SearchResults {
+    var songs: [Track] = []
+    var albums: [AlbumGroup] = []
+    var artists: [String] = []
+    var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty }
+
+    static func group(tracks: [Track], query: String) -> SearchResults {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return SearchResults() }
+        let matched = tracks.filter { $0.matchesSearch(query) }
+        func rank(_ track: Track) -> Int {
+            if track.title.localizedCaseInsensitiveContains(query) { return 0 }
+            if track.artistNames.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return 1 }
+            if track.album.localizedCaseInsensitiveContains(query) { return 2 }
+            return 3
+        }
+        let songs = matched.sorted {
+            let a = rank($0), b = rank($1)
+            if a != b { return a < b }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        let needle = AudioTags.normalized(query)
+        let artists = Array(Set(matched.flatMap(\.artistNames).filter { AudioTags.normalized($0).contains(needle) }))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists)
+    }
 }
 
 struct AlbumGroup: Identifiable {
