@@ -182,6 +182,8 @@ struct NowPlayingView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("now-playing-artwork")
                 .highPriorityGesture(dismissGesture)
                 .simultaneousGesture(artworkSwipeGesture)
             } else if panel == .lyrics {

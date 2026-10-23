@@ -103,15 +103,19 @@ final class GlassScreenshots: XCTestCase {
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
-        // Swipe left across the artwork: next track, like Music.
-        let startLeft = player.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.32))
-        startLeft.press(forDuration: 0.1, thenDragTo: player.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.32)))
-        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+        // Let the zoom presentation settle before dragging the artwork.
+        sleep(1)
+        let artwork = app.descendants(matching: .any)["now-playing-artwork"]
+        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
+        // Swipe left across the artwork itself: next track, like Music.
+        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+            .press(forDuration: 0.2, thenDragTo: artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)))
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
         XCTAssertFalse(player.staticTexts["Apologize"].exists)
         // Swipe right: back to the previous track.
-        let startRight = player.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.32))
-        startRight.press(forDuration: 0.1, thenDragTo: player.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.32)))
-        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
+            .press(forDuration: 0.2, thenDragTo: artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 8))
         save("now-playing-swipe")
     }
 
