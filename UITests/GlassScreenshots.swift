@@ -92,6 +92,29 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(player.exists)
     }
 
+    func testArtworkSwipeChangesTrack() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        mini.tap()
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        // Swipe left across the artwork: next track, like Music.
+        let startLeft = player.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.32))
+        startLeft.press(forDuration: 0.1, thenDragTo: player.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.32)))
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+        XCTAssertFalse(player.staticTexts["Apologize"].exists)
+        // Swipe right: back to the previous track.
+        let startRight = player.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.32))
+        startRight.press(forDuration: 0.1, thenDragTo: player.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.32)))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        save("now-playing-swipe")
+    }
+
     func testAlbumGridAndPlaylistArtworkEntry() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

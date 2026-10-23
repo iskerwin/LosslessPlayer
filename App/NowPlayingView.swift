@@ -16,6 +16,21 @@ enum PlayerControlMetrics {
     static let timestampOverlap = (minimumHitHeight - activeTrackHeight) / 2 - timestampGap
 }
 
+/// Horizontal artwork swipe, the way Music changes tracks: swipe left for
+/// the next track, right for the previous. Pure decision logic so the
+/// thresholds stay testable. A swipe must travel 60pt and be clearly more
+/// horizontal than vertical, so it never fights pull-down-to-dismiss.
+enum ArtworkSwipe {
+    enum Direction { case next, previous }
+    static func direction(for translation: CGSize) -> Direction? {
+        guard follows(translation), abs(translation.width) > 60 else { return nil }
+        return translation.width < 0 ? .next : .previous
+    }
+    static func follows(_ translation: CGSize) -> Bool {
+        abs(translation.width) > abs(translation.height) * 1.5
+    }
+}
+
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -41,6 +56,7 @@ struct NowPlayingView: View {
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var dismissOffset: CGFloat = 0
+    @GestureState private var swipeOffset: CGFloat = 0
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
@@ -132,6 +148,25 @@ struct NowPlayingView: View {
             }
     }
 
+    /// Simultaneous with the dismiss drag on purpose: each gesture only
+    /// reacts to its own dominant direction, so a diagonal drag resolves to
+    /// exactly one of skip or dismiss, never both.
+    private var artworkSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .updating($swipeOffset) { value, offset, _ in
+                if ArtworkSwipe.follows(value.translation) {
+                    offset = value.translation.width
+                }
+            }
+            .onEnded { value in
+                switch ArtworkSwipe.direction(for: value.translation) {
+                case .next: player.skip()
+                case .previous: player.skip(backwards: true)
+                case nil: break
+                }
+            }
+    }
+
     @ViewBuilder private var stage: some View {
         ZStack {
             if panel == .artwork {
@@ -141,11 +176,14 @@ struct NowPlayingView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                         .scaleEffect(player.playing ? 1 : 0.86)
+                        .offset(x: reduceMotion ? 0 : swipeOffset)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
+                        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: swipeOffset)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
                 .highPriorityGesture(dismissGesture)
+                .simultaneousGesture(artworkSwipeGesture)
             } else if panel == .lyrics {
                 lyricsPanel
             } else {
