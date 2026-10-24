@@ -1,0 +1,24 @@
+{
+  "identifier": "com.iskerwin.apps",
+  "name": "iskerwin",
+  "sourceURL": "https://raw.githubusercontent.com/iskerwin/LosslessPlayer/main/apps.json",
+  "apps": [
+    {
+      "name": "Lossless",
+      "bundleIdentifier": "com.iskerwin.LosslessPlayer",
+      "developerName": "iskerwin",
+      "subtitle": "本地无损音乐播放器",
+      "localizedDescription": "iOS 17+ 本地无损音乐播放器（SwiftUI + AVFoundation），交互对齐 Apple Music。dev-58-1：播放页封面左右滑切歌（PR #16）。",
+      "versions": [
+        {
+          "version": "0.2.0",
+          "buildVersion": "58",
+          "date": "2026-10-24",
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-58-1/LosslessPlayer-dev-unsigned.ipa",
+          "size": 5264244,
+          "localizedDescription": "dev-58-1：封面左右滑动切歌；已含资料库性能与可靠性（PR #14）、搜索对齐 Apple Music（PR #15）。"
+        }
+      ]
+    }
+  ]
+}
