@@ -102,19 +102,29 @@ final class GlassScreenshots: XCTestCase {
         mini.tap()
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
         XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
-        // Let the zoom presentation settle before dragging the artwork.
+        // Let the zoom presentation settle before interacting.
         sleep(1)
-        let artwork = app.descendants(matching: .any)["now-playing-artwork"]
-        XCTAssertTrue(artwork.waitForExistence(timeout: 5))
-        // Swipe left across the artwork itself: next track, like Music.
-        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-            .press(forDuration: 0.2, thenDragTo: artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)))
+        // Control group: the transport buttons must change the track in this
+        // same UI context. If this fails, playback — not the gesture — is
+        // broken; if it passes, only the swipe assertions below can fail.
+        app.buttons["下一首"].tap()
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        app.buttons["上一首"].tap()
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 8))
+        // Swipe left across the artwork (screen coordinates, independent of
+        // any element's accessibility frame): next track, like Music.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35))
+            .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35)))
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
         XCTAssertFalse(player.staticTexts["Apologize"].exists)
+        // Pause so the position stays under the 3-second restart threshold
+        // of skip(backwards:) no matter how slow the simulator runs.
+        app.buttons["暂停"].tap()
         // Swipe right: back to the previous track.
-        artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
-            .press(forDuration: 0.2, thenDragTo: artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35))
+            .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35)))
         XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 8))
         save("now-playing-swipe")
     }
