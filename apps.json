@@ -8,8 +8,16 @@
       "bundleIdentifier": "com.iskerwin.LosslessPlayer",
       "developerName": "iskerwin",
       "subtitle": "本地无损音乐播放器",
-      "localizedDescription": "iOS 17+ 本地无损音乐播放器（SwiftUI + AVFoundation），交互对齐 Apple Music。dev-58-1：播放页封面左右滑切歌（PR #16）。",
+      "localizedDescription": "iOS 17+ 本地无损音乐播放器（SwiftUI + AVFoundation），交互对齐 Apple Music。",
       "versions": [
+        {
+          "version": "0.2.0",
+          "buildVersion": "62",
+          "date": "2026-10-24",
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-62-1/LosslessPlayer-dev-unsigned.ipa",
+          "size": 5289010,
+          "localizedDescription": "dev-62-1：正在播放过渡对齐 Apple Music——收起不回弹、切歌滑动、面板淡入淡出（PR #18）。"
+        },
         {
           "version": "0.2.0",
           "buildVersion": "58",
