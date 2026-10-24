@@ -58,6 +58,15 @@ struct NowPlayingView: View {
     @GestureState private var dismissOffset: CGFloat = 0
     @GestureState private var artworkDrag: CGSize = .zero
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
+    /// Set the moment a drag releases past the dismiss threshold: the sheet
+    /// is leaving, so the drag offsets must freeze instead of springing back
+    /// to zero while the cover slides down (that double motion reads as a
+    /// stutter). `frozenDismissY` holds the release position for the ride down.
+    @State private var dismissing = false
+    @State private var frozenDismissY: CGFloat = 0
+    /// Direction of the most recent track change, so the artwork/title slide
+    /// the way Music does: next slides in from the right, previous from the left.
+    @State private var skipDirection: ArtworkSwipe.Direction = .next
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
         let duration = current?.duration ?? 0
@@ -67,6 +76,7 @@ struct NowPlayingView: View {
     var body: some View {
         ZStack {
             ArtworkBackdrop(colors: palette)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
             GeometryReader { geometry in
                 if geometry.size.height < 600 || dynamicTypeSize.isAccessibilitySize {
                     ScrollView {
@@ -77,10 +87,10 @@ struct NowPlayingView: View {
                 }
             }
         }
-        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY)
+        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
         .background(Color(white: 0.08).ignoresSafeArea())
-        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
-        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
+        .animation(dismissing || reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
+        .animation(dismissing || reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -144,6 +154,8 @@ struct NowPlayingView: View {
             .onEnded { value in
                 if value.translation.height > 90,
                    value.translation.height > abs(value.translation.width) * 1.5 {
+                    frozenDismissY = max(0, value.translation.height)
+                    dismissing = true
                     dismiss()
                 }
             }
@@ -161,9 +173,12 @@ struct NowPlayingView: View {
             }
             .onEnded { value in
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
+                    skipDirection = direction
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
+                    frozenDismissY = max(0, value.translation.height)
+                    dismissing = true
                     dismiss()
                 }
             }
@@ -186,6 +201,8 @@ struct NowPlayingView: View {
                 GeometryReader { geometry in
                     let side = max(0, min(geometry.size.width * 0.90, geometry.size.height * 0.9))
                     ArtworkView(track: current, root: library.root, size: side, placeholder: .neutral)
+                        .id(current?.id)
+                        .transition(trackTransition)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                         .scaleEffect(player.playing ? 1 : 0.86)
@@ -198,13 +215,28 @@ struct NowPlayingView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("now-playing-artwork")
                 .highPriorityGesture(artworkGesture)
+                .transition(.opacity)
             } else if panel == .lyrics {
                 lyricsPanel
+                    .transition(.opacity)
             } else {
                 queuePanel
+                    .transition(.opacity)
             }
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+    }
+
+    /// Track-change transition, the way Music slides artwork: the incoming
+    /// track enters from the skip direction, the outgoing one leaves the
+    /// opposite way, both fading. Used by the artwork and the title block.
+    private var trackTransition: AnyTransition {
+        let incoming: Edge = skipDirection == .next ? .trailing : .leading
+        let outgoing: Edge = skipDirection == .next ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: incoming).combined(with: .opacity),
+            removal: .move(edge: outgoing).combined(with: .opacity))
     }
 
     private var titleBlock: some View {
@@ -231,6 +263,8 @@ struct NowPlayingView: View {
                         Text("选择一首歌曲").font(.title3).foregroundStyle(.white.opacity(0.6))
                     }
                 }
+                .id(current?.id)
+                .transition(trackTransition)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let current {
                     Button { library.toggleFavorite(current) } label: {
@@ -263,6 +297,7 @@ struct NowPlayingView: View {
                 }
             }
         }
+        .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
     }
 
     private var scrubber: some View {
@@ -298,11 +333,11 @@ struct NowPlayingView: View {
     private var transport: some View {
         let symbol = player.playing ? "pause.fill" : "play.fill"
         return HStack {
-            transportButton("backward.fill", label: "上一首", size: 34) { player.skip(backwards: true) }
+            transportButton("backward.fill", label: "上一首", size: 34) { skipDirection = .previous; player.skip(backwards: true) }
             Spacer()
             transportButton(symbol, label: player.playing ? "暂停" : "播放", size: 44) { player.toggle() }
             Spacer()
-            transportButton("forward.fill", label: "下一首", size: 34) { player.skip() }
+            transportButton("forward.fill", label: "下一首", size: 34) { skipDirection = .next; player.skip() }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 10)
