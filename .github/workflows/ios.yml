@@ -168,3 +168,47 @@ jobs:
           gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
             --title "Lossless 开发版 $RELEASE_TAG" --notes-file build/release-notes.md \
             build/LosslessPlayer-dev-unsigned.ipa build/SHA256SUMS.txt
+      # Prepend the just-published build to the AltStore source so Zeus /
+      # AltStore / SideStore subscribers actually see updates. The commit
+      # carries [skip ci] so this push does not trigger another release run.
+      - name: Update AltStore source (apps.json)
+        env:
+          RELEASE_TAG: dev-${{ github.run_number }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 - <<'PY'
+          import datetime, json, os, pathlib, plistlib, zipfile
+          tag = os.environ["RELEASE_TAG"]
+          ipa = pathlib.Path("build/LosslessPlayer-dev-unsigned.ipa")
+          with zipfile.ZipFile(ipa) as archive:
+              info = plistlib.loads(archive.read("Payload/LosslessPlayer.app/Info.plist"))
+          source_path = pathlib.Path("apps.json")
+          source = json.loads(source_path.read_text())
+          app = source["apps"][0]
+          previous = app["versions"][0] if app.get("versions") else {}
+          entry = dict(previous)
+          entry.update({
+              "version": info["CFBundleShortVersionString"],
+              "buildVersion": str(info["CFBundleVersion"]),
+              "date": datetime.date.today().isoformat(),
+              "downloadURL": f"https://github.com/iskerwin/LosslessPlayer/releases/download/{tag}/LosslessPlayer-dev-unsigned.ipa",
+              "size": ipa.stat().st_size,
+              "localizedDescription": f"{tag}：最新开发版（自动发布）。",
+          })
+          versions = [v for v in app.get("versions", []) if v.get("buildVersion") != entry["buildVersion"]]
+          versions.insert(0, entry)
+          app["versions"] = versions[:10]
+          source_path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n")
+          print("source now at build", entry["buildVersion"])
+          PY
+          git add apps.json
+          if git diff --cached --quiet; then
+            echo "apps.json unchanged"
+          else
+            git commit -m "Update AltStore source for $RELEASE_TAG [skip ci]"
+            git push origin main
+          fi
