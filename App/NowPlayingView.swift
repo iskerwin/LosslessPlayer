@@ -16,6 +16,21 @@ enum PlayerControlMetrics {
     static let timestampOverlap = (minimumHitHeight - activeTrackHeight) / 2 - timestampGap
 }
 
+/// Horizontal artwork swipe, the way Music changes tracks: swipe left for
+/// the next track, right for the previous. Pure decision logic so the
+/// thresholds stay testable. A swipe must travel 60pt and be clearly more
+/// horizontal than vertical, so it never fights pull-down-to-dismiss.
+enum ArtworkSwipe {
+    enum Direction { case next, previous }
+    static func direction(for translation: CGSize) -> Direction? {
+        guard follows(translation), abs(translation.width) > 60 else { return nil }
+        return translation.width < 0 ? .next : .previous
+    }
+    static func follows(_ translation: CGSize) -> Bool {
+        abs(translation.width) > abs(translation.height) * 1.5
+    }
+}
+
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -41,6 +56,7 @@ struct NowPlayingView: View {
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var dismissOffset: CGFloat = 0
+    @GestureState private var artworkDrag: CGSize = .zero
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
@@ -61,9 +77,10 @@ struct NowPlayingView: View {
                 }
             }
         }
-        .offset(y: reduceMotion ? 0 : dismissOffset)
+        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY)
         .background(Color(white: 0.08).ignoresSafeArea())
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
+        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -132,6 +149,37 @@ struct NowPlayingView: View {
             }
     }
 
+    /// One drag gesture owns the artwork area and decides by dominant
+    /// direction on release: mostly horizontal past 60pt skips, mostly down
+    /// past 90pt dismisses. A single high-priority gesture cannot be
+    /// starved by the zoom transition or by a second competing recognizer,
+    /// which two cooperating drag gestures could not rule out.
+    private var artworkGesture: some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .updating($artworkDrag) { value, state, _ in
+                state = value.translation
+            }
+            .onEnded { value in
+                if let direction = ArtworkSwipe.direction(for: value.translation) {
+                    if direction == .next { player.skip() } else { player.skip(backwards: true) }
+                } else if value.translation.height > 90,
+                          value.translation.height > abs(value.translation.width) * 1.5 {
+                    dismiss()
+                }
+            }
+    }
+
+    /// Vertical follow for the artwork drag: only the dominant-down part
+    /// moves the whole sheet, mirroring the handle's pull.
+    private var artworkPullY: CGFloat {
+        artworkDrag.height > abs(artworkDrag.width) * 1.5 ? max(0, artworkDrag.height) : 0
+    }
+
+    /// Horizontal follow for the artwork drag while it is horizontal-dominant.
+    private var artworkSwipeX: CGFloat {
+        ArtworkSwipe.follows(artworkDrag) ? artworkDrag.width : 0
+    }
+
     @ViewBuilder private var stage: some View {
         ZStack {
             if panel == .artwork {
@@ -141,11 +189,15 @@ struct NowPlayingView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                         .scaleEffect(player.playing ? 1 : 0.86)
+                        .offset(x: reduceMotion ? 0 : artworkSwipeX)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
+                        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
-                .highPriorityGesture(dismissGesture)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("now-playing-artwork")
+                .highPriorityGesture(artworkGesture)
             } else if panel == .lyrics {
                 lyricsPanel
             } else {

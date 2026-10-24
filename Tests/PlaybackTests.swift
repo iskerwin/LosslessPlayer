@@ -800,3 +800,22 @@ final class SearchResultsTests: XCTestCase {
         XCTAssertTrue(SearchResults.group(tracks: library, query: "zzzz").isEmpty)
     }
 }
+
+final class ArtworkSwipeTests: XCTestCase {
+    func testLeftSwipeIsNextAndRightSwipeIsPrevious() {
+        XCTAssertEqual(ArtworkSwipe.direction(for: CGSize(width: -120, height: 10)), .next)
+        XCTAssertEqual(ArtworkSwipe.direction(for: CGSize(width: 120, height: -10)), .previous)
+    }
+
+    func testShortOrVerticalDragsDoNotSkip() {
+        XCTAssertNil(ArtworkSwipe.direction(for: CGSize(width: -59, height: 0)))
+        XCTAssertNil(ArtworkSwipe.direction(for: CGSize(width: -120, height: 100)))
+        XCTAssertNil(ArtworkSwipe.direction(for: CGSize(width: 0, height: 200)))
+    }
+
+    func testFollowRequiresHorizontalDominance() {
+        XCTAssertTrue(ArtworkSwipe.follows(CGSize(width: -80, height: 40)))
+        XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))
+        XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
+    }
+}

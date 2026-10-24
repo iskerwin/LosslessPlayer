@@ -92,6 +92,58 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(player.exists)
     }
 
+    /// Control case, split out so a failure summary names the broken half:
+    /// if this fails, skip/load is broken in the UI context; if only the
+    /// swipe case below fails, the gesture is. Button queries are scoped to
+    /// the player — the mini player behind the cover has buttons with the
+    /// same labels ("下一首", "暂停"), and an unscoped query can pick those.
+    func testTransportButtonsChangeTrack() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        mini.tap()
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        sleep(1)
+        player.buttons["下一首"].tap()
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        player.buttons["上一首"].tap()
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 8))
+    }
+
+    func testArtworkSwipeChangesTrack() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        mini.tap()
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        // Let the zoom presentation settle before dragging.
+        sleep(1)
+        // Swipe left across the artwork (screen coordinates, independent of
+        // any element's accessibility frame): next track, like Music.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35))
+            .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35)))
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        XCTAssertFalse(player.staticTexts["Apologize"].exists)
+        // Pause so the position stays under the 3-second restart threshold
+        // of skip(backwards:) no matter how slow the simulator runs.
+        player.buttons["暂停"].tap()
+        // Swipe right: back to the previous track.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35))
+            .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35)))
+        XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 8))
+        save("now-playing-swipe")
+    }
+
     func testAlbumGridAndPlaylistArtworkEntry() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
