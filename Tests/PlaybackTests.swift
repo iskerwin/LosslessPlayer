@@ -819,3 +819,37 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
 }
+
+final class ArtworkAnalysisTests: XCTestCase {
+    private func solidImage(width: CGFloat, height: CGFloat, color: UIColor = .red) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    func testDownscaleCapsLongestSideAndKeepsAspect() {
+        let image = solidImage(width: 240, height: 120)
+        let small = image.downscaled(maxPixel: 96)
+        XCTAssertEqual(small.size.width, 96, accuracy: 0.5)
+        XCTAssertEqual(small.size.height, 48, accuracy: 0.5)
+        XCTAssertTrue(image.downscaled(maxPixel: 300) === image)
+    }
+
+    func testAnalysisBuildsPaletteAndTexture() {
+        let analysis = ArtworkAnalysis.make(from: solidImage(width: 200, height: 200))
+        XCTAssertEqual(analysis.palette.count, 4)
+        guard let backdrop = analysis.backdrop else {
+            return XCTFail("missing backdrop texture")
+        }
+        XCTAssertLessThanOrEqual(max(backdrop.size.width, backdrop.size.height), 40.5)
+    }
+
+    func testAnalysisCacheRoundTrip() {
+        let cache = ArtworkAnalysisCache.shared
+        let analysis = ArtworkAnalysis.make(from: solidImage(width: 80, height: 80))
+        cache.store(analysis, for: "analysis-test.jpg")
+        XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.palette.count, 4)
+        XCTAssertNil(cache.analysis(for: "analysis-missing.jpg"))
+    }
+}
