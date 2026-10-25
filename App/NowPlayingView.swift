@@ -58,6 +58,15 @@ struct NowPlayingView: View {
     @GestureState private var dismissOffset: CGFloat = 0
     @GestureState private var artworkDrag: CGSize = .zero
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
+    /// Blurred artwork texture for the backdrop. It swaps together with its
+    /// filename key, so the crossfade animates the (image, key) pair and a
+    /// stale texture never flashes under a new identity.
+    @State private var backdropImage: UIImage?
+    @State private var backdropKey: String?
+    /// MPVolumeView and AVRoutePickerView are expensive to create; mounting
+    /// them during the presentation's first frames drops the zoom. They
+    /// mount once it has settled, into reserved frames of the same size.
+    @State private var chromeReady = false
     /// Set the moment a drag releases past the dismiss threshold: the sheet
     /// is leaving, so the drag offsets must freeze instead of springing back
     /// to zero while the cover slides down (that double motion reads as a
@@ -75,8 +84,6 @@ struct NowPlayingView: View {
 
     var body: some View {
         ZStack {
-            ArtworkBackdrop(colors: palette)
-                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
             GeometryReader { geometry in
                 if geometry.size.height < 600 || dynamicTypeSize.isAccessibilitySize {
                     ScrollView {
@@ -88,9 +95,23 @@ struct NowPlayingView: View {
             }
         }
         .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
+        // The backdrop hangs as a background, never as a ZStack sibling:
+        // as a sibling its scaled-to-fill image took part in the stack's
+        // size negotiation, the root could size past the window, and the
+        // 560-capped content column centered off-screen (the queue button
+        // landed at x=395 on a ~393pt screen; XCUITest found no hit point).
+        // Backgrounds are sized by the content, never the reverse.
+        .background {
+            ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+        }
         .background(Color(white: 0.08).ignoresSafeArea())
-        .animation(dismissing || reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
-        .animation(dismissing || reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
+        // While a drag is live its value is non-zero and the offset follows
+        // the finger 1:1 with no animation; a spring on the drag value made
+        // the page trail the touch. The spring returns exactly when the
+        // gesture state resets to zero on release, animating the snap-back.
+        .animation(dismissing || reduceMotion || dismissOffset != 0 ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
+        .animation(dismissing || reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -100,9 +121,13 @@ struct NowPlayingView: View {
         // Our drag owns the 90pt threshold; prevent the zoom presentation from
         // independently dismissing a short, fast downward swipe.
         .interactiveDismissDisabled()
-        .onAppear(perform: refreshPalette)
-        .onChange(of: current?.artworkFilename) { _, _ in refreshPalette() }
+        .onAppear(perform: refreshBackdrop)
+        .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
         .onChange(of: current?.id) { _, _ in scrubbing = false }
+        .task {
+            try? await Task.sleep(for: .milliseconds(350))
+            chromeReady = true
+        }
         .accessibilityAction(.escape) { dismiss() }
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(library: library, tracks: [track])
@@ -133,7 +158,7 @@ struct NowPlayingView: View {
                     .padding(.top, 18)
             }
             .fixedSize(horizontal: false, vertical: true)
-            SystemVolumeBar()
+            SystemVolumeBar(ready: chromeReady)
                 .padding(.top, 32)
             bottomRow
                 .padding(.top, 18)
@@ -208,7 +233,7 @@ struct NowPlayingView: View {
                         .scaleEffect(player.playing ? 1 : 0.86)
                         .offset(x: reduceMotion ? 0 : artworkSwipeX)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
-                        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
+                        .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
@@ -360,9 +385,15 @@ struct NowPlayingView: View {
                 panel = panel == .lyrics ? .artwork : .lyrics
             }
             Spacer()
-            RoutePicker()
-                .frame(width: 48, height: 44)
-                .accessibilityLabel("选择音频输出")
+            ZStack {
+                if chromeReady {
+                    RoutePicker()
+                        .accessibilityLabel("选择音频输出")
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: 48, height: 44)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: chromeReady)
             Spacer()
             bottomButton("list.bullet", label: "显示播放队列") {
                 panel = panel == .queue ? .artwork : .queue
@@ -498,9 +529,38 @@ struct NowPlayingView: View {
         )
     }
 
-    private func refreshPalette() {
-        let image = current?.artworkFilename.flatMap { ArtworkCache.shared.image(at: library.root.appendingPathComponent($0)) }
-        palette = ArtworkColors.palette(from: image).map { Color(uiColor: $0) }
+    /// Backdrop data (palette + blurred texture) is computed off the main
+    /// thread from a downscaled copy and cached per artwork file. The old
+    /// version ran Core Image over the full-resolution image on the main
+    /// thread, inside the presentation's first frames.
+    private func refreshBackdrop() {
+        guard let filename = current?.artworkFilename else {
+            palette = ArtworkColors.fallback.map { Color($0) }
+            backdropImage = nil
+            backdropKey = nil
+            return
+        }
+        if let cached = ArtworkAnalysisCache.shared.analysis(for: filename) {
+            applyBackdrop(cached, key: filename)
+            return
+        }
+        let url = library.root.appendingPathComponent(filename)
+        Task { @MainActor in
+            let ready = await Task.detached(priority: .userInitiated) { () -> Bool in
+                guard let image = ArtworkCache.shared.image(at: url) else { return false }
+                ArtworkAnalysisCache.shared.store(ArtworkAnalysis.make(from: image), for: filename)
+                return true
+            }.value
+            guard ready, current?.artworkFilename == filename,
+                  let analysis = ArtworkAnalysisCache.shared.analysis(for: filename) else { return }
+            applyBackdrop(analysis, key: filename)
+        }
+    }
+
+    private func applyBackdrop(_ analysis: ArtworkAnalysis, key: String) {
+        palette = analysis.palette.map { Color(uiColor: $0) }
+        backdropImage = analysis.backdrop
+        backdropKey = key
     }
 }
 
@@ -637,13 +697,17 @@ enum ArtworkColors {
         return UIColor(hue: hue, saturation: min(0.48, saturation * 0.65), brightness: min(0.36, max(0.10, brightness * 0.60)), alpha: 1)
     }
 
+    /// One shared context: creating a CIContext per region per call was a
+    /// visible part of the old main-thread cost.
+    private static let context = CIContext(options: [.workingColorSpace: NSNull()])
+
     private static func average(_ image: CIImage, rect: CGRect) -> UIColor? {
         guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
         filter.setValue(image, forKey: kCIInputImageKey)
         filter.setValue(CIVector(cgRect: rect), forKey: kCIInputExtentKey)
         guard let output = filter.outputImage else { return nil }
         var bitmap = [UInt8](repeating: 0, count: 4)
-        CIContext(options: [.workingColorSpace: NSNull()]).render(
+        context.render(
             output,
             toBitmap: &bitmap,
             rowBytes: 4,
@@ -655,38 +719,88 @@ enum ArtworkColors {
     }
 }
 
+/// Everything the backdrop needs from one artwork, computed once per file
+/// off the main thread: the four-quadrant palette and a small texture that
+/// reads as a blur once stretched full-screen. A static texture replaces
+/// the full-screen mesh gradient, whose per-frame rendering made the
+/// presentation drop frames; a textured backdrop is also what Music
+/// composites behind its player.
+struct ArtworkAnalysis {
+    var palette: [UIColor]
+    var backdrop: UIImage?
+
+    static func make(from image: UIImage) -> ArtworkAnalysis {
+        let small = image.downscaled(maxPixel: 96)
+        return ArtworkAnalysis(palette: ArtworkColors.palette(from: small),
+                               backdrop: small.downscaled(maxPixel: 40))
+    }
+}
+
+final class ArtworkAnalysisCache {
+    static let shared = ArtworkAnalysisCache()
+    private let cache = NSCache<NSString, ArtworkAnalysisBox>()
+
+    private init() { cache.countLimit = 40 }
+
+    func analysis(for filename: String) -> ArtworkAnalysis? {
+        cache.object(forKey: filename as NSString)?.analysis
+    }
+
+    func store(_ analysis: ArtworkAnalysis, for filename: String) {
+        cache.setObject(ArtworkAnalysisBox(analysis), forKey: filename as NSString)
+    }
+}
+
+private final class ArtworkAnalysisBox: NSObject {
+    let analysis: ArtworkAnalysis
+    init(_ analysis: ArtworkAnalysis) { self.analysis = analysis }
+}
+
+extension UIImage {
+    /// Aspect-fit copy whose longest side is at most `maxPixel` points at
+    /// scale 1; returns `self` when already small enough.
+    func downscaled(maxPixel: CGFloat) -> UIImage {
+        let longest = max(size.width, size.height)
+        guard longest > maxPixel, longest > 0 else { return self }
+        let ratio = maxPixel / longest
+        let target = CGSize(width: max(1, (size.width * ratio).rounded()),
+                            height: max(1, (size.height * ratio).rounded()))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+}
+
 struct ArtworkBackdrop: View {
     var colors: [Color]
-    @State private var drift = false
+    var image: UIImage? = nil
+    var imageKey: String? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if #available(iOS 18, *) {
-                MeshGradient(width: 3, height: 3, points: points, colors: meshColors)
-            } else {
-                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        ZStack {
+            LinearGradient(colors: colors.isEmpty ? ArtworkColors.fallback.map { Color(uiColor: $0) } : colors,
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .id(imageKey)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
             }
         }
         .overlay {
-            LinearGradient(colors: [.white.opacity(0.06), .clear, .black.opacity(0.32)],
-                           startPoint: .top, endPoint: .bottom)
+            ZStack {
+                Color.black.opacity(image == nil ? 0 : 0.22)
+                LinearGradient(colors: [.white.opacity(0.06), .clear, .black.opacity(0.32)],
+                               startPoint: .top, endPoint: .bottom)
+            }
         }
         .ignoresSafeArea()
-        .onAppear { drift = true }
-    }
-
-    private var meshColors: [Color] {
-        let base = colors.isEmpty ? ArtworkColors.fallback.map { Color(uiColor: $0) } : colors
-        return (0..<9).map { base[$0 % base.count] }
-    }
-
-    private var points: [SIMD2<Float>] {
-        let nudge: Float = drift ? 0.08 : -0.04
-        return [
-            SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(1, 0),
-            SIMD2(0, 0.5 + nudge), SIMD2(0.5 + nudge, 0.48), SIMD2(1, 0.5 - nudge),
-            SIMD2(0, 1), SIMD2(0.5, 1), SIMD2(1, 1)
-        ]
+        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: imageKey)
     }
 }
 
@@ -763,12 +877,25 @@ struct LyricsReader: View {
 }
 
 struct SystemVolumeBar: View {
+    /// False only during the presentation's first moments: the reserved
+    /// frame keeps the layout identical while the native view is deferred.
+    var ready: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         HStack(spacing: PlayerControlMetrics.volumeIconSpacing) {
             VolumeSpeaker(symbol: "speaker.fill", alignment: .leading)
-            NativeVolumeView()
-                .frame(maxWidth: .infinity)
-                .frame(height: PlayerControlMetrics.minimumHitHeight)
+            Group {
+                if ready {
+                    NativeVolumeView()
+                        .transition(.opacity)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: PlayerControlMetrics.minimumHitHeight)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: ready)
             VolumeSpeaker(symbol: "speaker.wave.3.fill", alignment: .trailing)
         }
         .foregroundStyle(.white.opacity(0.6))
