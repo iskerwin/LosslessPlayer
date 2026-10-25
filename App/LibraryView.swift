@@ -11,6 +11,9 @@ struct LibraryView: View {
     @State private var searchPath = NavigationPath()
     @State private var searchFieldFocused = false
     @State private var showPlayer = false
+    /// The player overlay stays mounted while a collapse plays (artwork
+    /// flight + fade) and unmounts when it lands; see setPlayer(_:).
+    @State private var playerMounted = false
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -23,20 +26,34 @@ struct LibraryView: View {
     @State private var lyricsTrack: Track?
     @State private var renamingPlaylist: Playlist?
     @Namespace private var playerZoom
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exportPresented = false
     @State private var exportText = ""
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
+    /// One spring drives the whole expand/collapse — artwork morph,
+    /// library recede and player fade — so the parts never drift apart.
+    static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
+
     var body: some View {
-        playerTabs
-            .fullScreenCover(isPresented: $showPlayer) {
+        ZStack {
+            playerTabs
+                .scaleEffect(reduceMotion ? 1 : (showPlayer ? 0.96 : 1))
+                .brightness(reduceMotion ? 0 : (showPlayer ? -0.18 : 0))
+                .animation(Self.playerSpring, value: showPlayer)
+                .accessibilityHidden(showPlayer)
+            if playerMounted {
                 NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                    showPlayer = false
+                    setPlayer(false)
                     pendingDelete = [track]
-                })
-                .modifier(PlayerZoom(namespace: playerZoom))
+                }, onClose: { setPlayer(false) }, morphNamespace: playerZoom, morphActive: showPlayer)
+                .opacity(showPlayer ? 1 : 0)
+                .animation(Self.playerSpring, value: showPlayer)
+                .accessibilityHidden(!showPlayer)
+                .zIndex(1)
             }
+        }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
                     .presentationDetents([.large])
@@ -104,7 +121,7 @@ struct LibraryView: View {
     }
 
     private var miniPlayer: some View {
-        MiniPlayer(library: library, player: player, zoom: playerZoom) { showPlayer = true }
+        MiniPlayer(library: library, player: player, zoom: playerZoom, expanded: showPlayer) { setPlayer(true) }
     }
 
     @ViewBuilder private var playerTabs: some View {
@@ -483,8 +500,22 @@ struct LibraryView: View {
         )
     }
 
+    /// Expand/collapse the player overlay with the shared spring. The
+    /// view stays mounted while the collapse plays, then unmounts; a
+    /// re-open inside that window just flips the state back.
+    private func setPlayer(_ expanded: Bool) {
+        if expanded { playerMounted = true }
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring) { showPlayer = expanded }
+        if !expanded {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(550))
+                if !showPlayer { playerMounted = false }
+            }
+        }
+    }
+
     private func open(_ route: LibraryRoute) {
-        showPlayer = false
+        setPlayer(false)
         lyricsTrack = nil
         switch tab {
         case .library: libraryPath.append(route)
@@ -659,17 +690,16 @@ struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     var zoom: Namespace.ID
+    var expanded: Bool
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
 
     var body: some View {
         if #available(iOS 26, *) {
-            AccessoryPlacement(title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open)
-                .modifier(ZoomSource(namespace: zoom))
+            AccessoryPlacement(title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open, zoom: zoom, expanded: expanded)
         } else {
-            AccessoryMiniPlayer(compact: false, title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open)
-                .modifier(ZoomSource(namespace: zoom))
+            AccessoryMiniPlayer(compact: false, title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open, zoom: zoom, expanded: expanded)
         }
     }
 }
@@ -684,10 +714,12 @@ private struct AccessoryPlacement: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
+    var zoom: Namespace.ID
+    var expanded: Bool
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
     var body: some View {
-        AccessoryMiniPlayer(compact: placement == .inline, title: title, artist: artist, track: track, root: root, playing: playing, toggle: toggle, skip: skip, open: open)
+        AccessoryMiniPlayer(compact: placement == .inline, title: title, artist: artist, track: track, root: root, playing: playing, toggle: toggle, skip: skip, open: open, zoom: zoom, expanded: expanded)
     }
 }
 
@@ -701,10 +733,15 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
+    var zoom: Namespace.ID
+    var expanded: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             ArtworkView(track: track, root: root, size: compact ? 28 : 44)
+                // The one shared element of the expand/collapse morph:
+                // this thumbnail is the source until the player opens.
+                .matchedGeometryEffect(id: "playerArtwork", in: zoom, isSource: !expanded)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                 if !compact, !artist.isEmpty {
@@ -740,27 +777,9 @@ private struct AccessoryMiniPlayer: View {
     }
 }
 
-private struct ZoomSource: ViewModifier {
-    var namespace: Namespace.ID
-    func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
-            content.matchedTransitionSource(id: "nowPlaying", in: namespace)
-        } else {
-            content
-        }
-    }
-}
-
-private struct PlayerZoom: ViewModifier {
-    var namespace: Namespace.ID
-    func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
-            content.navigationTransition(.zoom(sourceID: "nowPlaying", in: namespace))
-        } else {
-            content
-        }
-    }
-}
+// The playerZoom namespace now carries the matched-geometry artwork
+// morph (see MiniPlayer and NowPlayingView.ArtworkMorph); the system
+// .zoom cover transition and its matchedTransitionSource are gone.
 
 private extension View {
     func searchReselect(title: String, onReselect: @escaping () -> Void) -> some View {
