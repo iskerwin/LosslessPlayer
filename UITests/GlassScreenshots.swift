@@ -134,9 +134,14 @@ final class GlassScreenshots: XCTestCase {
             .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35)))
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
         XCTAssertFalse(player.staticTexts["Apologize"].exists)
-        // Pause so the position stays under the 3-second restart threshold
-        // of skip(backwards:) no matter how slow the simulator runs.
+        // The swipe does not return until the transition is idle, and the
+        // new song keeps playing during that wait. Past 3 seconds,
+        // skip(backwards:) restarts this song, so park the playhead first.
         player.buttons["暂停"].tap()
+        let progress = player.descendants(matching: .any)["playback-progress"]
+        XCTAssertTrue(progress.waitForExistence(timeout: 5))
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
+            .press(forDuration: 0.2, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.5)))
         // Swipe right: back to the previous track.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35))
             .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35)))

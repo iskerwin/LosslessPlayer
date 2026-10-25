@@ -1005,4 +1005,50 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         let cached = try XCTUnwrap(ArtworkCache.shared.cachedImage(at: url, maxPixel: 80))
         XCTAssertTrue(loaded === cached)
     }
+
+    /// The mini player reuses one artwork view across tracks. Once a cover is
+    /// cached, the old view used to keep its stored bitmap and skip the new
+    /// file. The displayed image must follow the current file instead.
+    func testDisplayedArtworkFollowsTheCurrentFileWhenTheNextCoverIsCached() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func jpeg(_ name: String, color: UIColor) throws -> URL {
+            let url = root.appendingPathComponent(name)
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 80)).image { context in
+                color.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 80, height: 80))
+            }
+            try XCTUnwrap(image.jpegData(compressionQuality: 0.8)).write(to: url)
+            return url
+        }
+        let first = try jpeg("first.jpg", color: .systemRed)
+        let second = try jpeg("second.jpg", color: .systemBlue)
+        ArtworkCache.shared.removeAll()
+        let stale = try XCTUnwrap(ArtworkCache.shared.image(at: first, maxPixel: 240))
+        let fresh = try XCTUnwrap(ArtworkCache.shared.image(at: second, maxPixel: 240))
+        let tier = ArtworkCache.displayTier(points: 44, scale: 3)
+        XCTAssertEqual(tier, 240)
+        let firstKey = "\(first.path)#\(Int(tier))"
+        let secondKey = "\(second.path)#\(Int(tier))"
+        let stuck = FileArtwork.displayedImage(stored: stale, storedKey: firstKey, key: firstKey, url: first, tier: tier)
+        XCTAssertTrue(stuck === stale)
+        let shown = FileArtwork.displayedImage(stored: stale, storedKey: firstKey, key: secondKey, url: second, tier: tier)
+        XCTAssertTrue(shown === fresh)
+        XCTAssertFalse(shown === stale)
+        // A larger already-decoded tier still stands in until the exact one exists.
+        ArtworkCache.shared.removeAll()
+        let large = try XCTUnwrap(ArtworkCache.shared.image(at: second, maxPixel: 700))
+        let preview = FileArtwork.displayedImage(stored: stale, storedKey: firstKey, key: secondKey, url: second, tier: tier)
+        XCTAssertTrue(preview === large)
+    }
+
+    func testPullRevealTracksTheFingerAndClearsAtTheDimDistance() {
+        XCTAssertEqual(PlayerPull.reveal(for: 0), 1)
+        XCTAssertEqual(PlayerPull.reveal(for: -40), 1)
+        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance / 2), 0.5, accuracy: 0.001)
+        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance), 0)
+        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance + 80), 0)
+        XCTAssertEqual(PlayerPull.reveal(for: 90), 1 - 90 / PlayerPull.dimDistance, accuracy: 0.001)
+    }
 }
