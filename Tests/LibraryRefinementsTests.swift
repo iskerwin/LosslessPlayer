@@ -153,6 +153,44 @@ final class LibraryIndexAndPersistenceTests: XCTestCase {
         XCTAssertTrue(library.trackByID.isEmpty)
     }
 
+    func testDerivedCollectionsFollowLibraryMutations() async throws {
+        let base = tempRoot()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let library = LibraryStore(root: base.appendingPathComponent("Derived"))
+        let source = base.appendingPathComponent("song.wav")
+        try writeWAV(to: source)
+        await library.importFiles([source])
+        let track = try XCTUnwrap(library.tracks.first)
+        let artist = try XCTUnwrap(track.artistNames.first)
+        XCTAssertEqual(library.albumGroups.count, 1)
+        XCTAssertEqual(library.recentAlbums.map(\.id), library.albumGroups.map(\.id))
+        XCTAssertEqual(library.artistNames, track.artistNames)
+        XCTAssertEqual(library.tracks(forArtist: artist).map(\.id), [track.id])
+        XCTAssertTrue(library.favoriteTracks.isEmpty)
+        XCTAssertTrue(library.recentlyPlayed.isEmpty)
+        // Mutations flow through persist, which rebuilds the collections:
+        // favorite, play history and removal must all show up (and clear).
+        library.toggleFavorite(track)
+        XCTAssertEqual(library.favoriteTracks.map(\.id), [track.id])
+        library.recordPlay(id: track.id)
+        XCTAssertEqual(library.recentlyPlayed.map(\.id), [track.id])
+        library.remove(track)
+        XCTAssertTrue(library.albumGroups.isEmpty)
+        XCTAssertTrue(library.artistNames.isEmpty)
+        XCTAssertTrue(library.favoriteTracks.isEmpty)
+        XCTAssertTrue(library.recentlyPlayed.isEmpty)
+    }
+
+    func testAlbumGroupLatestIsNewestAddedDate() {
+        var older = Track(id: UUID(), filename: "a.wav", title: "A", artist: "Ada", album: "Record", duration: 1, sampleRate: 44100, bitDepth: 16)
+        var newer = Track(id: UUID(), filename: "b.wav", title: "B", artist: "Ada", album: "Record", duration: 1, sampleRate: 44100, bitDepth: 16)
+        older.addedAt = Date(timeIntervalSince1970: 10)
+        newer.addedAt = Date(timeIntervalSince1970: 99)
+        let groups = AlbumGroup.groups([older, newer])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].latest, Date(timeIntervalSince1970: 99))
+    }
+
     func testPersistStampsCurrentVersionAndRotatesBackup() async throws {
         let base = tempRoot()
         defer { try? FileManager.default.removeItem(at: base) }

@@ -856,7 +856,10 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
-    func testBrowseIndexMatchesFiltersAndIsCheaperThanRebuilding() {
+    /// Same groupings `LibraryStore.rebuildDerived` keeps on the snapshot.
+    /// Re-reading them must stay cheaper than rebuilding from the view, and
+    /// must match the filters the pages used before the cache existed.
+    func testDerivedGroupingsMatchFiltersAndAreCheaperToReread() {
         var tracks: [Track] = []
         tracks.reserveCapacity(600)
         for index in 0..<600 {
@@ -871,22 +874,18 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
             if index.isMultiple(of: 3) { track.lastPlayed = Date(timeIntervalSince1970: Double(index)) }
             tracks.append(track)
         }
-        let index = LibraryBrowseIndex.build(tracks: tracks)
-        XCTAssertEqual(index.albumsByName.map(\.id), AlbumGroup.groups(tracks).map(\.id))
-        for album in index.albumsByName {
-            let direct = tracks.filter { $0.albumID == album.id }.map(\.id)
-            XCTAssertEqual(index.albumsByID[album.id]?.tracks.map(\.id), direct)
-        }
-        XCTAssertEqual(index.albumsByRecent.map(\.id), index.albumsByName.sorted { $0.latest > $1.latest }.map(\.id))
+        let derived = Self.derive(tracks)
+        XCTAssertEqual(derived.albums.map(\.id), AlbumGroup.groups(tracks).map(\.id))
+        XCTAssertEqual(derived.recent.map(\.id), derived.albums.sorted { $0.latest > $1.latest }.map(\.id))
         let names = Array(Set(tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        XCTAssertEqual(index.artists.map(\.name), names)
+        XCTAssertEqual(derived.names, names)
         for name in names {
             let direct = tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(name) } }
-            XCTAssertEqual(index.artistsByName[name]?.map(\.id), direct.map(\.id))
+            XCTAssertEqual(derived.byArtist[AudioTags.normalized(name)]?.map(\.id), direct.map(\.id))
         }
-        XCTAssertEqual(index.favorites.map(\.id), tracks.filter(\.favorite).map(\.id))
+        XCTAssertEqual(derived.favorites.map(\.id), tracks.filter(\.favorite).map(\.id))
         let recent = tracks.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
-        XCTAssertEqual(index.recentlyPlayed.map(\.id), recent.map(\.id))
+        XCTAssertEqual(derived.played.map(\.id), recent.map(\.id))
 
         func elapsed(_ work: () -> Int) -> TimeInterval {
             let start = Date()
@@ -907,16 +906,46 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
             return sink
         }
         let cached = elapsed {
-            let built = LibraryBrowseIndex.build(tracks: tracks)
-            var sink = built.albumsByName.count + built.artists.count
+            let built = Self.derive(tracks)
+            var sink = built.albums.count + built.names.count
             for _ in 0..<20 {
-                sink += built.albumsByName.count
-                for artist in built.artists { sink += built.artistsByName[artist.name]?.count ?? 0 }
+                sink += built.albums.count + built.recent.count + built.favorites.count
+                for name in built.names { sink += built.byArtist[AudioTags.normalized(name)]?.count ?? 0 }
             }
             return sink
         }
         print(String(format: "BROWSE_BENCH direct=%.4fs cachedRefresh=%.4fs ratio=%.1f", direct, cached, direct / max(cached, 0.0001)))
         XCTAssertLessThan(cached, direct)
+    }
+
+    private struct DerivedCollections {
+        var albums: [AlbumGroup]
+        var recent: [AlbumGroup]
+        var names: [String]
+        var byArtist: [String: [Track]]
+        var favorites: [Track]
+        var played: [Track]
+    }
+
+    /// Mirrors `LibraryStore.rebuildDerived`. Kept here so the cost comparison
+    /// does not need to open a store or touch the audio engine.
+    private static func derive(_ all: [Track]) -> DerivedCollections {
+        let albums = AlbumGroup.groups(all)
+        let names = Array(Set(all.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var byArtist: [String: [Track]] = [:]
+        for track in all {
+            for name in track.artistNames {
+                byArtist[AudioTags.normalized(name), default: []].append(track)
+            }
+        }
+        return DerivedCollections(
+            albums: albums,
+            recent: albums.sorted { $0.latest > $1.latest },
+            names: names,
+            byArtist: byArtist,
+            favorites: all.filter(\.favorite),
+            played: all.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
+        )
     }
 
     func testArtworkCacheDownsamplesAndReusesTheDecodedBitmap() throws {
