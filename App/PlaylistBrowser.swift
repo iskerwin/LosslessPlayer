@@ -11,6 +11,7 @@ struct PlaylistHome: View {
     var onAddToPlaylist: ([Track]) -> Void
     @AppStorage("playlistLayout") private var layoutRaw = PlaylistLayout.grid.rawValue
     @State private var coverTarget: Playlist?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var layout: PlaylistLayout { PlaylistLayout(rawValue: layoutRaw) ?? .grid }
 
     var body: some View {
@@ -29,6 +30,7 @@ struct PlaylistHome: View {
                 list
             }
         }
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.28), value: layout)
         .safeAreaInset(edge: .top) {
             if library.importing {
                 VStack(alignment: .leading, spacing: 6) {
@@ -179,13 +181,20 @@ struct PlaylistCover: View {
             .overlay { artwork.clipped() }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 10, y: 6)
+            .compositingGroup()
             .accessibilityHidden(true)
     }
 
     @ViewBuilder private var artwork: some View {
-        if let name = playlist.customArtworkFilename,
-           let image = ArtworkCache.shared.image(at: library.root.appendingPathComponent(name)) {
-            Image(uiImage: image).resizable().scaledToFill()
+        if let name = playlist.customArtworkFilename {
+            GeometryReader { geo in
+                FileArtwork(
+                    url: library.root.appendingPathComponent(name),
+                    pointSize: geo.size.width,
+                    placeholder: .neutral,
+                    shaped: false
+                )
+            }
         } else {
             automaticArtwork
         }

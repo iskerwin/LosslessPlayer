@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Holds a sort permutation so `CollectionPage.body` can re-read fresh track
+/// values (favorite, title) without sorting the list again.
+private final class TrackOrderMemo {
+    var key = 0
+    var indices: [Int] = []
+}
+
 private struct PlaylistEditing: ViewModifier {
     var enabled: Bool
     var editing: Bool
@@ -37,7 +44,10 @@ struct CollectionPage: View {
     @State private var editing = false
     @State private var coverTarget: Playlist?
     @State private var palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
+    @State private var paletteToken = ""
+    @State private var orderMemo = TrackOrderMemo()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let page = songList
@@ -47,6 +57,7 @@ struct CollectionPage: View {
             .background {
                 if kind == .playlist { ArtworkBackdrop(colors: palette) }
             }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: paletteToken)
             .preferredColorScheme(kind == .playlist ? .dark : nil)
             .toolbarBackground(kind == .playlist ? .hidden : .automatic, for: .navigationBar)
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
@@ -70,7 +81,8 @@ struct CollectionPage: View {
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
 
     private var songList: some View {
-        List {
+        let contextID = playbackContextID
+        return List {
             if (kind == .album && !sorted.isEmpty) || playlist != nil { header }
             if kind == .playlist { playlistTransport }
             if showTransport && kind != .playlist {
@@ -90,8 +102,10 @@ struct CollectionPage: View {
                     showsMenu: !editing,
                     emphasis: kind == .playlist ? .white : MusicTheme.accent,
                     showsLocalStatus: kind == .playlist,
+                    contextID: contextID,
                     handlers: handlers
                 )
+                .equatable()
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     if let playlist {
                         Button("从歌单中移除", role: .destructive) { library.removeFromPlaylist(track, playlist: playlist) }
@@ -144,6 +158,7 @@ struct CollectionPage: View {
             VStack(spacing: 14) {
                 ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
                     .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
+                    .compositingGroup()
                     .padding(.top, 8)
                 Text(first.album).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
@@ -182,10 +197,33 @@ struct CollectionPage: View {
     }
 
     private func refreshPalette() {
-        let image = (playlist?.customArtworkFilename ?? coverTrack?.artworkFilename).flatMap {
-            ArtworkCache.shared.image(at: library.root.appendingPathComponent($0))
+        guard kind == .playlist else { return }
+        let filename = playlist?.customArtworkFilename ?? coverTrack?.artworkFilename
+        guard let filename else {
+            palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
+            paletteToken = ""
+            return
         }
-        palette = ArtworkColors.palette(from: image).map { Color(uiColor: $0) }
+        if let cached = ArtworkAnalysisCache.shared.analysis(for: filename) {
+            applyPalette(cached, token: filename)
+            return
+        }
+        let url = library.root.appendingPathComponent(filename)
+        Task { @MainActor in
+            let analysis = await Task.detached(priority: .userInitiated) { () -> ArtworkAnalysis? in
+                guard let image = ArtworkCache.shared.image(at: url, maxPixel: 160) else { return nil }
+                return ArtworkAnalysis.make(from: image)
+            }.value
+            guard let analysis,
+                  (playlist?.customArtworkFilename ?? coverTrack?.artworkFilename) == filename else { return }
+            ArtworkAnalysisCache.shared.store(analysis, for: filename)
+            applyPalette(analysis, token: filename)
+        }
+    }
+
+    private func applyPalette(_ analysis: ArtworkAnalysis, token: String) {
+        palette = analysis.palette.map { Color(uiColor: $0) }
+        paletteToken = token
     }
 
     private var playlistTransport: some View {
@@ -257,7 +295,41 @@ struct CollectionPage: View {
         LibrarySort.allCases.filter { kind == .album || $0 != .album }
     }
 
-    private var sorted: [Track] { activeSort?.sorted(tracks) ?? tracks }
+    /// Sort key for the memo. Hashing the fields that affect order is much
+    /// cheaper than `localizedStandardCompare` on every play/pause refresh.
+    private var orderKey: Int {
+        var hasher = Hasher()
+        hasher.combine(activeSort?.rawValue)
+        for track in tracks {
+            hasher.combine(track.id)
+            hasher.combine(track.title)
+            hasher.combine(track.artist)
+            hasher.combine(track.addedAt?.timeIntervalSinceReferenceDate)
+            hasher.combine(track.playCount)
+            hasher.combine(track.discNumber)
+            hasher.combine(track.trackNumber)
+            hasher.combine(track.filename)
+        }
+        return hasher.finalize()
+    }
+
+    private var sorted: [Track] {
+        if tracks.isEmpty { return tracks }
+        let key = orderKey
+        if orderMemo.key != key || orderMemo.indices.count != tracks.count {
+            let ordered = activeSort?.sorted(tracks) ?? tracks
+            var positions: [UUID: Int] = [:]
+            positions.reserveCapacity(tracks.count)
+            for (index, track) in tracks.enumerated() where positions[track.id] == nil {
+                positions[track.id] = index
+            }
+            orderMemo.indices = ordered.map { positions[$0.id] ?? 0 }
+            orderMemo.key = key
+        }
+        return orderMemo.indices.map { tracks[$0] }
+    }
+
+    private var playbackContextID: Int { trackContextID(sorted) }
 
     private var sortControl: some View {
         Menu {

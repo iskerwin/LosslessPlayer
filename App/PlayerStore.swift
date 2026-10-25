@@ -225,7 +225,7 @@ final class PlayerStore: NSObject, ObservableObject {
     func setQueue(_ ids: [UUID], replacingContext: Bool = true) {
         var seen = Set<UUID>()
         let filtered = ids.filter { id in
-            library.tracks.contains { $0.id == id && $0.available } && seen.insert(id).inserted
+            seen.insert(id).inserted && library.track(id)?.available == true
         }
         ordering.queue = filtered
         if replacingContext { ordering.context = filtered }
@@ -339,25 +339,33 @@ final class PlayerStore: NSObject, ObservableObject {
         guard playing else { return }
         position = engine.currentTime
         ticks += 1
-        if ticks % 10 == 0 { library.remember(id: current?.id, position: position); updateOutput() }
+        // Every 5 seconds. The checkpoint writes off the main thread, and
+        // updateOutput assigns only when the route string or the path
+        // judgement actually changes — assigning @Published unconditionally
+        // invalidated every library list while a song was playing.
+        if ticks % 10 == 0 {
+            library.checkpointPlayback(id: current?.id, position: position)
+            updateOutput()
+        }
     }
 
     private func updateOutput() {
         let session = AVAudioSession.sharedInstance()
         let outputs = session.currentRoute.outputs
         let names = outputs.map(\.portName).joined(separator: ", ")
-        output = "\(names.isEmpty ? "系统输出" : names) · \(String(format: "%.1f", session.sampleRate / 1000)) kHz"
+        let nextOutput = "\(names.isEmpty ? "系统输出" : names) · \(String(format: "%.1f", session.sampleRate / 1000)) kHz"
+        if output != nextOutput { output = nextOutput }
         // The engine's digital volume is pinned at 1.0 (see EnginePlayer);
         // the system volume shown in the player is the output device gain,
         // not a scaling of the samples inside the engine.
-        if let current {
-            pathAssessment = AudioPathAssessment.assess(
-                isLosslessSource: current.isLosslessSource,
-                sourceSampleRate: current.sampleRate,
-                sessionSampleRate: session.sampleRate,
-                route: outputs.first.map { AudioRouteKind.from($0.portType) } ?? .other,
-                digitalVolume: 1.0)
-        }
+        guard let current else { return }
+        let assessment = AudioPathAssessment.assess(
+            isLosslessSource: current.isLosslessSource,
+            sourceSampleRate: current.sampleRate,
+            sessionSampleRate: session.sampleRate,
+            route: outputs.first.map { AudioRouteKind.from($0.portType) } ?? .other,
+            digitalVolume: 1.0)
+        if pathAssessment != assessment { pathAssessment = assessment }
     }
 
     private func updateNowPlaying() {
@@ -370,11 +378,29 @@ final class PlayerStore: NSObject, ObservableObject {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0
         ]
-        if let name = current.artworkFilename,
-           let image = UIImage(contentsOfFile: library.root.appendingPathComponent(name).path) {
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        let trackID = current.id
+        if let name = current.artworkFilename {
+            let url = library.root.appendingPathComponent(name)
+            if let image = ArtworkCache.shared.cachedImage(at: url, maxPixel: 700) {
+                info[MPMediaItemPropertyArtwork] = Self.nowPlayingArtwork(image)
+            } else {
+                if let preview = ArtworkCache.shared.bestCachedImage(at: url, maxPixel: 700) {
+                    info[MPMediaItemPropertyArtwork] = Self.nowPlayingArtwork(preview)
+                }
+                Task { @MainActor in
+                    let image = await ArtworkCache.shared.load(at: url, maxPixel: 700)
+                    guard self.current?.id == trackID, let image else { return }
+                    var updated = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                    updated[MPMediaItemPropertyArtwork] = Self.nowPlayingArtwork(image)
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = updated
+                }
+            }
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private static func nowPlayingArtwork(_ image: UIImage) -> MPMediaItemArtwork {
+        MPMediaItemArtwork(boundsSize: image.size) { _ in image }
     }
 
     private func configureRemote() {

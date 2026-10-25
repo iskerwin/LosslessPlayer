@@ -39,8 +39,16 @@ struct LibraryView: View {
     var body: some View {
         ZStack {
             playerTabs
+                // Scale is a GPU transform. brightness() is a color filter
+                // that re-rasterizes the whole tab tree every frame of the
+                // spring, so the dim is a black overlay (opacity only).
                 .scaleEffect(reduceMotion ? 1 : (showPlayer ? 0.96 : 1))
-                .brightness(reduceMotion ? 0 : (showPlayer ? -0.18 : 0))
+                .overlay {
+                    Color.black
+                        .opacity(reduceMotion || !showPlayer ? 0 : 0.34)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                }
                 .animation(Self.playerSpring, value: showPlayer)
                 .accessibilityHidden(showPlayer)
             if playerMounted {
@@ -217,15 +225,16 @@ struct LibraryView: View {
             ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
                                    description: Text("输入歌曲、艺术家或专辑名称"))
         } else {
-            let results = SearchResults.group(tracks: library.tracks, query: query)
+            let results = library.searchResults(matching: trimmed)
             if results.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
+                let songContext = trackContextID(results.songs)
                 List {
                     if !results.artists.isEmpty {
                         Section("艺术家") {
                             ForEach(results.artists, id: \.self) { artist in
-                                let tracks = results.songs.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
+                                let tracks = results.tracksByArtist[artist] ?? []
                                 browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first,
                                           groups: collectionGroups(tracks, order: .title)) {
                                     open(.artist(artist))
@@ -250,7 +259,9 @@ struct LibraryView: View {
                                 SongContextRow(track: track, root: library.root,
                                                current: player.current?.id == track.id,
                                                playing: player.playing && player.current?.id == track.id,
+                                               contextID: songContext,
                                                handlers: searchHandlers(results.songs))
+                                    .equatable()
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                         Button("从资料库中删除", role: .destructive) { pendingDelete = [track] }
                                         Button("添加到歌单") { playlistBatch = TrackBatch(tracks: [track]) }.tint(MusicTheme.accent)
@@ -590,6 +601,9 @@ struct SearchResults {
     var songs: [Track] = []
     var albums: [AlbumGroup] = []
     var artists: [String] = []
+    /// Songs for each displayed artist, keyed by the artist string. Built once
+    /// per query so a row does not scan the song list and re-normalize names.
+    var tracksByArtist: [String: [Track]] = [:]
     var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty }
 
     static func group(tracks: [Track], query: String) -> SearchResults {
@@ -610,7 +624,17 @@ struct SearchResults {
         let needle = AudioTags.normalized(query)
         let artists = Array(Set(matched.flatMap(\.artistNames).filter { AudioTags.normalized($0).contains(needle) }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists)
+        var byNorm: [String: [Track]] = [:]
+        for song in songs {
+            var seen = Set<String>()
+            for name in song.artistNames {
+                let key = AudioTags.normalized(name)
+                if seen.insert(key).inserted { byNorm[key, default: []].append(song) }
+            }
+        }
+        var tracksByArtist: [String: [Track]] = [:]
+        for artist in artists { tracksByArtist[artist] = byNorm[AudioTags.normalized(artist)] ?? [] }
+        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists, tracksByArtist: tracksByArtist)
     }
 }
 
@@ -628,61 +652,6 @@ struct AlbumGroup: Identifiable {
             Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks,
                  latest: tracks.compactMap(\.addedAt).max() ?? .distantPast)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-}
-
-final class ArtworkCache {
-    static let shared = ArtworkCache()
-    private let images = NSCache<NSString, UIImage>()
-    init() {
-        // Thumbnails are small, but an unbounded cache grows with every
-        // album ever scrolled past. Cap count and total decoded cost so a
-        // large library cannot push the app into memory pressure.
-        images.countLimit = 300
-        images.totalCostLimit = 64 * 1024 * 1024
-    }
-    func image(at url: URL) -> UIImage? {
-        let key = url.path as NSString
-        if let cached = images.object(forKey: key) { return cached }
-        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
-        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-        images.setObject(image, forKey: key, cost: cost)
-        return image
-    }
-    func removeAll() { images.removeAllObjects() }
-}
-
-struct ArtworkView: View {
-    enum Placeholder { case accent, neutral }
-    let track: Track?
-    let root: URL
-    var size: CGFloat?
-    var placeholder: Placeholder = .accent
-    var body: some View {
-        Group {
-            if let name = track?.artworkFilename, let image = ArtworkCache.shared.image(at: root.appendingPathComponent(name)) {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else if placeholder == .neutral {
-                ZStack {
-                    Color(white: 0.16)
-                    Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.85))
-                }
-            } else {
-                ZStack {
-                    LinearGradient(colors: [MusicTheme.accent.opacity(0.85), .pink.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.9))
-                }
-            }
-        }.frame(width: size, height: size).aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: artworkCorner, style: .continuous))
-            .accessibilityHidden(true)
-    }
-
-    private var artworkCorner: CGFloat {
-        let side = size ?? 150
-        if side <= 64 { return 6 }
-        if side < 120 { return 8 }
-        return 12
     }
 }
 
@@ -735,6 +704,7 @@ private struct AccessoryMiniPlayer: View {
     var open: () -> Void
     var zoom: Namespace.ID
     var expanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
@@ -744,10 +714,13 @@ private struct AccessoryMiniPlayer: View {
                 .matchedGeometryEffect(id: "playerArtwork", in: zoom, isSource: !expanded)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    .contentTransition(.opacity)
                 if !compact, !artist.isEmpty {
                     Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        .contentTransition(.opacity)
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: toggle) {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
