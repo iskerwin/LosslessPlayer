@@ -132,11 +132,12 @@ final class GlassScreenshots: XCTestCase {
         // any element's accessibility frame): next track, like Music.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35))
             .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35)))
+        // skip(backwards:) restarts the current song after 3 seconds.
+        // Pause as soon as the swipe returns; waiting for the title first
+        // lets a slow simulator play past that threshold.
+        player.buttons["暂停"].tap()
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
         XCTAssertFalse(player.staticTexts["Apologize"].exists)
-        // Pause so the position stays under the 3-second restart threshold
-        // of skip(backwards:) no matter how slow the simulator runs.
-        player.buttons["暂停"].tap()
         // Swipe right: back to the previous track.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35))
             .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.35)))
