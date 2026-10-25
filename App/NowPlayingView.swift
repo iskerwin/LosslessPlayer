@@ -37,15 +37,24 @@ struct NowPlayingView: View {
     @ObservedObject private var playbackClock: PlaybackClock
     var onOpen: (LibraryRoute) -> Void
     var onDelete: (Track) -> Void
-    @Environment(\.dismiss) private var dismiss
+    /// The player is an overlay above the tabs, not a modal cover, so
+    /// closing is the presenter's job (it also reverses the artwork morph).
+    var onClose: () -> Void
+    /// Shared-element morph with the mini player: when a namespace is
+    /// wired, the stage artwork is the morph source while `morphActive`.
+    var morphNamespace: Namespace.ID?
+    var morphActive: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
         self.onDelete = onDelete
+        self.onClose = onClose
+        self.morphNamespace = morphNamespace
+        self.morphActive = morphActive
         _playbackClock = ObservedObject(wrappedValue: player.clock)
     }
 
@@ -67,6 +76,9 @@ struct NowPlayingView: View {
     /// them during the presentation's first frames drops the zoom. They
     /// mount once it has settled, into reserved frames of the same size.
     @State private var chromeReady = false
+    /// Controls below the stage fade/slide in just behind the artwork's
+    /// morph on open, staggered the way Music brings them in.
+    @State private var entered = false
     /// Set the moment a drag releases past the dismiss threshold: the sheet
     /// is leaving, so the drag offsets must freeze instead of springing back
     /// to zero while the cover slides down (that double motion reads as a
@@ -118,17 +130,18 @@ struct NowPlayingView: View {
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
-        // Our drag owns the 90pt threshold; prevent the zoom presentation from
-        // independently dismissing a short, fast downward swipe.
-        .interactiveDismissDisabled()
+        // Presented as an overlay, not a cover: our drag owns dismissal
+        // outright (past 90pt it closes via onClose and the morph reverses).
         .onAppear(perform: refreshBackdrop)
         .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
         .onChange(of: current?.id) { _, _ in scrubbing = false }
         .task {
-            try? await Task.sleep(for: .milliseconds(350))
+            try? await Task.sleep(for: .milliseconds(60))
+            withAnimation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.9)) { entered = true }
+            try? await Task.sleep(for: .milliseconds(290))
             chromeReady = true
         }
-        .accessibilityAction(.escape) { dismiss() }
+        .accessibilityAction(.escape) { onClose() }
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(library: library, tracks: [track])
         }
@@ -137,7 +150,7 @@ struct NowPlayingView: View {
 
     private func playerContent(stageHeight: CGFloat?) -> some View {
         VStack(spacing: 0) {
-            Button { dismiss() } label: {
+            Button { onClose() } label: {
                 Capsule()
                     .fill(Color.white.opacity(0.55))
                     .frame(width: 60, height: 4)
@@ -151,17 +164,23 @@ struct NowPlayingView: View {
                 .frame(height: stageHeight)
                 .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
                 .padding(.bottom, 24)
-            VStack(spacing: 8) {
-                if panel != .queue { titleBlock }
-                scrubber
-                transport
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    if panel != .queue { titleBlock }
+                    scrubber
+                    transport
+                        .padding(.top, 18)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                SystemVolumeBar(ready: chromeReady)
+                    .padding(.top, 32)
+                bottomRow
                     .padding(.top, 18)
             }
-            .fixedSize(horizontal: false, vertical: true)
-            SystemVolumeBar(ready: chromeReady)
-                .padding(.top, 32)
-            bottomRow
-                .padding(.top, 18)
+            // The stage (and its morphing artwork) is never offset; only
+            // the control group staggers in behind it on open.
+            .opacity(entered ? 1 : 0)
+            .offset(y: entered || reduceMotion ? 0 : 16)
         }
         .padding(.horizontal, 32)
         .padding(.bottom, 12)
@@ -181,7 +200,7 @@ struct NowPlayingView: View {
                    value.translation.height > abs(value.translation.width) * 1.5 {
                     frozenDismissY = max(0, value.translation.height)
                     dismissing = true
-                    dismiss()
+                    onClose()
                 }
             }
     }
@@ -204,7 +223,7 @@ struct NowPlayingView: View {
                           value.translation.height > abs(value.translation.width) * 1.5 {
                     frozenDismissY = max(0, value.translation.height)
                     dismissing = true
-                    dismiss()
+                    onClose()
                 }
             }
     }
@@ -227,13 +246,14 @@ struct NowPlayingView: View {
                     let side = max(0, min(geometry.size.width * 0.90, geometry.size.height * 0.9))
                     ArtworkView(track: current, root: library.root, size: side, placeholder: .neutral)
                         .id(current?.id)
-                        .transition(trackTransition)
+                        .transition(artworkTransition)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                         .scaleEffect(player.playing ? 1 : 0.86)
                         .offset(x: reduceMotion ? 0 : artworkSwipeX)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                         .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
+                        .modifier(ArtworkMorph(namespace: morphNamespace, active: morphActive))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
@@ -251,6 +271,13 @@ struct NowPlayingView: View {
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
         .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+    }
+
+    /// While the morph is wired, the artwork crossfades on track changes:
+    /// a move transition would fight the matched-geometry frame. Without
+    /// a morph namespace (previews, fixtures) the slide below stays.
+    private var artworkTransition: AnyTransition {
+        morphNamespace == nil ? trackTransition : .opacity
     }
 
     /// Track-change transition, the way Music slides artwork: the incoming
@@ -276,7 +303,7 @@ struct NowPlayingView: View {
                     if let current {
                         Button {
                             onOpen(.artist(current.primaryArtist))
-                            dismiss()
+                            onClose()
                         } label: {
                             Text(current.artist)
                                 .font(panel == .queue ? .subheadline : .title3)
@@ -304,11 +331,11 @@ struct NowPlayingView: View {
                         Button("添加到歌单", systemImage: "text.badge.plus") { playlistTarget = current }
                         Button("前往专辑", systemImage: "music.note") {
                             onOpen(.album(current.albumID))
-                            dismiss()
+                            onClose()
                         }
                         Button("前往艺术家", systemImage: "music.mic") {
                             onOpen(.artist(current.primaryArtist))
-                            dismiss()
+                            onClose()
                         }
                         Button("歌曲信息", systemImage: "info.circle") { details = true }
                     } label: {
@@ -522,8 +549,8 @@ struct NowPlayingView: View {
             playlist: { playlistTarget = $0 },
             playNext: { player.enqueue([$0], next: true) },
             addToQueue: { player.enqueue([$0], next: false) },
-            album: { onOpen(.album($0.albumID)); dismiss() },
-            artist: { onOpen(.artist($0.primaryArtist)); dismiss() },
+            album: { onOpen(.album($0.albumID)); onClose() },
+            artist: { onOpen(.artist($0.primaryArtist)); onClose() },
             lyrics: { _ in panel = .lyrics },
             delete: onDelete
         )
@@ -769,6 +796,22 @@ extension UIImage {
         format.scale = 1
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+}
+
+/// Matched-geometry link between the mini player's artwork and the stage
+/// artwork: one shared element grows/shrinks between the two frames, the
+/// way Music's thumbnail becomes the full cover. Inert without a namespace.
+private struct ArtworkMorph: ViewModifier {
+    var namespace: Namespace.ID?
+    var active: Bool
+
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedGeometryEffect(id: "playerArtwork", in: namespace, isSource: active)
+        } else {
+            content
         }
     }
 }
