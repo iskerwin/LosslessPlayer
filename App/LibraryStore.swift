@@ -25,6 +25,10 @@ final class LibraryStore: ObservableObject {
     /// large library. The index is rebuilt wherever `snapshot` is replaced
     /// (init and `persist`, the only two places), so it cannot go stale.
     private(set) var trackByID: [UUID: Track] = [:]
+    /// Groupings derived from `snapshot`. Invalidated only inside `rebuildIndex`.
+    private(set) var browse = LibraryBrowseIndex.empty
+    private var cachedSearch: (query: String, results: SearchResults)?
+    private let playbackCheckpoint = PlaybackCheckpoint()
     static let extensions = AudioScanner.extensions
 
     func track(_ id: UUID?) -> Track? {
@@ -39,6 +43,18 @@ final class LibraryStore: ObservableObject {
 
     private func rebuildIndex() {
         trackByID = Dictionary(snapshot.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        browse = LibraryBrowseIndex.build(tracks: snapshot.tracks)
+        cachedSearch = nil
+    }
+
+    /// Memoized for the current catalog. `LibraryView` calls this from `body`;
+    /// play/pause must not regroup the library on every refresh.
+    func searchResults(matching query: String) -> SearchResults {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let cachedSearch, cachedSearch.query == trimmed { return cachedSearch.results }
+        let results = SearchResults.group(tracks: tracks, query: trimmed)
+        cachedSearch = (trimmed, results)
+        return results
     }
 
     init(root: URL? = nil) {
@@ -148,7 +164,17 @@ final class LibraryStore: ObservableObject {
     }
 
     private func writePlaybackFile() {
-        try? JSONEncoder().encode(playback).write(to: playbackURL, options: .atomic)
+        playbackCheckpoint.writeNow(playback, to: playbackURL)
+    }
+
+    /// Periodic progress checkpoint. Memory updates immediately; the file is
+    /// written on a serial queue so the 5-second tick does not encode JSON
+    /// on the main thread. Pause, seek, and backgrounding still use
+    /// `remember`, which waits until the file is replaced.
+    func checkpointPlayback(id: UUID?, position: Double) {
+        playback.currentID = id
+        playback.position = position.isFinite ? max(0, position) : 0
+        playbackCheckpoint.writeLater(playback, to: playbackURL)
     }
     func toggleFavorite(_ track: Track) {
         var s = snapshot
@@ -496,5 +522,36 @@ final class LibraryStore: ObservableObject {
         ArtworkCache.shared.removeAll()
         scanSummary = "导入 \(added) 首歌曲，跳过重复 \(duplicates) 首，失败 \(failures.count) 首"
         if !failures.isEmpty { errorMessage = failures.prefix(8).joined(separator: "\n") }
+    }
+}
+
+/// Serializes playback.json writes. A newer revision skips an older in-flight
+/// checkpoint so a pause cannot be overwritten by a stale 5-second tick.
+private final class PlaybackCheckpoint: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "lossless.playback-checkpoint")
+    private let lock = NSLock()
+    private var revision = 0
+
+    func writeNow(_ state: PlaybackState, to url: URL) {
+        enqueue(state, to: url, wait: true)
+    }
+
+    func writeLater(_ state: PlaybackState, to url: URL) {
+        enqueue(state, to: url, wait: false)
+    }
+
+    private func enqueue(_ state: PlaybackState, to url: URL, wait: Bool) {
+        lock.lock()
+        revision += 1
+        let revision = revision
+        lock.unlock()
+        let work = {
+            self.lock.lock()
+            let latest = self.revision
+            self.lock.unlock()
+            guard latest == revision else { return }
+            try? JSONEncoder().encode(state).write(to: url, options: .atomic)
+        }
+        if wait { queue.sync(execute: work) } else { queue.async(execute: work) }
     }
 }

@@ -785,6 +785,7 @@ final class SearchResultsTests: XCTestCase {
         XCTAssertEqual(results.albums.map(\.name), ["Blue Notes", "Deep", "Horizons"])
         // Title match first, then artist match, then album match.
         XCTAssertEqual(results.songs.map(\.title), ["Blue Sky", "Ocean", "River"])
+        XCTAssertEqual(results.tracksByArtist["Blue Band"]?.map(\.title), ["Ocean"])
     }
 
     func testSearchByAlbumNameFindsTheAlbumAndItsSongs() {
@@ -851,5 +852,118 @@ final class ArtworkAnalysisTests: XCTestCase {
         cache.store(analysis, for: "analysis-test.jpg")
         XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.palette.count, 4)
         XCTAssertNil(cache.analysis(for: "analysis-missing.jpg"))
+    }
+}
+
+final class BrowseAndArtworkPerformanceTests: XCTestCase {
+    func testBrowseIndexMatchesFiltersAndIsCheaperThanRebuilding() {
+        var tracks: [Track] = []
+        tracks.reserveCapacity(600)
+        for index in 0..<600 {
+            var track = Track(
+                id: UUID(), filename: "t\(index).flac", title: "Title \(index)",
+                artist: index.isMultiple(of: 2) ? "Artist \(index % 40)" : "artist \(index % 40)",
+                album: "Album \(index % 25)", duration: 1, sampleRate: 96_000, bitDepth: 24
+            )
+            track.artists = ["Artist \(index % 40)", "Guest \(index % 7)"]
+            track.albumArtist = "Artist \(index % 40)"
+            track.favorite = index.isMultiple(of: 5)
+            if index.isMultiple(of: 3) { track.lastPlayed = Date(timeIntervalSince1970: Double(index)) }
+            tracks.append(track)
+        }
+        let index = LibraryBrowseIndex.build(tracks: tracks)
+        XCTAssertEqual(index.albumsByName.map(\.id), AlbumGroup.groups(tracks).map(\.id))
+        for album in index.albumsByName {
+            let direct = tracks.filter { $0.albumID == album.id }.map(\.id)
+            XCTAssertEqual(index.albumsByID[album.id]?.tracks.map(\.id), direct)
+        }
+        XCTAssertEqual(index.albumsByRecent.map(\.id), index.albumsByName.sorted { $0.latest > $1.latest }.map(\.id))
+        let names = Array(Set(tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        XCTAssertEqual(index.artists.map(\.name), names)
+        for name in names {
+            let direct = tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(name) } }
+            XCTAssertEqual(index.artistsByName[name]?.map(\.id), direct.map(\.id))
+        }
+        XCTAssertEqual(index.favorites.map(\.id), tracks.filter(\.favorite).map(\.id))
+        let recent = tracks.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
+        XCTAssertEqual(index.recentlyPlayed.map(\.id), recent.map(\.id))
+
+        func elapsed(_ work: () -> Int) -> TimeInterval {
+            let start = Date()
+            let sink = work()
+            XCTAssertGreaterThan(sink, 0)
+            return Date().timeIntervalSince(start)
+        }
+        let direct = elapsed {
+            var sink = 0
+            for _ in 0..<20 {
+                sink += AlbumGroup.groups(tracks).count
+                let artists = Array(Set(tracks.flatMap(\.artistNames)))
+                sink += artists.count
+                for name in artists {
+                    sink += tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(name) } }.count
+                }
+            }
+            return sink
+        }
+        let cached = elapsed {
+            let built = LibraryBrowseIndex.build(tracks: tracks)
+            var sink = built.albumsByName.count + built.artists.count
+            for _ in 0..<20 {
+                sink += built.albumsByName.count
+                for artist in built.artists { sink += built.artistsByName[artist.name]?.count ?? 0 }
+            }
+            return sink
+        }
+        print(String(format: "BROWSE_BENCH direct=%.4fs cachedRefresh=%.4fs ratio=%.1f", direct, cached, direct / max(cached, 0.0001)))
+        XCTAssertLessThan(cached, direct)
+    }
+
+    func testArtworkCacheDownsamplesAndReusesTheDecodedBitmap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cover.jpg")
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        }
+        try XCTUnwrap(source.jpegData(compressionQuality: 0.85)).write(to: url)
+        ArtworkCache.shared.removeAll()
+        let small = try XCTUnwrap(ArtworkCache.shared.image(at: url, maxPixel: 64))
+        XCTAssertLessThanOrEqual(max(small.size.width, small.size.height), 64.5)
+        XCTAssertEqual(small.size.width / small.size.height, 2, accuracy: 0.05)
+        let again = try XCTUnwrap(ArtworkCache.shared.image(at: url, maxPixel: 64))
+        XCTAssertTrue(small === again)
+        let full = try XCTUnwrap(ArtworkCache.shared.image(at: url, maxPixel: 700))
+        XCTAssertGreaterThan(max(full.size.width, full.size.height), 64.5)
+        XCTAssertLessThanOrEqual(max(full.size.width, full.size.height), 700.5)
+        XCTAssertFalse(full === small)
+        let smallCost = try XCTUnwrap(small.cgImage).bytesPerRow * small.cgImage!.height
+        let fullCost = try XCTUnwrap(full.cgImage).bytesPerRow * full.cgImage!.height
+        XCTAssertLessThan(smallCost * 20, fullCost)
+        let preview = try XCTUnwrap(ArtworkCache.shared.bestCachedImage(at: url, maxPixel: 64))
+        XCTAssertTrue(preview === small)
+        let started = Date()
+        _ = ArtworkCache.shared.image(at: url, maxPixel: 64)
+        let hit = Date().timeIntervalSince(started)
+        print(String(format: "ARTWORK_BENCH cacheHit=%.4fs smallBytes=%d fullBytes=%d ratio=%.1f", hit, smallCost, fullCost, Double(fullCost) / Double(max(smallCost, 1))))
+    }
+
+    func testArtworkCacheLoadAgreesWithTheSynchronousDecode() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cover.jpg")
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 320)).image { context in
+            UIColor.systemPink.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 320, height: 320))
+        }
+        try XCTUnwrap(source.jpegData(compressionQuality: 0.8)).write(to: url)
+        ArtworkCache.shared.removeAll()
+        let loaded = try XCTUnwrap(await ArtworkCache.shared.load(at: url, maxPixel: 80))
+        XCTAssertLessThanOrEqual(max(loaded.size.width, loaded.size.height), 80.5)
+        let cached = try XCTUnwrap(ArtworkCache.shared.cachedImage(at: url, maxPixel: 80))
+        XCTAssertTrue(loaded === cached)
     }
 }

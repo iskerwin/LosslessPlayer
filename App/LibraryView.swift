@@ -39,8 +39,16 @@ struct LibraryView: View {
     var body: some View {
         ZStack {
             playerTabs
+                // Scale is a GPU transform. brightness() is a color filter
+                // that re-rasterizes the whole tab tree every frame of the
+                // spring, so the dim is a black overlay (opacity only).
                 .scaleEffect(reduceMotion ? 1 : (showPlayer ? 0.96 : 1))
-                .brightness(reduceMotion ? 0 : (showPlayer ? -0.18 : 0))
+                .overlay {
+                    Color.black
+                        .opacity(reduceMotion || !showPlayer ? 0 : 0.34)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                }
                 .animation(Self.playerSpring, value: showPlayer)
                 .accessibilityHidden(showPlayer)
             if playerMounted {
@@ -184,7 +192,7 @@ struct LibraryView: View {
 
     private var favoritesStack: some View {
         NavigationStack(path: $favoritesPath) {
-            page(library.tracks.filter(\.favorite), title: "收藏", kind: .favorites, showsBack: false)
+            page(library.browse.favorites, title: "收藏", kind: .favorites, showsBack: false)
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
     }
@@ -217,15 +225,16 @@ struct LibraryView: View {
             ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
                                    description: Text("输入歌曲、艺术家或专辑名称"))
         } else {
-            let results = SearchResults.group(tracks: library.tracks, query: query)
+            let results = library.searchResults(matching: trimmed)
             if results.isEmpty {
                 ContentUnavailableView.search(text: query)
             } else {
+                let songContext = trackContextID(results.songs)
                 List {
                     if !results.artists.isEmpty {
                         Section("艺术家") {
                             ForEach(results.artists, id: \.self) { artist in
-                                let tracks = results.songs.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
+                                let tracks = results.tracksByArtist[artist] ?? []
                                 browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first,
                                           groups: collectionGroups(tracks, order: .title)) {
                                     open(.artist(artist))
@@ -250,7 +259,9 @@ struct LibraryView: View {
                                 SongContextRow(track: track, root: library.root,
                                                current: player.current?.id == track.id,
                                                playing: player.playing && player.current?.id == track.id,
+                                               contextID: songContext,
                                                handlers: searchHandlers(results.songs))
+                                    .equatable()
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                         Button("从资料库中删除", role: .destructive) { pendingDelete = [track] }
                                         Button("添加到歌单") { playlistBatch = TrackBatch(tracks: [track]) }.tint(MusicTheme.accent)
@@ -364,10 +375,8 @@ struct LibraryView: View {
         case .playlist: return PlaylistFileTypes.readable
         }
     }
-    private var recentAlbums: [AlbumGroup] { AlbumGroup.groups(library.tracks).sorted { $0.latest > $1.latest } }
-    private var recentlyPlayed: [Track] {
-        library.tracks.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
-    }
+    private var recentAlbums: [AlbumGroup] { library.browse.albumsByRecent }
+    private var recentlyPlayed: [Track] { library.browse.recentlyPlayed }
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { Text("正在整理音乐").font(.headline); Spacer(); Button("取消") { library.cancelScan() } }
@@ -395,10 +404,11 @@ struct LibraryView: View {
         case .songs: page(library.tracks, title: "歌曲", kind: .songs, showsBack: true)
         case .artists: artistIndex
         case .artist(let artist):
-            page(library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }, title: artist, kind: .artist, showsBack: true)
+            page(library.browse.artistsByName[artist] ?? [], title: artist, kind: .artist, showsBack: true)
         case .albums: albumIndex
         case .album(let id):
-            page(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", kind: .album, showsBack: true)
+            let album = library.browse.albumsByID[id]
+            page(album?.tracks ?? [], title: album?.name ?? "专辑", kind: .album, showsBack: true)
         case .recent: page(recentlyPlayed, title: "最近播放", kind: .recent, showsBack: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
@@ -408,10 +418,9 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        List(Array(Set(library.tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { artist in
-            let tracks = library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
-            browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
-                open(.artist(artist))
+        List(library.browse.artists) { artist in
+            browseRow(title: artist.name, subtitle: "\(artist.tracks.count) 首歌曲", artwork: artist.tracks.first, groups: collectionGroups(artist.tracks, order: .title)) {
+                open(.artist(artist.name))
             }
         }
         .listStyle(.plain)
@@ -424,7 +433,7 @@ struct LibraryView: View {
     private var albumIndex: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
-                ForEach(AlbumGroup.groups(library.tracks)) { album in
+                ForEach(library.browse.albumsByName) { album in
                     Button { open(.album(album.id)) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
@@ -594,6 +603,9 @@ struct SearchResults {
     var songs: [Track] = []
     var albums: [AlbumGroup] = []
     var artists: [String] = []
+    /// Songs for each displayed artist, keyed by the artist string. Built once
+    /// per query so a row does not scan the song list and re-normalize names.
+    var tracksByArtist: [String: [Track]] = [:]
     var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty }
 
     static func group(tracks: [Track], query: String) -> SearchResults {
@@ -614,7 +626,17 @@ struct SearchResults {
         let needle = AudioTags.normalized(query)
         let artists = Array(Set(matched.flatMap(\.artistNames).filter { AudioTags.normalized($0).contains(needle) }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists)
+        var byNorm: [String: [Track]] = [:]
+        for song in songs {
+            var seen = Set<String>()
+            for name in song.artistNames {
+                let key = AudioTags.normalized(name)
+                if seen.insert(key).inserted { byNorm[key, default: []].append(song) }
+            }
+        }
+        var tracksByArtist: [String: [Track]] = [:]
+        for artist in artists { tracksByArtist[artist] = byNorm[AudioTags.normalized(artist)] ?? [] }
+        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists, tracksByArtist: tracksByArtist)
     }
 }
 
@@ -628,61 +650,6 @@ struct AlbumGroup: Identifiable {
         Dictionary(grouping: tracks, by: \.albumID).map { id, tracks in
             Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-}
-
-final class ArtworkCache {
-    static let shared = ArtworkCache()
-    private let images = NSCache<NSString, UIImage>()
-    init() {
-        // Thumbnails are small, but an unbounded cache grows with every
-        // album ever scrolled past. Cap count and total decoded cost so a
-        // large library cannot push the app into memory pressure.
-        images.countLimit = 300
-        images.totalCostLimit = 64 * 1024 * 1024
-    }
-    func image(at url: URL) -> UIImage? {
-        let key = url.path as NSString
-        if let cached = images.object(forKey: key) { return cached }
-        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
-        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-        images.setObject(image, forKey: key, cost: cost)
-        return image
-    }
-    func removeAll() { images.removeAllObjects() }
-}
-
-struct ArtworkView: View {
-    enum Placeholder { case accent, neutral }
-    let track: Track?
-    let root: URL
-    var size: CGFloat?
-    var placeholder: Placeholder = .accent
-    var body: some View {
-        Group {
-            if let name = track?.artworkFilename, let image = ArtworkCache.shared.image(at: root.appendingPathComponent(name)) {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else if placeholder == .neutral {
-                ZStack {
-                    Color(white: 0.16)
-                    Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.85))
-                }
-            } else {
-                ZStack {
-                    LinearGradient(colors: [MusicTheme.accent.opacity(0.85), .pink.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: "music.note").resizable().scaledToFit().padding(30).foregroundStyle(.white.opacity(0.9))
-                }
-            }
-        }.frame(width: size, height: size).aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: artworkCorner, style: .continuous))
-            .accessibilityHidden(true)
-    }
-
-    private var artworkCorner: CGFloat {
-        let side = size ?? 150
-        if side <= 64 { return 6 }
-        if side < 120 { return 8 }
-        return 12
     }
 }
 
@@ -735,6 +702,7 @@ private struct AccessoryMiniPlayer: View {
     var open: () -> Void
     var zoom: Namespace.ID
     var expanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
@@ -744,10 +712,13 @@ private struct AccessoryMiniPlayer: View {
                 .matchedGeometryEffect(id: "playerArtwork", in: zoom, isSource: !expanded)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    .contentTransition(.opacity)
                 if !compact, !artist.isEmpty {
                     Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        .contentTransition(.opacity)
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: toggle) {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)

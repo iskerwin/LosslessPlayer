@@ -266,12 +266,21 @@ enum RowHitMap {
 }
 
 struct RowPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .background(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
     }
+}
+
+func trackContextID(_ tracks: [Track]) -> Int {
+    var hasher = Hasher()
+    for track in tracks { hasher.combine(track.id) }
+    return hasher.finalize()
 }
 
 struct EllipsisLabel: View {
@@ -294,13 +303,19 @@ private struct CollectionGlassButton: ViewModifier {
     }
 }
 
-struct SongRow: View {
+struct SongRow: View, Equatable {
     let track: Track
     let root: URL
     var current = false
     var playing = false
     var indexLabel: String? = nil
     var emphasis: Color = MusicTheme.accent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func == (lhs: SongRow, rhs: SongRow) -> Bool {
+        lhs.track == rhs.track && lhs.root == rhs.root && lhs.current == rhs.current
+            && lhs.playing == rhs.playing && lhs.indexLabel == rhs.indexLabel
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -316,6 +331,7 @@ struct SongRow: View {
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(current ? emphasis : Color.primary)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: current)
                 Text(track.available ? track.artist : "文件已失效 · 请重新扫描")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -326,9 +342,12 @@ struct SongRow: View {
                 Image(systemName: "waveform")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(emphasis)
+                    .symbolEffect(.variableColor.iterative.reversing, options: .repeating, isActive: playing && !reduceMotion)
+                    .transition(.opacity)
                     .accessibilityHidden(true)
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: current && playing)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -366,7 +385,7 @@ struct SongMenuPreview: View {
     }
 }
 
-struct SongContextRow: View {
+struct SongContextRow: View, Equatable {
     let track: Track
     let root: URL
     var current = false
@@ -375,7 +394,17 @@ struct SongContextRow: View {
     var showsMenu = true
     var emphasis: Color = MusicTheme.accent
     var showsLocalStatus = false
+    /// Changes when the play-context order changes, so an equatable skip
+    /// cannot keep a closure that still captures the previous list.
+    var contextID = 0
     var handlers: SongHandlers
+
+    static func == (lhs: SongContextRow, rhs: SongContextRow) -> Bool {
+        lhs.track == rhs.track && lhs.root == rhs.root && lhs.current == rhs.current
+            && lhs.playing == rhs.playing && lhs.indexLabel == rhs.indexLabel
+            && lhs.showsMenu == rhs.showsMenu && lhs.showsLocalStatus == rhs.showsLocalStatus
+            && lhs.contextID == rhs.contextID
+    }
 
     var body: some View {
         HStack(spacing: 0) {

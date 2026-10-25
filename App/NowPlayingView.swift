@@ -34,7 +34,6 @@ enum ArtworkSwipe {
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    @ObservedObject private var playbackClock: PlaybackClock
     var onOpen: (LibraryRoute) -> Void
     var onDelete: (Track) -> Void
     /// The player is an overlay above the tabs, not a modal cover, so
@@ -55,13 +54,10 @@ struct NowPlayingView: View {
         self.onClose = onClose
         self.morphNamespace = morphNamespace
         self.morphActive = morphActive
-        _playbackClock = ObservedObject(wrappedValue: player.clock)
     }
 
     private enum Panel { case artwork, lyrics, queue }
     @State private var panel = Panel.artwork
-    @State private var scrubbing = false
-    @State private var draft: Double = 0
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var dismissOffset: CGFloat = 0
@@ -88,6 +84,10 @@ struct NowPlayingView: View {
     /// Direction of the most recent track change, so the artwork/title slide
     /// the way Music does: next slides in from the right, previous from the left.
     @State private var skipDirection: ArtworkSwipe.Direction = .next
+    /// Parsed once per track. The playback clock must not re-run the regex
+    /// on every tick, and the clock is observed only by the scrubber and
+    /// the lyrics list so a position update does not rebuild the player.
+    @State private var lyricLines: [LyricsLine] = []
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
         let duration = current?.duration ?? 0
@@ -132,9 +132,13 @@ struct NowPlayingView: View {
         .accessibilityIdentifier("now-playing")
         // Presented as an overlay, not a cover: our drag owns dismissal
         // outright (past 90pt it closes via onClose and the morph reverses).
-        .onAppear(perform: refreshBackdrop)
+        .onAppear {
+            refreshBackdrop()
+            reloadLyrics()
+        }
         .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
-        .onChange(of: current?.id) { _, _ in scrubbing = false }
+        .onChange(of: current?.id) { _, _ in reloadLyrics() }
+        .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
         .task {
             try? await Task.sleep(for: .milliseconds(60))
             withAnimation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.9)) { entered = true }
@@ -249,6 +253,9 @@ struct NowPlayingView: View {
                         .transition(artworkTransition)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
+                        // Flatten the blur once, then scale the texture. A
+                        // shadow inside an animating scale re-blurs every frame.
+                        .compositingGroup()
                         .scaleEffect(player.playing ? 1 : 0.86)
                         .offset(x: reduceMotion ? 0 : artworkSwipeX)
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
@@ -353,33 +360,7 @@ struct NowPlayingView: View {
     }
 
     private var scrubber: some View {
-        VStack(spacing: -PlayerControlMetrics.timestampOverlap) {
-            ThinScrubber(value: Binding(
-                get: { scrubbing ? draft : min(playbackClock.position, duration) },
-                set: { draft = $0 }
-            ), range: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
-                if editing {
-                    draft = playbackClock.position
-                    scrubbing = true
-                } else {
-                    if scrubbing, duration > 0 { player.seek(draft) }
-                    scrubbing = false
-                }
-            }, onCancel: { scrubbing = false })
-            .id(current?.id)
-            .disabled(duration == 0)
-            .accessibilityLabel("播放进度")
-            .accessibilityValue(duration > 0 ? "\(clock(scrubbing ? draft : playbackClock.position))，共 \(clock(duration))" : "时长未知")
-            .accessibilityIdentifier("playback-progress")
-            HStack {
-                Text(duration > 0 ? clock(scrubbing ? draft : playbackClock.position) : "--:--")
-                Spacer()
-                Text(duration > 0 ? "−" + clock(max(0, duration - (scrubbing ? draft : playbackClock.position))) : "--:--")
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.6))
-            .allowsHitTesting(false)
-        }
+        PlaybackScrubber(playbackClock: player.clock, duration: duration, trackID: current?.id) { player.seek($0) }
     }
 
     private var transport: some View {
@@ -472,6 +453,7 @@ struct NowPlayingView: View {
                     ForEach(player.upcomingTracks) { track in
                         Button { player.load(track) } label: {
                             SongRow(track: track, root: library.root, emphasis: .white)
+                                .equatable()
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color.clear)
@@ -511,11 +493,19 @@ struct NowPlayingView: View {
     }
 
     @ViewBuilder private var lyricsPanel: some View {
-        if let text = current?.lyrics, current?.hasLyrics == true {
-            LyricsScroll(lines: LyricsLine.parse(text), position: playbackClock.position) { player.seek($0) }
-        } else {
+        if lyricLines.isEmpty {
             ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。"))
+        } else {
+            PlaybackLyrics(clock: player.clock, lines: lyricLines) { player.seek($0) }
         }
+    }
+
+    private func reloadLyrics() {
+        guard let text = current?.lyrics, current?.hasLyrics == true else {
+            lyricLines = []
+            return
+        }
+        lyricLines = LyricsLine.parse(text)
     }
 
     private var detailsSheet: some View {
@@ -574,7 +564,7 @@ struct NowPlayingView: View {
         let url = library.root.appendingPathComponent(filename)
         Task { @MainActor in
             let ready = await Task.detached(priority: .userInitiated) { () -> Bool in
-                guard let image = ArtworkCache.shared.image(at: url) else { return false }
+                guard let image = ArtworkCache.shared.image(at: url, maxPixel: 160) else { return false }
                 ArtworkAnalysisCache.shared.store(ArtworkAnalysis.make(from: image), for: filename)
                 return true
             }.value
@@ -588,6 +578,60 @@ struct NowPlayingView: View {
         palette = analysis.palette.map { Color(uiColor: $0) }
         backdropImage = analysis.backdrop
         backdropKey = key
+    }
+}
+
+/// Observes the playback clock so the rest of the player does not rebuild
+/// every half second.
+private struct PlaybackScrubber: View {
+    @ObservedObject var playbackClock: PlaybackClock
+    var duration: Double
+    var trackID: UUID?
+    var seek: (Double) -> Void
+    @State private var scrubbing = false
+    @State private var draft: Double = 0
+
+    private var shown: Double { scrubbing ? draft : min(playbackClock.position, duration) }
+
+    var body: some View {
+        VStack(spacing: -PlayerControlMetrics.timestampOverlap) {
+            ThinScrubber(value: Binding(
+                get: { shown },
+                set: { draft = $0 }
+            ), range: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
+                if editing {
+                    draft = playbackClock.position
+                    scrubbing = true
+                } else {
+                    if scrubbing, duration > 0 { seek(draft) }
+                    scrubbing = false
+                }
+            }, onCancel: { scrubbing = false })
+            .id(trackID)
+            .disabled(duration == 0)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
+            .accessibilityIdentifier("playback-progress")
+            HStack {
+                Text(duration > 0 ? clock(shown) : "--:--")
+                Spacer()
+                Text(duration > 0 ? "−" + clock(max(0, duration - shown)) : "--:--")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+            .allowsHitTesting(false)
+        }
+        .onChange(of: trackID) { _, _ in scrubbing = false }
+    }
+}
+
+private struct PlaybackLyrics: View {
+    @ObservedObject var clock: PlaybackClock
+    var lines: [LyricsLine]
+    var seek: (Double) -> Void
+
+    var body: some View {
+        LyricsScroll(lines: lines, position: clock.position, seek: seek)
     }
 }
 
@@ -859,11 +903,13 @@ struct LyricsScroll: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                        Button { if let time = line.time { seek(time) } } label: {
-                            Text(line.text).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
-                                .foregroundStyle(line.time == nil || index == active ? Color.white : Color.white.opacity(0.45))
-                        }
-                        .buttonStyle(.plain)
+                        LyricLineText(
+                            text: line.text,
+                            prominent: line.time == nil || index == active,
+                            time: line.time,
+                            seek: seek
+                        )
+                        .equatable()
                         .id(index)
                     }
                 }
@@ -880,32 +926,46 @@ struct LyricsScroll: View {
     }
 }
 
+private struct LyricLineText: View, Equatable {
+    var text: String
+    var prominent: Bool
+    var time: Double?
+    var seek: (Double) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func == (lhs: LyricLineText, rhs: LyricLineText) -> Bool {
+        lhs.text == rhs.text && lhs.prominent == rhs.prominent && lhs.time == rhs.time
+    }
+
+    var body: some View {
+        Button { if let time { seek(time) } } label: {
+            Text(text)
+                .font(.title3.bold())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(prominent ? Color.white : Color.white.opacity(0.45))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: prominent)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct LyricsReader: View {
     @ObservedObject var player: PlayerStore
-    @ObservedObject private var clock: PlaybackClock
     let track: Track
+    @State private var lines: [LyricsLine]
     @Environment(\.dismiss) private var dismiss
 
     init(player: PlayerStore, track: Track) {
         self.player = player
         self.track = track
-        _clock = ObservedObject(wrappedValue: player.clock)
+        _lines = State(initialValue: track.hasLyrics ? LyricsLine.parse(track.lyrics ?? "") : [])
     }
-
-    private var isCurrent: Bool { player.current?.id == track.id }
 
     var body: some View {
         NavigationStack {
             Group {
-                if track.hasLyrics, let text = track.lyrics {
-                    LyricsScroll(lines: LyricsLine.parse(text), position: isCurrent ? clock.position : nil) { time in
-                        if isCurrent || player.queueIDs.contains(track.id) {
-                            if isCurrent { player.seek(time) }
-                            else { player.load(track, at: time, keepTransport: true) }
-                        } else {
-                            player.load(track, at: time)
-                        }
-                    }
+                if track.hasLyrics {
+                    LyricsReaderBody(player: player, track: track, lines: lines)
                 } else {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble", description: Text("这首歌没有内嵌或同名的歌词。"))
                 }
@@ -916,6 +976,35 @@ struct LyricsReader: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+    }
+}
+
+/// Clock observer for the reader. Parsing stays in `LyricsReader`, which does
+/// not subscribe to the half-second position.
+private struct LyricsReaderBody: View {
+    @ObservedObject var player: PlayerStore
+    @ObservedObject private var clock: PlaybackClock
+    let track: Track
+    let lines: [LyricsLine]
+
+    init(player: PlayerStore, track: Track, lines: [LyricsLine]) {
+        self.player = player
+        self.track = track
+        self.lines = lines
+        _clock = ObservedObject(wrappedValue: player.clock)
+    }
+
+    private var isCurrent: Bool { player.current?.id == track.id }
+
+    var body: some View {
+        LyricsScroll(lines: lines, position: isCurrent ? clock.position : nil) { time in
+            if isCurrent || player.queueIDs.contains(track.id) {
+                if isCurrent { player.seek(time) }
+                else { player.load(track, at: time, keepTransport: true) }
+            } else {
+                player.load(track, at: time)
+            }
+        }
     }
 }
 
