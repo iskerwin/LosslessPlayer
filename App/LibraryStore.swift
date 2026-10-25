@@ -25,6 +25,23 @@ final class LibraryStore: ObservableObject {
     /// large library. The index is rebuilt wherever `snapshot` is replaced
     /// (init and `persist`, the only two places), so it cannot go stale.
     private(set) var trackByID: [UUID: Track] = [:]
+    /// Library-wide groupings the home, album and artist pages render.
+    /// These used to be recomputed inside `LibraryView.body` — album
+    /// grouping with localized sorts, a full-library filter per artist
+    /// row — and `body` re-runs on every player publish, including the
+    /// 0.5 s position timer, so browsing re-paid the full cost twice a
+    /// second while music played. They are rebuilt together with
+    /// `trackByID` wherever `snapshot` is replaced, so they cannot go
+    /// stale either.
+    private(set) var albumGroups: [AlbumGroup] = []
+    /// `albumGroups` ordered most-recently-added first, for the home page.
+    private(set) var recentAlbums: [AlbumGroup] = []
+    /// Unique artist names, sorted the way the artist index presents them.
+    private(set) var artistNames: [String] = []
+    /// Tracks keyed by normalized artist name; see `tracks(forArtist:)`.
+    private var artistTracks: [String: [Track]] = [:]
+    private(set) var favoriteTracks: [Track] = []
+    private(set) var recentlyPlayed: [Track] = []
     static let extensions = AudioScanner.extensions
 
     func track(_ id: UUID?) -> Track? {
@@ -37,8 +54,35 @@ final class LibraryStore: ObservableObject {
         ids.compactMap { trackByID[$0] }
     }
 
+    /// The tracks credited to `artist`, in library order. Matching is by
+    /// normalized name, the same comparison the artist pages used to run
+    /// as a full-library filter for every row on every render.
+    func tracks(forArtist artist: String) -> [Track] {
+        artistTracks[AudioTags.normalized(artist)] ?? []
+    }
+
     private func rebuildIndex() {
         trackByID = Dictionary(snapshot.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Rebuilds the derived collections declared above from `snapshot`.
+    /// Called at exactly the same two places as `rebuildIndex()`.
+    private func rebuildDerived() {
+        let all = snapshot.tracks
+        albumGroups = AlbumGroup.groups(all)
+        recentAlbums = albumGroups.sorted { $0.latest > $1.latest }
+        artistNames = Array(Set(all.flatMap(\.artistNames)))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var byArtist: [String: [Track]] = [:]
+        for track in all {
+            for name in track.artistNames {
+                byArtist[AudioTags.normalized(name), default: []].append(track)
+            }
+        }
+        artistTracks = byArtist
+        favoriteTracks = all.filter(\.favorite)
+        recentlyPlayed = all.filter { $0.lastPlayed != nil }
+            .sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
     }
 
     init(root: URL? = nil) {
@@ -62,6 +106,7 @@ final class LibraryStore: ObservableObject {
                 }
             }
             rebuildIndex()
+            rebuildDerived()
             loadPlayback()
         } catch { errorMessage = "资料库读取失败：\(error.localizedDescription)" }
     }
@@ -115,6 +160,7 @@ final class LibraryStore: ObservableObject {
             try JSONEncoder().encode(candidate).write(to: indexURL, options: .atomic)
             snapshot = candidate
             rebuildIndex()
+            rebuildDerived()
             return true
         } catch { errorMessage = "资料库保存失败：\(error.localizedDescription)"; return false }
     }
