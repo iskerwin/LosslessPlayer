@@ -990,7 +990,9 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         }
         try XCTUnwrap(source.jpegData(compressionQuality: 0.8)).write(to: url)
         ArtworkCache.shared.removeAll()
-        let loaded = try XCTUnwrap(await ArtworkCache.shared.load(at: url, maxPixel: 80))
+        // Await outside XCTUnwrap: its autoclosure cannot contain an async call.
+        let loadedImage = await ArtworkCache.shared.load(at: url, maxPixel: 80)
+        let loaded = try XCTUnwrap(loadedImage)
         XCTAssertLessThanOrEqual(max(loaded.size.width, loaded.size.height), 80.5)
         let cached = try XCTUnwrap(ArtworkCache.shared.cachedImage(at: url, maxPixel: 80))
         XCTAssertTrue(loaded === cached)
