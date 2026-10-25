@@ -875,7 +875,15 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
             tracks.append(track)
         }
         let derived = Self.derive(tracks)
-        XCTAssertEqual(derived.albums.map(\.id), AlbumGroup.groups(tracks).map(\.id))
+        // Album groups that share a display name tie in `localizedStandardCompare`,
+        // and `Dictionary(grouping:)` does not promise an order. Compare identity
+        // and the tracks inside each album, which follow library order.
+        let directAlbums = AlbumGroup.groups(tracks)
+        XCTAssertEqual(Set(derived.albums.map(\.id)), Set(directAlbums.map(\.id)))
+        let directTracks = Dictionary(uniqueKeysWithValues: directAlbums.map { ($0.id, $0.tracks.map(\.id)) })
+        for album in derived.albums {
+            XCTAssertEqual(album.tracks.map(\.id), directTracks[album.id])
+        }
         XCTAssertEqual(derived.recent.map(\.id), derived.albums.sorted { $0.latest > $1.latest }.map(\.id))
         let names = Array(Set(tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         XCTAssertEqual(derived.names, names)
