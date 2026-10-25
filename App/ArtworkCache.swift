@@ -160,13 +160,24 @@ struct FileArtwork: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var image: UIImage?
+    /// `taskID` the stored bitmap was decoded for. A mismatch means the
+    /// track changed and `image` is the previous cover.
+    @State private var resolvedKey: String?
 
     private var tier: CGFloat {
         ArtworkCache.displayTier(points: pointSize ?? 180, scale: displayScale)
     }
 
+    /// The bitmap for the current file. A stored image is only kept while
+    /// its key still matches: the view is reused across tracks (mini player,
+    /// now playing), and preferring the stored bitmap made a cache hit for
+    /// the new file return early and leave the previous cover on screen.
     private var displayed: UIImage? {
-        if let image { return image }
+        Self.displayedImage(stored: image, storedKey: resolvedKey, key: taskID, url: url, tier: tier)
+    }
+
+    static func displayedImage(stored: UIImage?, storedKey: String?, key: String, url: URL?, tier: CGFloat) -> UIImage? {
+        if let stored, storedKey == key { return stored }
         guard let url else { return nil }
         return ArtworkCache.shared.bestCachedImage(at: url, maxPixel: tier)
     }
@@ -178,6 +189,7 @@ struct FileArtwork: View {
                 Image(uiImage: displayed)
                     .resizable()
                     .scaledToFill()
+                    .id(taskID)
                     .transition(.opacity)
             }
         }
@@ -194,11 +206,21 @@ struct FileArtwork: View {
     }
 
     private func load() async {
-        guard let url else { return }
-        if ArtworkCache.shared.cachedImage(at: url, maxPixel: tier) != nil { return }
+        let key = taskID
+        guard let url else {
+            image = nil
+            resolvedKey = nil
+            return
+        }
+        if let cached = ArtworkCache.shared.cachedImage(at: url, maxPixel: tier) {
+            image = cached
+            resolvedKey = key
+            return
+        }
         let loaded = await ArtworkCache.shared.load(at: url, maxPixel: tier)
         guard !Task.isCancelled else { return }
         image = loaded
+        resolvedKey = key
     }
 
     @ViewBuilder private var placeholderView: some View {

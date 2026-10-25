@@ -39,6 +39,11 @@ struct NowPlayingView: View {
     /// The player is an overlay above the tabs, not a modal cover, so
     /// closing is the presenter's job (it also reverses the artwork morph).
     var onClose: () -> Void
+    /// Downward drag distance in points, or 0 when the drag is no longer
+    /// vertical. The presenter dims the library from this; it is not animated.
+    var onPull: (CGFloat) -> Void
+    /// The drag ended short of dismiss. The presenter springs the dim back.
+    var onPullCancelled: () -> Void
     /// Shared-element morph with the mini player: when a namespace is
     /// wired, the stage artwork is the morph source while `morphActive`.
     var morphNamespace: Namespace.ID?
@@ -46,12 +51,14 @@ struct NowPlayingView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
         self.onDelete = onDelete
         self.onClose = onClose
+        self.onPull = onPull
+        self.onPullCancelled = onPullCancelled
         self.morphNamespace = morphNamespace
         self.morphActive = morphActive
     }
@@ -106,18 +113,29 @@ struct NowPlayingView: View {
                 }
             }
         }
-        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
         // The backdrop hangs as a background, never as a ZStack sibling:
         // as a sibling its scaled-to-fill image took part in the stack's
         // size negotiation, the root could size past the window, and the
         // 560-capped content column centered off-screen (the queue button
         // landed at x=395 on a ~393pt screen; XCUITest found no hit point).
         // Backgrounds are sized by the content, never the reverse.
+        //
+        // Opacity is on the expanded plate itself, then the drag offset
+        // wraps the plate. An ignoresSafeArea background drawn outside the
+        // fading view stays fully opaque until the player is removed, and
+        // light mode snaps from that color to the white library.
         .background {
-            ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
-                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+            ZStack {
+                Color(white: 0.08)
+                ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+            }
+            .ignoresSafeArea()
+            .compositingGroup()
+            .opacity(morphActive ? 1 : 0)
+            .animation(reduceMotion ? .easeInOut(duration: 0.25) : LibraryView.playerSpring, value: morphActive)
         }
-        .background(Color(white: 0.08).ignoresSafeArea())
+        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
         // While a drag is live its value is non-zero and the offset follows
         // the finger 1:1 with no animation; a spring on the drag value made
         // the page trail the touch. The spring returns exactly when the
@@ -199,12 +217,15 @@ struct NowPlayingView: View {
                     offset = max(0, value.translation.height)
                 }
             }
+            .onChanged { reportPull($0.translation) }
             .onEnded { value in
                 if value.translation.height > 90,
                    value.translation.height > abs(value.translation.width) * 1.5 {
                     frozenDismissY = max(0, value.translation.height)
                     dismissing = true
                     onClose()
+                } else {
+                    onPullCancelled()
                 }
             }
     }
@@ -219,17 +240,33 @@ struct NowPlayingView: View {
             .updating($artworkDrag) { value, state, _ in
                 state = value.translation
             }
+            .onChanged { reportPull($0.translation) }
             .onEnded { value in
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
                     skipDirection = direction
+                    onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
                     frozenDismissY = max(0, value.translation.height)
                     dismissing = true
                     onClose()
+                } else {
+                    onPullCancelled()
                 }
             }
+    }
+
+    /// Tell the library how far this drag has pulled the sheet down, so its
+    /// dim can fade with the finger. Reduce Motion keeps the crossfade for
+    /// the dismiss itself and does not scrub the dim mid-gesture.
+    private func reportPull(_ translation: CGSize) {
+        guard !reduceMotion else { return }
+        if translation.height > abs(translation.width) * 1.5 {
+            onPull(max(0, translation.height))
+        } else {
+            onPull(0)
+        }
     }
 
     /// Vertical follow for the artwork drag: only the dominant-down part
