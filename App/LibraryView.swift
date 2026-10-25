@@ -184,7 +184,7 @@ struct LibraryView: View {
 
     private var favoritesStack: some View {
         NavigationStack(path: $favoritesPath) {
-            page(library.tracks.filter(\.favorite), title: "收藏", kind: .favorites, showsBack: false)
+            page(library.favoriteTracks, title: "收藏", kind: .favorites, showsBack: false)
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
     }
@@ -331,7 +331,7 @@ struct LibraryView: View {
                         Text("\(library.tracks.count) 首").font(.caption).foregroundStyle(.secondary)
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
-                        ForEach(recentAlbums, id: \.id) { album in
+                        ForEach(library.recentAlbums, id: \.id) { album in
                             NavigationLink(value: LibraryRoute.album(album.id)) {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ArtworkView(track: album.tracks.first, root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
@@ -364,10 +364,6 @@ struct LibraryView: View {
         case .playlist: return PlaylistFileTypes.readable
         }
     }
-    private var recentAlbums: [AlbumGroup] { AlbumGroup.groups(library.tracks).sorted { $0.latest > $1.latest } }
-    private var recentlyPlayed: [Track] {
-        library.tracks.filter { $0.lastPlayed != nil }.sorted { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
-    }
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { Text("正在整理音乐").font(.headline); Spacer(); Button("取消") { library.cancelScan() } }
@@ -395,11 +391,11 @@ struct LibraryView: View {
         case .songs: page(library.tracks, title: "歌曲", kind: .songs, showsBack: true)
         case .artists: artistIndex
         case .artist(let artist):
-            page(library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }, title: artist, kind: .artist, showsBack: true)
+            page(library.tracks(forArtist: artist), title: artist, kind: .artist, showsBack: true)
         case .albums: albumIndex
         case .album(let id):
             page(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", kind: .album, showsBack: true)
-        case .recent: page(recentlyPlayed, title: "最近播放", kind: .recent, showsBack: true)
+        case .recent: page(library.recentlyPlayed, title: "最近播放", kind: .recent, showsBack: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
             page(library.tracks(for: playlist?.trackIDs ?? []),
@@ -408,8 +404,8 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        List(Array(Set(library.tracks.flatMap(\.artistNames))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { artist in
-            let tracks = library.tracks.filter { $0.artistNames.contains { AudioTags.normalized($0) == AudioTags.normalized(artist) } }
+        List(library.artistNames, id: \.self) { artist in
+            let tracks = library.tracks(forArtist: artist)
             browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
                 open(.artist(artist))
             }
@@ -424,7 +420,7 @@ struct LibraryView: View {
     private var albumIndex: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
-                ForEach(AlbumGroup.groups(library.tracks)) { album in
+                ForEach(library.albumGroups) { album in
                     Button { open(.album(album.id)) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
@@ -623,10 +619,14 @@ struct AlbumGroup: Identifiable {
     var name: String
     var artist: String
     var tracks: [Track]
-    var latest: Date { tracks.compactMap(\.addedAt).max() ?? .distantPast }
+    /// Most recent `addedAt` in the group, computed once at grouping
+    /// time. As a computed property it re-scanned the group's tracks on
+    /// every sort comparison of every "recently added" render.
+    var latest: Date
     static func groups(_ tracks: [Track]) -> [Self] {
         Dictionary(grouping: tracks, by: \.albumID).map { id, tracks in
-            Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks)
+            Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks,
+                 latest: tracks.compactMap(\.addedAt).max() ?? .distantPast)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }
