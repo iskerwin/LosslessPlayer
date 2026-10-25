@@ -84,8 +84,6 @@ struct NowPlayingView: View {
 
     var body: some View {
         ZStack {
-            ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
-                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
             GeometryReader { geometry in
                 if geometry.size.height < 600 || dynamicTypeSize.isAccessibilitySize {
                     ScrollView {
@@ -97,6 +95,16 @@ struct NowPlayingView: View {
             }
         }
         .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
+        // The backdrop hangs as a background, never as a ZStack sibling:
+        // as a sibling its scaled-to-fill image took part in the stack's
+        // size negotiation, the root could size past the window, and the
+        // 560-capped content column centered off-screen (the queue button
+        // landed at x=395 on a ~393pt screen; XCUITest found no hit point).
+        // Backgrounds are sized by the content, never the reverse.
+        .background {
+            ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+        }
         .background(Color(white: 0.08).ignoresSafeArea())
         // While a drag is live its value is non-zero and the offset follows
         // the finger 1:1 with no animation; a spring on the drag value made
