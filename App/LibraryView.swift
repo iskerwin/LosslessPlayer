@@ -14,6 +14,8 @@ struct LibraryView: View {
     /// The player overlay stays mounted while a collapse plays (artwork
     /// flight + fade) and unmounts when it lands; see setPlayer(_:).
     @State private var playerMounted = false
+    @State private var collapseProgress: CGFloat = 1
+    @State private var playerTransition = 0
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -36,37 +38,42 @@ struct LibraryView: View {
     /// library recede and player fade — so the parts never drift apart.
     static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
     /// 1 while the player covers the library, 0 when it is collapsed.
-    /// A drag writes this directly so the dim tracks the finger; open,
-    /// dismiss and snap-back animate it with `playerSpring`.
+    /// A drag writes this directly; cancellation springs it back to 1.
+    /// On close it stays at the release value, multiplied by the shared
+    /// collapse progress so dim and scale finish with the moving sheet.
     @State private var playerReveal: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            playerTabs
-                // Scale is a GPU transform. brightness() is a color filter
-                // that re-rasterizes the whole tab tree every frame of the
-                // spring, so the dim is a black overlay (opacity only).
-                // `playerReveal` is continuous: a drag eases the dim off with
-                // the finger, and the dismiss spring finishes it at 0. A
-                // boolean dim stayed fully dark until the player unmounted,
-                // which snapped the light-mode library to white.
-                .scaleEffect(reduceMotion ? 1 : (1 - 0.04 * playerReveal))
-                .overlay {
-                    Color.black
-                        .opacity(0.34 * playerReveal)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
+        GeometryReader { geometry in
+            let collapseDistance = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+            let reveal = playerReveal * (1 - collapseProgress)
+            ZStack {
+                playerTabs
+                    // Scale is a GPU transform. brightness() is a color filter
+                    // that re-rasterizes the whole tab tree every frame of the
+                    // spring, so the dim is a black overlay (opacity only).
+                    // Reveal is continuous: a drag eases the dim off with the
+                    // finger, and the shared collapse progress finishes it at 0. A
+                    // boolean dim stayed fully dark until the player unmounted,
+                    // which snapped the light-mode library to white.
+                    .scaleEffect(reduceMotion ? 1 : (1 - 0.04 * reveal))
+                    .overlay {
+                        Color.black
+                            .opacity(0.34 * reveal)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                    }
+                    .accessibilityHidden(showPlayer)
+                if playerMounted {
+                    NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                        setPlayer(false)
+                        pendingDelete = [track]
+                    }, onClose: { setPlayer(false) }, onPull: { followPull($0, distance: collapseDistance) }, onPullCancelled: cancelPull, morphNamespace: playerZoom, morphActive: showPlayer, collapseProgress: collapseProgress, collapseDistance: collapseDistance)
+                    .opacity(1 - collapseProgress)
+                    .accessibilityHidden(!showPlayer)
+                    .allowsHitTesting(showPlayer)
+                    .zIndex(1)
                 }
-                .accessibilityHidden(showPlayer)
-            if playerMounted {
-                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                    setPlayer(false)
-                    pendingDelete = [track]
-                }, onClose: { setPlayer(false) }, onPull: followPull, onPullCancelled: cancelPull, morphNamespace: playerZoom, morphActive: showPlayer)
-                .opacity(showPlayer ? 1 : 0)
-                .animation(playerAnimation, value: showPlayer)
-                .accessibilityHidden(!showPlayer)
-                .zIndex(1)
             }
         }
             .sheet(isPresented: $showSources) {
@@ -527,30 +534,32 @@ struct LibraryView: View {
     /// keep their presented values until this view is removed, and light
     /// mode then pops from the album color to white.
     private func setPlayer(_ expanded: Bool) {
+        guard expanded != showPlayer else { return }
+        playerTransition += 1
+        let transition = playerTransition
         if expanded { playerMounted = true }
         var transaction = Transaction(animation: playerAnimation)
         transaction.disablesAnimations = false
         withTransaction(transaction) {
-            showPlayer = expanded
-            playerReveal = expanded ? 1 : 0
-        }
-        guard !expanded else { return }
-        // The spring's visible settle is longer than its 0.45 response.
-        // Unmount only after the plate and the dim have both arrived at 0,
-        // so removing the view does not uncover a different background.
-        Task { @MainActor in
-            try? await Task.sleep(for: reduceMotion ? .milliseconds(300) : .milliseconds(800))
-            guard !showPlayer else { return }
-            playerMounted = false
-            playerReveal = 0
+            withAnimation(playerAnimation, completionCriteria: .removed) {
+                showPlayer = expanded
+                collapseProgress = expanded ? 0 : 1
+                if expanded { playerReveal = 1 }
+            } completion: {
+                // A previous close must not unmount a re-opened player, or
+                // a newer close that is still in flight.
+                guard !expanded, !showPlayer, playerTransition == transition else { return }
+                playerMounted = false
+                playerReveal = 0
+            }
         }
     }
 
     /// Finger-driven dim. Not animated: the overlay should match the drag
     /// on the same frame. Reduce Motion keeps the dim put until dismiss.
-    private func followPull(_ translation: CGFloat) {
+    private func followPull(_ translation: CGFloat, distance: CGFloat) {
         guard showPlayer, !reduceMotion else { return }
-        let next = PlayerPull.reveal(for: translation)
+        let next = PlayerPull.reveal(for: translation, distance: distance)
         guard abs(next - playerReveal) > 0.0001 else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -698,14 +707,17 @@ struct AlbumGroup: Identifiable {
     }
 }
 
-/// How far a downward drag has to travel before the library dim is gone.
-/// The sheet itself keeps following the finger past this distance.
+/// The dim and library scale follow the sheet over its full exit distance.
+/// No fixed cutoff can finish the reveal while the sheet is still onscreen.
 enum PlayerPull {
-    static let dimDistance: CGFloat = 280
-
-    static func reveal(for translation: CGFloat, distance: CGFloat = dimDistance) -> CGFloat {
+    static func reveal(for translation: CGFloat, distance: CGFloat) -> CGFloat {
         guard distance > 0 else { return 1 }
         return min(1, max(0, 1 - max(0, translation) / distance))
+    }
+
+    /// Oversized drags already beyond the viewport must never reverse on release.
+    static func remainingTravel(from release: CGFloat, distance: CGFloat) -> CGFloat {
+        max(0, distance - max(0, release))
     }
 }
 

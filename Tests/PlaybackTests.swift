@@ -1091,13 +1091,32 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertTrue(preview === large)
     }
 
-    func testPullRevealTracksTheFingerAndClearsAtTheDimDistance() {
-        XCTAssertEqual(PlayerPull.reveal(for: 0), 1)
-        XCTAssertEqual(PlayerPull.reveal(for: -40), 1)
-        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance / 2), 0.5, accuracy: 0.001)
-        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance), 0)
-        XCTAssertEqual(PlayerPull.reveal(for: PlayerPull.dimDistance + 80), 0)
-        XCTAssertEqual(PlayerPull.reveal(for: 90), 1 - 90 / PlayerPull.dimDistance, accuracy: 0.001)
+    func testPullRevealUsesTheFullViewportRatherThanAFixedDimCutoff() {
+        for distance in [CGFloat(568), 844, 1024] {
+            XCTAssertEqual(PlayerPull.reveal(for: 0, distance: distance), 1)
+            XCTAssertEqual(PlayerPull.reveal(for: -40, distance: distance), 1)
+            XCTAssertEqual(PlayerPull.reveal(for: distance / 2, distance: distance), 0.5, accuracy: 0.001)
+            XCTAssertGreaterThan(PlayerPull.reveal(for: 280, distance: distance), 0)
+            XCTAssertEqual(PlayerPull.reveal(for: distance, distance: distance), 0)
+            XCTAssertEqual(PlayerPull.reveal(for: distance + 80, distance: distance), 0)
+        }
+        XCTAssertEqual(PlayerPull.reveal(for: 90, distance: 0), 1)
+        XCTAssertEqual(PlayerPull.reveal(for: 90, distance: -1), 1)
+    }
+
+    func testDismissContinuationStartsAtReleaseAndFinishesOffscreenWithoutReversing() {
+        let distance: CGFloat = 844
+        for release in [CGFloat(91), 280, 600, 844, 950] {
+            let travel = PlayerPull.remainingTravel(from: release, distance: distance)
+            XCTAssertGreaterThanOrEqual(travel, 0)
+            XCTAssertEqual(release + travel, max(release, distance))
+            // During the close, dim and translation describe the same progress.
+            for progress in [CGFloat(0), 0.25, 0.5, 1] {
+                let y = release + travel * progress
+                let reveal = PlayerPull.reveal(for: release, distance: distance) * (1 - progress)
+                XCTAssertEqual(reveal, PlayerPull.reveal(for: y, distance: distance), accuracy: 0.001)
+            }
+        }
     }
 }
 
