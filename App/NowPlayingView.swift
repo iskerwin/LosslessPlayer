@@ -48,10 +48,12 @@ struct NowPlayingView: View {
     /// wired, the stage artwork is the morph source while `morphActive`.
     var morphNamespace: Namespace.ID?
     var morphActive: Bool
+    var collapseProgress: CGFloat
+    var collapseDistance: CGFloat
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false, collapseProgress: CGFloat = 0, collapseDistance: CGFloat = 0) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
@@ -61,6 +63,8 @@ struct NowPlayingView: View {
         self.onPullCancelled = onPullCancelled
         self.morphNamespace = morphNamespace
         self.morphActive = morphActive
+        self.collapseProgress = collapseProgress
+        self.collapseDistance = collapseDistance
     }
 
     private enum Panel { case artwork, lyrics, queue }
@@ -133,15 +137,22 @@ struct NowPlayingView: View {
             .ignoresSafeArea()
             .compositingGroup()
             .opacity(morphActive ? 1 : 0)
-            .animation(reduceMotion ? .easeInOut(duration: 0.25) : LibraryView.playerSpring, value: morphActive)
         }
-        .offset(y: reduceMotion ? 0 : dismissOffset + artworkPullY + frozenDismissY)
-        // While a drag is live its value is non-zero and the offset follows
-        // the finger 1:1 with no animation; a spring on the drag value made
-        // the page trail the touch. The spring returns exactly when the
-        // gesture state resets to zero on release, animating the snap-back.
-        .animation(dismissing || reduceMotion || dismissOffset != 0 ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: dismissOffset)
-        .animation(dismissing || reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
+        // Scope the cancellation spring to the drag transform. Live input
+        // and accepted releases remain unanimated, without overriding the
+        // presenter's close transaction on the artwork or backdrop.
+        .animation(dismissing || reduceMotion || dismissOffset != 0 || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
+            content.offset(y: reduceMotion ? 0 : (dismissing && !morphActive ? frozenDismissY : dismissOffset + artworkPullY))
+        }
+        // The release position is retained by the inner transform; this
+        // continuation runs to the bottom with the shared collapse progress.
+        .offset(y: reduceMotion || !dismissing ? 0 : PlayerPull.remainingTravel(from: frozenDismissY, distance: collapseDistance) * collapseProgress)
+        .onChange(of: morphActive) { _, active in
+            if active {
+                dismissing = false
+                frozenDismissY = 0
+            }
+        }
         .foregroundStyle(.white)
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -294,9 +305,10 @@ struct NowPlayingView: View {
                         // shadow inside an animating scale re-blurs every frame.
                         .compositingGroup()
                         .scaleEffect(player.playing ? 1 : 0.86)
-                        .offset(x: reduceMotion ? 0 : artworkSwipeX)
+                        .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
+                            content.offset(x: reduceMotion ? 0 : artworkSwipeX)
+                        }
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
-                        .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9), value: artworkDrag)
                         .modifier(ArtworkMorph(namespace: morphNamespace, active: morphActive))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
