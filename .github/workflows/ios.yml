@@ -232,7 +232,7 @@ jobs:
 
           包含原生 Liquid Glass 导航、专辑/歌手/歌单、播放队列、本地歌词、递归文件夹扫描和新图标。模拟器单元测试通过后才会生成此发布。
 
-          定位是高音质本地播放，声音经过 iOS 系统混音。未验证真机音频设备兼容性，不保证无缝切歌或逐位输出。可用 SHA256SUMS.txt 校验下载文件。
+          定位是高音质本地播放，声音经过 iOS 系统混音。未验证真机音频设备兼容性，逐位输出取决于硬件与路由、不作保证；相同解码处理格式的曲目支持无缝切歌，不同格式仍走原有切歌路径。可用 SHA256SUMS.txt 校验下载文件。
           NOTES
           gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
             --title "Lossless 开发版 $RELEASE_TAG" --notes-file build/release-notes.md \
