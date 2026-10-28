@@ -1052,3 +1052,102 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(PlayerPull.reveal(for: 90), 1 - 90 / PlayerPull.dimDistance, accuracy: 0.001)
     }
 }
+
+/// Pure format comparisons and scheduling state only: never starts an audio
+/// engine or activates AVAudioSession, including on the CI simulator.
+final class GaplessPlaybackTests: XCTestCase {
+    private func format(_ rate: Double = 44100, channels: AVAudioChannelCount = 2) -> AVAudioFormat {
+        AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels)!
+    }
+
+    func testSameProcessingFormatCanPlayGaplessly() {
+        XCTAssertTrue(GaplessCompatibility.canJoin(format(), format()))
+    }
+
+    func testDifferentSampleRatesCannotPlayGaplessly() {
+        XCTAssertFalse(GaplessCompatibility.canJoin(format(), format(48000)))
+    }
+
+    func testDifferentChannelCountsCannotPlayGaplessly() {
+        XCTAssertFalse(GaplessCompatibility.canJoin(format(), format(channels: 1)))
+    }
+
+    func testDifferentPCMFormatsCannotPlayGaplessly() {
+        let integer = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 44100,
+                                    channels: 2, interleaved: false)!
+        XCTAssertFalse(GaplessCompatibility.canJoin(format(), integer))
+    }
+
+    func testPreloadSelectionRespectsQueueEndAndListRepeat() {
+        let a = UUID(), b = UUID()
+        XCTAssertEqual(GaplessQueueState.nextTrack(in: [a, b], after: a, repeatMode: .off), b)
+        XCTAssertNil(GaplessQueueState.nextTrack(in: [a, b], after: b, repeatMode: .off))
+        XCTAssertEqual(GaplessQueueState.nextTrack(in: [a, b], after: b, repeatMode: .all), a)
+        XCTAssertNil(GaplessQueueState.nextTrack(in: [], after: a, repeatMode: .all))
+    }
+
+    func testSingleTrackRepeatNeverPreloads() {
+        let a = UUID(), b = UUID()
+        XCTAssertNil(GaplessQueueState.nextTrack(in: [a, b], after: a, repeatMode: .one))
+        XCTAssertNil(GaplessQueueState.nextTrack(in: [a], after: a, repeatMode: .one))
+    }
+
+    func testQueuedTrackAdvancesOnceAndAcceptsFollowingTrack() throws {
+        var state = GaplessQueueState()
+        let first = state.begin()
+        let b = UUID(), c = UUID()
+        let second = try XCTUnwrap(state.enqueue(b))
+        XCTAssertNil(state.enqueue(c))
+        XCTAssertEqual(state.complete(first), .advanced(b))
+        XCTAssertNil(state.pending)
+        XCTAssertEqual(state.complete(first), .ignored)
+        let third = try XCTUnwrap(state.enqueue(c))
+        XCTAssertEqual(state.complete(second), .advanced(c))
+        XCTAssertEqual(state.complete(third), .finished)
+        XCTAssertEqual(state.complete(third), .ignored)
+    }
+
+    func testNoPreloadUsesNormalCompletion() {
+        var state = GaplessQueueState()
+        let first = state.begin()
+        XCTAssertEqual(state.complete(first), .finished)
+        XCTAssertNil(state.enqueue(UUID()))
+    }
+
+    func testSeekInvalidatesPreload() throws { try assertInvalidation(.seek) }
+    func testTrackChangeInvalidatesPreload() throws { try assertInvalidation(.trackChange) }
+    func testPauseInvalidatesPreload() throws { try assertInvalidation(.pause) }
+    func testRepeatChangeInvalidatesPreload() throws { try assertInvalidation(.repeatChange) }
+    func testQueueChangeInvalidatesPreload() throws { try assertInvalidation(.queueChange) }
+    func testInterruptionInvalidatesPreload() throws { try assertInvalidation(.interruption) }
+    func testRouteChangeInvalidatesPreload() throws { try assertInvalidation(.routeChange) }
+
+    func testInvalidationWithoutTailKeepsCurrentCompletion() {
+        var state = GaplessQueueState()
+        let current = state.begin()
+        state.disablePreload()
+        XCTAssertNil(state.enqueue(UUID()))
+        XCTAssertEqual(state.complete(current), .finished)
+    }
+
+    private func assertInvalidation(_ reason: GaplessQueueState.Invalidation,
+                                    file: StaticString = #filePath, line: UInt = #line) throws {
+        var state = GaplessQueueState()
+        let oldCurrent = state.begin()
+        let oldNext = try XCTUnwrap(state.enqueue(UUID()), file: file, line: line)
+        state.invalidate(reason)
+        XCTAssertNil(state.pending, file: file, line: line)
+        XCTAssertFalse(state.allowsPreload, file: file, line: line)
+        XCTAssertEqual(state.complete(oldCurrent), .ignored, file: file, line: line)
+        XCTAssertEqual(state.complete(oldNext), .ignored, file: file, line: line)
+        // The engine reschedules only the current segment after cancellation.
+        let rescheduled = state.begin(allowPreload: false)
+        XCTAssertNil(state.enqueue(UUID()), file: file, line: line)
+        XCTAssertEqual(state.complete(oldCurrent), .ignored, file: file, line: line)
+        XCTAssertEqual(state.complete(oldNext), .ignored, file: file, line: line)
+        XCTAssertEqual(state.complete(rescheduled), .finished, file: file, line: line)
+        // A subsequent normal load may use gapless again.
+        _ = state.begin()
+        XCTAssertNotNil(state.enqueue(UUID()), file: file, line: line)
+    }
+}

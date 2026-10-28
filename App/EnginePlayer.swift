@@ -14,15 +14,19 @@ import AVFoundation
 @MainActor
 final class EnginePlayer {
     /// Called on the main actor when the scheduled file plays to its end.
-    /// Seeks, stops and track changes bump `generation`, so a completion
-    /// belonging to an older schedule never reaches this handler.
+    /// Stale scheduling tokens never reach this handler.
     var onFinish: (() -> Void)?
 
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private var file: AVAudioFile?
     private var segmentStartFrame: AVAudioFramePosition = 0
-    private var generation = 0
+    var onAdvance: ((UUID) -> Void)?
+    private var queue = GaplessQueueState()
+    private var nextFile: AVAudioFile?
+    // Node time is continuous across tracks, but each track's UI clock starts at zero.
+    private var timelineStartFrame: AVAudioFramePosition = 0
+    private var scheduledEndFrame: AVAudioFramePosition = 0
 
     private(set) var duration: Double = 0
     var hasFile: Bool { file != nil }
@@ -43,7 +47,8 @@ final class EnginePlayer {
         guard next.length > 0, next.fileFormat.sampleRate > 0 else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        generation += 1
+        queue.invalidate(.trackChange)
+        nextFile = nil
         node.stop()
         engine.stop()
         engine.disconnectNodeOutput(node)
@@ -52,7 +57,7 @@ final class EnginePlayer {
         engine.mainMixerNode.outputVolume = 1.0
         file = next
         duration = Double(next.length) / next.fileFormat.sampleRate
-        schedule(from: frame(for: time))
+        schedule(from: frame(for: time), allowPreload: true)
         engine.prepare()
     }
 
@@ -70,7 +75,8 @@ final class EnginePlayer {
     }
 
     func stop() {
-        generation += 1
+        queue.invalidate(.trackChange)
+        nextFile = nil
         node.stop()
         engine.stop()
         file = nil
@@ -81,7 +87,9 @@ final class EnginePlayer {
     func seek(to time: Double) {
         guard file != nil else { return }
         let wasPlaying = node.isPlaying
-        schedule(from: frame(for: time))
+        queue.invalidate(.seek)
+        nextFile = nil
+        schedule(from: frame(for: time), allowPreload: false)
         if wasPlaying {
             if !engine.isRunning { try? engine.start() }
             node.play()
@@ -89,8 +97,8 @@ final class EnginePlayer {
     }
 
     /// Playback position in seconds. `playerTime` counts samples rendered
-    /// since the current segment started, so the segment's start frame is
-    /// the base; when nothing has rendered yet the base alone is correct.
+    /// since the node was last stopped. Subtract the track's timeline offset
+    /// after a seamless transition; seeks add the segment's starting frame.
     var currentTime: Double {
         guard let file else { return 0 }
         let rate = file.fileFormat.sampleRate
@@ -99,7 +107,7 @@ final class EnginePlayer {
         guard let nodeTime = node.lastRenderTime,
               let playerTime = node.playerTime(forNodeTime: nodeTime) else { return base }
         let played = Double(playerTime.sampleTime) / playerTime.sampleRate
-        return min(max(0, base + played), duration)
+        return min(max(0, base + played - Double(timelineStartFrame) / rate), duration)
     }
 
     private func frame(for time: Double) -> AVAudioFramePosition {
@@ -108,12 +116,54 @@ final class EnginePlayer {
         return min(frame, max(0, file.length - 1))
     }
 
-    private func schedule(from startFrame: AVAudioFramePosition) {
+    /// Append on this node without touching the engine, session or current segment.
+    @discardableResult
+    func preload(url: URL, id: UUID) throws -> Bool {
+        guard queue.allowsPreload, queue.pending == nil, let file else { return false }
+        let next = try AVAudioFile(forReading: url)
+        guard next.length > 0, next.length <= Int64(UInt32.max),
+              GaplessCompatibility.canJoin(file.processingFormat, next.processingFormat),
+              let token = queue.enqueue(id) else { return false }
+        nextFile = next
+        append(next, from: 0, token: token)
+        return true
+    }
+
+    /// AVAudioPlayerNode cannot remove just its tail. Rebuild only the current
+    /// segment at the current position, and reject callbacks from the old tail.
+    func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
+        let hadPending = nextFile != nil
+        let time = currentTime
+        let wasPlaying = node.isPlaying
+        guard hadPending else {
+            queue.disablePreload()
+            return
+        }
+        queue.invalidate(reason)
+        nextFile = nil
+        schedule(from: frame(for: time), allowPreload: false)
+        if wasPlaying {
+            if !engine.isRunning { try? engine.start() }
+            if engine.isRunning { node.play() }
+        }
+    }
+
+    /// Called once after PlayerStore has installed a newly loaded track's queue.
+    func enablePreloadForLoadedTrack() {
+        queue.enablePreload()
+    }
+
+    private func schedule(from startFrame: AVAudioFramePosition, allowPreload: Bool) {
         guard let file else { return }
-        generation += 1
-        let scheduled = generation
+        let token = queue.begin(allowPreload: allowPreload)
         node.stop()
         segmentStartFrame = startFrame
+        timelineStartFrame = 0
+        scheduledEndFrame = file.length - startFrame
+        append(file, from: startFrame, token: token)
+    }
+
+    private func append(_ file: AVAudioFile, from startFrame: AVAudioFramePosition, token: UUID) {
         let remaining = file.length - startFrame
         guard remaining > 0 else { return }
         node.scheduleSegment(file, startingFrame: startFrame,
@@ -121,9 +171,24 @@ final class EnginePlayer {
                              completionCallbackType: .dataPlayedBack) { [weak self] callback in
             guard callback == .dataPlayedBack else { return }
             Task { @MainActor [weak self] in
-                guard let self, self.generation == scheduled else { return }
-                self.onFinish?()
+                self?.completed(token)
             }
+        }
+    }
+
+    private func completed(_ token: UUID) {
+        switch queue.complete(token) {
+        case .ignored: return
+        case .finished: onFinish?()
+        case .advanced(let id):
+            guard let next = nextFile else { return }
+            file = next
+            nextFile = nil
+            segmentStartFrame = 0
+            timelineStartFrame = scheduledEndFrame
+            scheduledEndFrame += next.length
+            duration = Double(next.length) / next.fileFormat.sampleRate
+            onAdvance?(id)
         }
     }
 }

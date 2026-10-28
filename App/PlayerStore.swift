@@ -28,10 +28,16 @@ final class PlayerStore: NSObject, ObservableObject {
     @Published private(set) var pathAssessment: AudioPathAssessment?
     @Published private(set) var shuffle = false
     @Published var repeatMode: RepeatMode = .all {
-        didSet { if playbackReady, oldValue != repeatMode { library.rememberTransport(shuffle: shuffle, repeatMode: repeatMode) } }
+        didSet {
+            if playbackReady, oldValue != repeatMode {
+                invalidatePreload(.repeatChange)
+                library.rememberTransport(shuffle: shuffle, repeatMode: repeatMode)
+            }
+        }
     }
     @Published private(set) var queueIDs: [UUID] = []
     private var accessRoot: URL?
+    private var nextAccessRoot: URL?
     private var interruptedWhilePlaying = false
     private var ordering = QueueOrdering()
     private var playbackReady = false
@@ -62,6 +68,9 @@ final class PlayerStore: NSObject, ObservableObject {
             guard let self else { return }
             if self.repeatMode == .one { self.seek(0); self.resume() } else { self.skip() }
         }
+        engine.onAdvance = { [weak self] id in
+            self?.advancePreloadedTrack(id)
+        }
         configureRemote()
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -70,6 +79,8 @@ final class PlayerStore: NSObject, ObservableObject {
             Task { @MainActor [weak self] in
                 if type == AVAudioSession.InterruptionType.began.rawValue {
                     self?.interruptedWhilePlaying = self?.playing == true
+                    self?.engine.pause()
+                    self?.invalidatePreload(.interruption)
                     self?.pause()
                 } else if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume),
                           self?.interruptedWhilePlaying == true {
@@ -80,6 +91,8 @@ final class PlayerStore: NSObject, ObservableObject {
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             Task { @MainActor [weak self] in
+                if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.engine.pause() }
+                self?.invalidatePreload(.routeChange)
                 if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.pause() }
                 self?.updateOutput()
             }
@@ -96,6 +109,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     deinit {
         accessRoot?.stopAccessingSecurityScopedResource()
+        nextAccessRoot?.stopAccessingSecurityScopedResource()
         timer?.invalidate()
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         remoteTargets.forEach { $0.0.removeTarget($0.1) }
@@ -103,6 +117,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func load(_ track: Track, autoplay: Bool = true, at time: Double = 0, context: [Track]? = nil, keepTransport: Bool = false) {
         guard track.available else { errorMessage = "文件已移动或删除，请重新扫描文件夹"; return }
+        invalidatePreload(.trackChange)
         pause()
         do {
             let newAccess: URL?
@@ -135,6 +150,7 @@ final class PlayerStore: NSObject, ObservableObject {
                     setQueue(library.tracks.filter(\.available).map(\.id), replacingContext: true)
                 }
             }
+            engine.enablePreloadForLoadedTrack()
             current = track
             position = min(max(0, time), engine.duration)
             library.remember(id: track.id, position: position)
@@ -155,6 +171,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     /// Plays `tracks` in list order, or shuffled. Shuffle on remembers the list order so it can be restored.
     func play(_ tracks: [Track], shuffled: Bool) {
+        invalidatePreload(.trackChange)
         let available = tracks.filter(\.available)
         guard !available.isEmpty else { return }
         let ordered = available.map(\.id)
@@ -176,6 +193,7 @@ final class PlayerStore: NSObject, ObservableObject {
             if !playing { errorMessage = "音频设备无法开始播放" }
             updateOutput()
             updateNowPlaying()
+            if playing { preloadNextTrack() }
         } catch { errorMessage = "音频会话启动失败：\(error.localizedDescription)" }
     }
 
@@ -197,6 +215,7 @@ final class PlayerStore: NSObject, ObservableObject {
     func pause() {
         position = engine.hasFile ? engine.currentTime : position
         engine.pause()
+        invalidatePreload(.pause)
         playing = false
         if let current { library.remember(id: current.id, position: position) }
         updateNowPlaying()
@@ -204,6 +223,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func stopIfCurrent(_ track: Track) {
         guard current?.id == track.id else { return }
+        invalidatePreload(.trackChange)
         engine.stop()
         playing = false
         accessRoot?.stopAccessingSecurityScopedResource(); accessRoot = nil
@@ -216,6 +236,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func seek(_ time: Double) {
         guard engine.hasFile, time.isFinite else { return }
+        invalidatePreload(.seek)
         position = min(max(0, time), engine.duration)
         engine.seek(to: position)
         library.remember(id: current?.id, position: position)
@@ -227,6 +248,9 @@ final class PlayerStore: NSObject, ObservableObject {
         let filtered = ids.filter { id in
             seen.insert(id).inserted && library.track(id)?.available == true
         }
+        // recordPlay updates library metadata and triggers reconciliation too.
+        // An unchanged queue must not cancel the segment we just appended.
+        if filtered != queueIDs { invalidatePreload(.queueChange) }
         ordering.queue = filtered
         if replacingContext { ordering.context = filtered }
         else { ordering.context.removeAll { !seen.contains($0) } }
@@ -237,6 +261,7 @@ final class PlayerStore: NSObject, ObservableObject {
     func cycleRepeat() { repeatMode = repeatMode.cycled }
 
     func toggleShuffle() {
+        invalidatePreload(.queueChange)
         ordering.queue = queueIDs
         ordering.shuffle = shuffle
         ordering.toggleShuffle(current: current?.id)
@@ -260,6 +285,7 @@ final class PlayerStore: NSObject, ObservableObject {
             return true
         }
         guard !chosen.isEmpty else { return }
+        invalidatePreload(.queueChange)
         if current == nil {
             if next {
                 play(chosen, shuffled: false)
@@ -333,6 +359,55 @@ final class PlayerStore: NSObject, ObservableObject {
             .next(after: current?.id, backwards: backwards)
         if let track = library.track(id), track.available { load(track) }
         else { pause(); seek(0) }
+    }
+
+    private func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
+        engine.invalidatePreload(reason)
+        nextAccessRoot?.stopAccessingSecurityScopedResource()
+        nextAccessRoot = nil
+    }
+
+    /// Resolve scoped files before appending, and keep the next scope alive
+    /// until it is either cancelled or becomes the current track's scope.
+    private func preloadNextTrack() {
+        guard let current else { return }
+        let id = GaplessQueueState.nextTrack(in: queuedTracks.map(\.id), after: current.id,
+                                            repeatMode: repeatMode)
+        guard let track = library.track(id), track.available else { return }
+        do {
+            var root: URL?
+            if let folderID = track.folderID {
+                guard let folder = library.snapshot.folders.first(where: { $0.id == folderID }) else { return }
+                root = try library.resolve(folder)
+            }
+            let scoped = root?.startAccessingSecurityScopedResource() == true
+            var accepted = false
+            defer { if scoped && !accepted { root?.stopAccessingSecurityScopedResource() } }
+            if try engine.preload(url: library.url(for: track), id: track.id) {
+                nextAccessRoot = scoped ? root : nil
+                accepted = true
+            }
+        } catch {
+            // Opening/format failures use the existing load path at the boundary.
+        }
+    }
+
+    private func advancePreloadedTrack(_ id: UUID) {
+        guard let track = library.track(id), track.available else {
+            invalidatePreload(.trackChange)
+            skip()
+            return
+        }
+        accessRoot?.stopAccessingSecurityScopedResource()
+        accessRoot = nextAccessRoot
+        nextAccessRoot = nil
+        current = track
+        position = engine.currentTime
+        library.remember(id: id, position: position)
+        library.recordPlay(id: id)
+        updateOutput()
+        updateNowPlaying()
+        preloadNextTrack()
     }
 
     private func tick() {
