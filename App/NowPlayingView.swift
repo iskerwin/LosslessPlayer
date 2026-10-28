@@ -1147,6 +1147,18 @@ struct LyricsLine: Equatable {
     var text: String
     static func parse(_ text: String) -> [Self] {
         let regex = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{2}(?:\.\d{1,3})?)\]"#)
+        let offsetRegex = try! NSRegularExpression(pattern: #"\[offset:[ \t]*([+-]?[0-9]+)\]"#, options: .caseInsensitive)
+        let nsText = text as NSString
+        var offsetMilliseconds = 0.0
+        // Scan the whole file first: the last valid offset applies to every timestamp.
+        for match in offsetRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            if let value = Double(nsText.substring(with: match.range(at: 1))), value.isFinite {
+                offsetMilliseconds = value
+            }
+        }
+        // LRC offset is milliseconds: parsed time = timestamp - offset / 1000.
+        // Positive means earlier: [offset:+500] + [00:10.00] -> 9.5 seconds.
+        // Negative means later: [offset:-1000] + [00:10.00] -> 11.0 seconds.
         var result: [Self] = []
         for line in text.components(separatedBy: .newlines) {
             let ns = line as NSString
@@ -1157,7 +1169,8 @@ struct LyricsLine: Equatable {
             } else {
                 for match in matches {
                     if let minutes = Double(ns.substring(with: match.range(at: 1))), let seconds = Double(ns.substring(with: match.range(at: 2))) {
-                        result.append(Self(time: minutes * 60 + seconds, text: cleaned.isEmpty ? "♪" : cleaned))
+                        let time = max(0, minutes * 60 + seconds - offsetMilliseconds / 1000)
+                        result.append(Self(time: time, text: cleaned.isEmpty ? "♪" : cleaned))
                     }
                 }
             }
