@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      full:
+        description: Force all unit tests and screenshots (required before promotion)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -15,6 +20,66 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select tests from audited dependencies
+        id: selection
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FORCE_FULL: ${{ inputs.full }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess, tempfile
+
+          # Keep this fallback independent of the selector: syntax errors,
+          # missing files, failed git commands and invalid output must not narrow.
+          selection = {
+              'only_testing': ['-only-testing:LosslessPlayerTests'],
+              'screenshots': True, 'full': True,
+              'reason': 'selection unavailable; conservative full suite',
+          }
+          try:
+              command = ['python3', 'tools/select_tests.py']
+              event = os.environ['EVENT_NAME']
+              if event == 'pull_request' and os.environ['FORCE_FULL'] != 'true':
+                  base, head = os.environ['PR_BASE_SHA'], os.environ['PR_HEAD_SHA']
+              elif event == 'workflow_dispatch' and os.environ['FORCE_FULL'] != 'true':
+                  # Manual development checks compare the branch to main.
+                  # A dispatch on main has an empty diff and therefore runs full.
+                  base, head = 'origin/main', 'HEAD'
+              else:
+                  base = head = None
+                  command.append('--full')
+              with tempfile.TemporaryDirectory() as directory:
+                  if base is not None:
+                      changed = subprocess.check_output([
+                          'git', 'diff', '--name-only', '--no-renames', '-z', f'{base}...{head}', '--',
+                      ])
+                      paths = pathlib.Path(directory) / 'changed-paths'
+                      paths.write_bytes(changed)
+                      command.extend(['--files-from', str(paths)])
+                  result = json.loads(subprocess.check_output(command, text=True))
+              arguments = result['only_testing']
+              assert isinstance(arguments, list) and arguments
+              assert all(isinstance(arg, str) and re.fullmatch(
+                  r'-only-testing:LosslessPlayerTests(?:/[A-Za-z][A-Za-z0-9_]*)?', arg
+              ) for arg in arguments)
+              assert type(result['screenshots']) is bool and type(result['full']) is bool
+              assert isinstance(result['reason'], str)
+              if result['full']:
+                  assert arguments == ['-only-testing:LosslessPlayerTests']
+              selection = result
+          except Exception as error:
+              print(f'::warning::Test selection failed ({type(error).__name__}); running full suite and screenshots')
+          print(json.dumps(selection, sort_keys=True))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('only_testing=' + ' '.join(selection['only_testing']) + '\n')
+              output.write('screenshots=' + str(selection['screenshots']).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Test selection\n\n```json\n' + json.dumps(selection, indent=2) + '\n```\n')
+          PY
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -49,15 +114,19 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
       - name: Build and test
         timeout-minutes: 12
-        run: >-
-          xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer
-          -destination "platform=iOS Simulator,id=$SIMULATOR_ID"
-          -only-testing:LosslessPlayerTests
-          -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1
-          -derivedDataPath build/simulator -resultBundlePath TestResults.xcresult
-          CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
+        env:
+          ONLY_TESTING: ${{ steps.selection.outputs.only_testing }}
+        run: |
+          set -euo pipefail
+          read -r -a test_args <<< "${ONLY_TESTING:--only-testing:LosslessPlayerTests}"
+          xcodebuild test -project LosslessPlayer.xcodeproj -scheme LosslessPlayer \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            "${test_args[@]}" \
+            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+            -derivedDataPath build/simulator -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
       - name: Capture iOS 26 screenshots
-        if: success()
+        if: success() && steps.selection.outputs.screenshots != 'false'
         timeout-minutes: 12
         env:
           TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/build/screenshots
