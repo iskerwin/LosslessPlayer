@@ -390,6 +390,54 @@ final class MigrationAndLyricsTests: XCTestCase {
         XCTAssertEqual(lines.map(\.time), [1, 2.5, 63.125])
         XCTAssertEqual(lines.map(\.text), ["First", "Hello", "Hello"])
     }
+
+    func testTimedLyricsPositiveOffsetAdvancesAllTimestamps() {
+        let lines = LyricsLine.parse("[ar:Artist]\n[00:10.00][00:20.00]Hello\n[offset:+500]\n[00:02.50]First")
+        XCTAssertEqual(lines.map(\.time), [2, 9.5, 19.5])
+        XCTAssertEqual(lines.map(\.text), ["First", "Hello", "Hello"])
+    }
+
+    func testTimedLyricsNegativeOffsetDelaysAllTimestamps() {
+        let lines = LyricsLine.parse("[00:10.00]Hello\n[00:20.00]World\n[offset:-1000]")
+        XCTAssertEqual(lines.map(\.time), [11, 21])
+        XCTAssertEqual(lines.map(\.text), ["Hello", "World"])
+    }
+
+    func testTimedLyricsOffsetClampsNegativeTimesToZero() {
+        let lines = LyricsLine.parse("[offset:+500]\n[00:00.25]First\n[00:00.50]Second\n[00:01.00]Third")
+        XCTAssertEqual(lines.map(\.time), [0, 0, 0.5])
+        XCTAssertEqual(Set(lines.map(\.text)), Set(["First", "Second", "Third"]))
+    }
+
+    func testTimedLyricsMalformedOffsetsAreIgnored() {
+        let lines = LyricsLine.parse("[offset:nope]\n[offset:]\n[offset:1.5]\n[offset:--500]\n[00:10.00]Hello\n[00:20.00]World")
+        XCTAssertEqual(lines.map(\.time), [10, 20])
+        XCTAssertEqual(lines.map(\.text), ["Hello", "World"])
+    }
+
+    func testTimedLyricsLastValidOffsetWins() {
+        let lines = LyricsLine.parse("[offset:+500]\n[00:10.00]Hello\n[offset:-1000]\n[00:20.00]World\n[offset:250]\n[offset:invalid]")
+        XCTAssertEqual(lines.map(\.time), [9.75, 19.75])
+        XCTAssertEqual(lines.map(\.text), ["Hello", "World"])
+    }
+
+    func testTimedLyricsWithoutOffsetKeepsExistingBehavior() {
+        let lines = LyricsLine.parse("[ti:Title]\n[ar:Artist]\nPlain lyrics\n[00:10.00][00:20.00]Hello\n[00:02.50]First")
+        XCTAssertEqual(lines.map(\.time), [nil, 2.5, 10, 20])
+        XCTAssertEqual(lines.map(\.text), ["Plain lyrics", "First", "Hello", "Hello"])
+    }
+
+    func testTimedLyricsOffsetLineIsHiddenAndAcceptsCaseAndSpaces() {
+        let lines = LyricsLine.parse("[OfFsEt: 500]\n[00:10.00]Hello")
+        XCTAssertEqual(lines.map(\.time), [9.5])
+        XCTAssertEqual(lines.map(\.text), ["Hello"])
+    }
+
+    func testTimedLyricsOffsetLeavesUntimedLinesUnchanged() {
+        let lines = LyricsLine.parse("[offset:-1000]\nPlain lyrics\n[00:10.00]Hello")
+        XCTAssertEqual(lines.map(\.time), [nil, 11])
+        XCTAssertEqual(lines.map(\.text), ["Plain lyrics", "Hello"])
+    }
 }
 
 @MainActor
