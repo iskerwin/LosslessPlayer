@@ -617,9 +617,9 @@ struct LibraryView: View {
         if let source = detailSource, detailTab == owner {
             GeometryReader { geometry in
                 let origin = geometry.frame(in: .global).origin
-                // Keep the system tab bar and accessory outside this surface.
-                let expanded = CGRect(x: 0, y: 0, width: geometry.size.width,
-                                      height: max(0, geometry.size.height - geometry.safeAreaInsets.bottom))
+                // The tab host has already reserved its bottom chrome. Do not
+                // subtract that inset again from the available detail surface.
+                let expanded = CGRect(origin: .zero, size: geometry.size)
                 let localSource = DetailCardSource(route: source.route,
                     frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
                 DetailZoomCard(progress: detailProgress, source: localSource, expanded: expanded,

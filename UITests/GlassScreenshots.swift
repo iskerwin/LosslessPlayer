@@ -175,7 +175,14 @@ final class GlassScreenshots: XCTestCase {
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
             XCTAssertTrue(app.tabBars.buttons["歌单"].isHittable)
-            XCTAssertTrue(app.descendants(matching: .any)["mini-player"].exists)
+            let mini = app.descendants(matching: .any)["mini-player"]
+            XCTAssertTrue(mini.exists)
+            let surface = app.descendants(matching: .any)["detail-card-surface"]
+            XCTAssertTrue(surface.exists)
+            // A second subtraction of the tab host's bottom inset leaves a
+            // large black gap above the mini player despite passing navigation.
+            XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
+            XCTAssertTrue(mini.isHittable)
             back.tap()
             let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
             wait(for: [returned], timeout: 8)

@@ -25,7 +25,9 @@ This change is authored on Linux without Xcode. No local iOS build or test pass
 is claimed. GitHub Actions must validate the build, unit tests and UI tests.
 Geometry/radius tests cover the measured endpoints and two identical round
 trips. The UI regression opens both album and playlist cards twice, checks the
-returning cell frame and confirms tab bar / mini player availability.
+returning cell frame, expanded surface height, and tab bar / mini player availability.
+The expanded surface uses the tab host's available size directly; subtracting
+its already-reserved bottom inset again would leave a blank band above the mini player.
 
 ## Physical device checklist (pending)
 

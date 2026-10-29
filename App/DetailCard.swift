@@ -133,6 +133,8 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
             .frame(width: card.width, height: card.height, alignment: .topLeading)
             .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : DetailCardMetrics.radius(p), style: .continuous))
             .opacity(reduceMotion ? Double(p) : 1)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("detail-card-surface")
             .offset(x: card.minX, y: card.minY)
         }
     }
