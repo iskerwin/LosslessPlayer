@@ -66,6 +66,98 @@ enum PlayerScrollMorph {
     }
 }
 
+/// SwiftUI move destinations are insertion slots in the original collection.
+/// A downward hover inserts after the target; an upward hover inserts before it.
+enum QueueDropMapping {
+    static func destination(source: Int, target: Int, count: Int) -> Int? {
+        guard count > 0, (0..<count).contains(source), (0..<count).contains(target),
+              source != target else { return nil }
+        return target > source ? target + 1 : target
+    }
+
+    static func offset(index: Int, source: Int, target: Int, rowHeight: CGFloat) -> CGFloat {
+        if source < target, index > source, index <= target { return -rowHeight }
+        if target < source, index >= target, index < source { return rowHeight }
+        return 0
+    }
+}
+
+private struct QueueRowDrag {
+    let ids: [UUID]
+    let source: Int
+    let frames: [UUID: CGRect]
+    var target: Int
+    var translation: CGSize
+
+    var id: UUID { ids[source] }
+    var frame: CGRect { frames[id] ?? .zero }
+}
+
+/// A pan beginning on this handle belongs to reordering. UIKit delivers end
+/// and cancellation directly, without an NSItemProvider / per-row drop handoff.
+private struct QueueDragHandle: UIViewRepresentable {
+    var lifted: Bool
+    var onPan: (UIGestureRecognizer.State, CGPoint, CGSize) -> Void
+
+    func makeUIView(context: Context) -> HandleView { HandleView(onPan: onPan) }
+    func updateUIView(_ view: HandleView, context: Context) {
+        view.onPan = onPan
+        // Keep the gesture-owning UIView visible for the entire touch sequence.
+        view.icon.isHidden = lifted
+    }
+    static func dismantleUIView(_ view: HandleView, coordinator: ()) {
+        view.cancel()
+    }
+
+    final class HandleView: UIView, UIGestureRecognizerDelegate {
+        var onPan: (UIGestureRecognizer.State, CGPoint, CGSize) -> Void
+        let icon = UIImageView(image: UIImage(systemName: "line.3.horizontal"))
+        private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
+
+        init(onPan: @escaping (UIGestureRecognizer.State, CGPoint, CGSize) -> Void) {
+            self.onPan = onPan
+            super.init(frame: .zero)
+            icon.tintColor = UIColor.white.withAlphaComponent(0.6)
+            icon.contentMode = .scaleAspectFit
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(icon)
+            NSLayoutConstraint.activate([
+                icon.centerXAnchor.constraint(equalTo: centerXAnchor),
+                icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 20),
+                icon.heightAnchor.constraint(equalToConstant: 20)
+            ])
+            pan.maximumNumberOfTouches = 1
+            pan.delegate = self
+            addGestureRecognizer(pan)
+            isAccessibilityElement = true
+            accessibilityLabel = "调整播放顺序"
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        // Dynamic failure priority works across SwiftUI's scroll view hierarchy
+        // and only participates for touches that actually begin on this handle.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            otherGestureRecognizer is UIPanGestureRecognizer
+        }
+
+        @objc private func panned() {
+            let translation = pan.translation(in: nil)
+            onPan(pan.state, pan.location(in: nil),
+                  CGSize(width: translation.x, height: translation.y))
+        }
+
+        func cancel() {
+            if pan.state == .began || pan.state == .changed {
+                pan.isEnabled = false
+                pan.isEnabled = true
+            }
+        }
+    }
+}
+
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -75,6 +167,7 @@ struct NowPlayingView: View {
     var onClose: () -> Void
     var onPull: (CGFloat) -> Void
     var onPullCancelled: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
@@ -97,6 +190,8 @@ struct NowPlayingView: View {
     @State private var queueScrollRequest = 0
     @State private var revealQueueOnAppear = false
     @State private var dragBeganAtTop: Bool?
+    @State private var queueRowFrames: [UUID: CGRect] = [:]
+    @State private var queueDrag: QueueRowDrag?
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var artworkDrag: CGSize = .zero
@@ -141,6 +236,15 @@ struct NowPlayingView: View {
         }
         .onChange(of: current?.id) { _, _ in reloadLyrics() }
         .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
+        .onChange(of: player.upcomingTracks.map(\.id)) { _, _ in queueDrag = nil }
+        .onChange(of: panel) { _, _ in queueDrag = nil }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { queueDrag = nil }
+        }
+        .onChange(of: morphProgress >= PlayerScrollMorph.interactionThreshold) { _, interactive in
+            if !interactive { queueDrag = nil }
+        }
+        .onDisappear { queueDrag = nil }
         .task {
             try? await Task.sleep(for: .milliseconds(350))
             chromeReady = true
@@ -546,20 +650,18 @@ struct NowPlayingView: View {
                                     .equatable()
                             }
                             .buttonStyle(.plain)
-                            Image(systemName: "line.3.horizontal")
-                                .foregroundStyle(.white.opacity(0.6))
-                                .frame(width: 32, height: 44)
-                                .contentShape(Rectangle())
-                                .draggable(track.id.uuidString)
-                                .accessibilityLabel("调整播放顺序")
+                            .opacity(queueDrag?.id == track.id ? 0 : 1)
+                            QueueDragHandle(lifted: queueDrag?.id == track.id) { state, location, translation in
+                                updateQueueDrag(track, state: state, location: location, translation: translation)
+                            }
+                            .frame(width: 32, height: 44)
                         }
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let id = items.first,
-                                  let source = player.upcomingTracks.firstIndex(where: { $0.id.uuidString == id }),
-                                  let target = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) else { return false }
-                            player.moveUpcoming(from: IndexSet(integer: source), to: target > source ? target + 1 : target)
-                            return true
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                            queueRowFrames[track.id] = frame
                         }
+                        .onDisappear { queueRowFrames.removeValue(forKey: track.id) }
+                        .offset(y: queueRowOffset(track))
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: queueDrag?.target)
                         .contextMenu {
                             Button("从队列移除", systemImage: "minus.circle", role: .destructive) {
                                 if let index = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) {
@@ -575,6 +677,71 @@ struct NowPlayingView: View {
             }
         }
         .padding(.top, 4)
+        .overlay(alignment: .topLeading) {
+            GeometryReader { geometry in
+                if let drag = queueDrag,
+                   let track = player.upcomingTracks.first(where: { $0.id == drag.id }) {
+                    HStack(spacing: 8) {
+                        SongRow(track: track, root: library.root, emphasis: .white)
+                            .equatable()
+                        Image(systemName: "line.3.horizontal")
+                            .foregroundStyle(.white.opacity(0.6))
+                            .frame(width: 32, height: 44)
+                    }
+                    .frame(width: drag.frame.width, height: drag.frame.height)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+                    .position(x: drag.frame.midX - geometry.frame(in: .global).minX + drag.translation.width,
+                              y: drag.frame.midY - geometry.frame(in: .global).minY + drag.translation.height)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
+    private func queueRowOffset(_ track: Track) -> CGFloat {
+        guard let drag = queueDrag, let index = drag.ids.firstIndex(of: track.id) else { return 0 }
+        return QueueDropMapping.offset(index: index, source: drag.source, target: drag.target,
+                                       rowHeight: drag.frame.height)
+    }
+
+    private func updateQueueDrag(_ track: Track, state: UIGestureRecognizer.State,
+                                 location: CGPoint, translation: CGSize) {
+        if state == .began {
+            let ids = player.upcomingTracks.map(\.id)
+            guard morphProgress >= PlayerScrollMorph.interactionThreshold,
+                  let source = ids.firstIndex(of: track.id), queueRowFrames[track.id] != nil else { return }
+            queueDrag = QueueRowDrag(ids: ids, source: source, frames: queueRowFrames,
+                                     target: source, translation: translation)
+        }
+        guard var drag = queueDrag, drag.id == track.id else { return }
+        guard state == .began || state == .changed || state == .ended else {
+            queueDrag = nil
+            return
+        }
+        // Freeze the original geometry for the session: neighbors' visual
+        // offsets must never feed back into hover targeting.
+        let candidates = drag.ids.indices.filter { drag.frames[drag.ids[$0]] != nil }
+        let hovered = candidates.first { index in
+            guard let frame = drag.frames[drag.ids[index]] else { return false }
+            return location.y >= frame.minY && location.y < frame.maxY
+        }
+        if let target = hovered ?? candidates.min(by: {
+            abs((drag.frames[drag.ids[$0]]?.midY ?? 0) - location.y) <
+            abs((drag.frames[drag.ids[$1]]?.midY ?? 0) - location.y)
+        }) { drag.target = target }
+        drag.translation = translation
+        if state == .ended {
+            queueDrag = nil
+            let bounds = candidates.reduce(CGRect.null) { $0.union(drag.frames[drag.ids[$1]] ?? .null) }
+            guard bounds.contains(location), drag.ids == player.upcomingTracks.map(\.id),
+                  let destination = QueueDropMapping.destination(source: drag.source, target: drag.target,
+                                                               count: drag.ids.count) else { return }
+            player.moveUpcoming(from: IndexSet(integer: drag.source), to: destination)
+        } else {
+            queueDrag = drag
+        }
     }
 
     private func moveUpcoming(_ track: Track, backwards: Bool) {
