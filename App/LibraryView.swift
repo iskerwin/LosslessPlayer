@@ -49,7 +49,8 @@ struct LibraryView: View {
                     .accessibilityHidden(showPlayer)
                 if player.current != nil, miniFrame.width > 0 {
                     PlayerCard(progress: playerProgress, miniFrame: miniFrame,
-                               expandedFrame: expandedFrame, reduceMotion: reduceMotion) {
+                               expandedFrame: expandedFrame, reduceMotion: reduceMotion,
+                               canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
                         if playerMounted {
                             NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
                                 setPlayer(false)
@@ -68,9 +69,6 @@ struct LibraryView: View {
                             .accessibilityHidden(showPlayer)
                             .allowsHitTesting(!showPlayer)
                     }
-                    // A tap anywhere on a closing card reverses its in-flight
-                    // spring. The generation guard below protects the reopen.
-                    .onTapGesture { if !showPlayer { setPlayer(true) } }
                     .zIndex(1)
                 }
             }

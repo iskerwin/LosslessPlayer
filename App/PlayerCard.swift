@@ -33,15 +33,20 @@ struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
     var miniFrame: CGRect
     var expandedFrame: CGRect
     var reduceMotion: Bool
+    var canReopen: Bool
+    var onReopen: () -> Void
     var expanded: Expanded
     var collapsed: Collapsed
 
     init(progress: CGFloat, miniFrame: CGRect, expandedFrame: CGRect, reduceMotion: Bool,
+         canReopen: Bool, onReopen: @escaping () -> Void,
          @ViewBuilder expanded: () -> Expanded, @ViewBuilder collapsed: () -> Collapsed) {
         self.progress = progress
         self.miniFrame = miniFrame
         self.expandedFrame = expandedFrame
         self.reduceMotion = reduceMotion
+        self.canReopen = canReopen
+        self.onReopen = onReopen
         self.expanded = expanded()
         self.collapsed = collapsed()
     }
@@ -78,6 +83,17 @@ struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
         .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : 18 * (1 - p), style: .continuous))
         .contentShape(Rectangle())
+        .overlay {
+            // Created only after a close begins: a tap on the expanded close
+            // button cannot bubble into a parent gesture and reopen it.
+            if canReopen {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onReopen)
+                    .accessibilityLabel("展开播放器")
+                    .accessibilityAddTraits(.isButton)
+            }
+        }
         .offset(x: bounds.minX, y: bounds.minY)
     }
 }
