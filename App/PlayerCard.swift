@@ -1,0 +1,133 @@
+import SwiftUI
+
+/// Pure mapping shared by the finger, spring and rendered card. Progress is
+/// zero in the accessory slot and one at full screen.
+enum PlayerCardMetrics {
+    static func progress(for translation: CGFloat, distance: CGFloat) -> CGFloat {
+        guard distance > 0 else { return 1 }
+        return min(1, max(0, 1 - max(0, translation) / distance))
+    }
+
+    static func frame(progress: CGFloat, mini: CGRect, expanded: CGRect) -> CGRect {
+        let p = min(1, max(0, progress))
+        func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
+        return CGRect(x: mix(mini.minX, expanded.minX), y: mix(mini.minY, expanded.minY),
+                      width: mix(mini.width, expanded.width), height: mix(mini.height, expanded.height))
+    }
+
+    // Serial fades keep the two layout covers mutually exclusive, including
+    // at slow-drag and spring frames. There is no independent landing timer.
+    static func miniOpacity(_ progress: CGFloat) -> Double {
+        Double(min(1, max(0, (0.25 - progress) / 0.25)))
+    }
+
+    static func expandedOpacity(_ progress: CGFloat) -> Double {
+        Double(min(1, max(0, (progress - 0.3) / 0.35)))
+    }
+}
+
+/// Animatable evaluates *all* derived geometry and opacity at the presented
+/// spring value, rather than starting separate implicit layout/fade animations.
+struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
+    var progress: CGFloat
+    var miniFrame: CGRect
+    var expandedFrame: CGRect
+    var reduceMotion: Bool
+    var expanded: Expanded
+    var collapsed: Collapsed
+
+    init(progress: CGFloat, miniFrame: CGRect, expandedFrame: CGRect, reduceMotion: Bool,
+         @ViewBuilder expanded: () -> Expanded, @ViewBuilder collapsed: () -> Collapsed) {
+        self.progress = progress
+        self.miniFrame = miniFrame
+        self.expandedFrame = expandedFrame
+        self.reduceMotion = reduceMotion
+        self.expanded = expanded()
+        self.collapsed = collapsed()
+    }
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        let p = min(1, max(0, progress))
+        let frame = PlayerCardMetrics.frame(progress: p, mini: miniFrame, expanded: expandedFrame)
+        // Reduce Motion keeps both layouts stationary at their resting frames;
+        // only the same progress-driven fades run. No drag scrubbing or travel.
+        let bounds = reduceMotion && p > 0 ? expandedFrame : frame
+        let miniOrigin = reduceMotion && p > 0
+            ? CGSize(width: miniFrame.minX - bounds.minX, height: miniFrame.minY - bounds.minY)
+            : .zero
+        ZStack(alignment: .topLeading) {
+            Rectangle().fill(.regularMaterial)
+                .frame(width: reduceMotion ? miniFrame.width : bounds.width,
+                       height: reduceMotion ? miniFrame.height : bounds.height)
+                .offset(miniOrigin)
+            expanded
+                .frame(width: expandedFrame.width, height: expandedFrame.height)
+                .opacity(PlayerCardMetrics.expandedOpacity(p))
+            collapsed
+                .frame(width: miniFrame.width, height: miniFrame.height)
+                .opacity(PlayerCardMetrics.miniOpacity(p))
+                .offset(miniOrigin)
+        }
+        // The expanded layout keeps its resting size inside this one card:
+        // its cover never scales or drifts diagonally toward the mini slot.
+        .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : 18 * (1 - p), style: .continuous))
+        .contentShape(Rectangle())
+        .offset(x: bounds.minX, y: bounds.minY)
+    }
+}
+
+struct PlayerMiniSlot: Equatable {
+    var frame: CGRect = .zero
+    var compact = false
+}
+
+struct PlayerMiniSlotKey: PreferenceKey {
+    static var defaultValue = PlayerMiniSlot()
+    static func reduce(value: inout PlayerMiniSlot, nextValue: () -> PlayerMiniSlot) {
+        let next = nextValue()
+        if next.frame.width > 0 { value = next }
+    }
+}
+
+/// The system still owns accessory placement/minimization and tab layout.
+/// This has no artwork or controls: there is only one visible player card.
+struct PlayerMiniSlotView: View {
+    var body: some View {
+        if #available(iOS 26, *) {
+            GlassPlayerMiniSlot()
+        } else {
+            PlayerMiniSlotMeasure(compact: false)
+        }
+    }
+}
+
+@available(iOS 26, *)
+private struct GlassPlayerMiniSlot: View {
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    var body: some View { PlayerMiniSlotMeasure(compact: placement == .inline) }
+}
+
+private struct PlayerMiniSlotMeasure: View {
+    var compact: Bool
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 56
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: compact ? 36 : max(56, rowHeight))
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: PlayerMiniSlotKey.self,
+                                           value: PlayerMiniSlot(frame: geometry.frame(in: .global), compact: compact))
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}

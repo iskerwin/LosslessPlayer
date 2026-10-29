@@ -11,10 +11,11 @@ struct LibraryView: View {
     @State private var searchPath = NavigationPath()
     @State private var searchFieldFocused = false
     @State private var showPlayer = false
-    /// The player overlay stays mounted while a collapse plays (artwork
-    /// flight + fade) and unmounts when it lands; see setPlayer(_:).
+    /// Only the expensive expanded content unmounts at rest. The card and
+    /// its collapsed row persist through both directions of the transition.
     @State private var playerMounted = false
-    @State private var collapseProgress: CGFloat = 1
+    @State private var playerProgress: CGFloat = 0
+    @State private var miniSlot = PlayerMiniSlot()
     @State private var playerTransition = 0
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
@@ -27,53 +28,54 @@ struct LibraryView: View {
     @State private var pendingDelete: [Track] = []
     @State private var lyricsTrack: Track?
     @State private var renamingPlaylist: Playlist?
-    @Namespace private var playerZoom
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exportPresented = false
     @State private var exportText = ""
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
-    /// One spring drives the whole expand/collapse — artwork morph,
-    /// library recede and player fade — so the parts never drift apart.
+    /// Frame and both layouts are evaluated from this same animated value.
     static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
-    /// 1 while the player covers the library, 0 when it is collapsed.
-    /// A drag writes this directly; cancellation springs it back to 1.
-    /// On close it stays at the release value, multiplied by the shared
-    /// collapse progress so dim and scale finish with the moving sheet.
-    @State private var playerReveal: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
-            let collapseDistance = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
-            let reveal = playerReveal * (1 - collapseProgress)
-            ZStack {
+            let origin = geometry.frame(in: .global).origin
+            let expandedFrame = CGRect(x: 0, y: -geometry.safeAreaInsets.top,
+                                       width: geometry.size.width,
+                                       height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
+            let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
+            ZStack(alignment: .topLeading) {
                 playerTabs
-                    // Scale is a GPU transform. brightness() is a color filter
-                    // that re-rasterizes the whole tab tree every frame of the
-                    // spring, so the dim is a black overlay (opacity only).
-                    // Reveal is continuous: a drag eases the dim off with the
-                    // finger, and the shared collapse progress finishes it at 0. A
-                    // boolean dim stayed fully dark until the player unmounted,
-                    // which snapped the light-mode library to white.
-                    .scaleEffect(reduceMotion ? 1 : (1 - 0.04 * reveal))
-                    .overlay {
-                        Color.black
-                            .opacity(0.34 * reveal)
-                            .ignoresSafeArea()
-                            .allowsHitTesting(false)
-                    }
                     .accessibilityHidden(showPlayer)
-                if playerMounted {
-                    NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                        setPlayer(false)
-                        pendingDelete = [track]
-                    }, onClose: { setPlayer(false) }, onPull: { followPull($0, distance: collapseDistance) }, onPullCancelled: cancelPull, morphNamespace: playerZoom, morphActive: showPlayer, collapseProgress: collapseProgress, collapseDistance: collapseDistance)
-                    .opacity(1 - collapseProgress)
-                    .accessibilityHidden(!showPlayer)
-                    .allowsHitTesting(showPlayer)
+                if player.current != nil, miniFrame.width > 0 {
+                    PlayerCard(progress: playerProgress, miniFrame: miniFrame,
+                               expandedFrame: expandedFrame, reduceMotion: reduceMotion) {
+                        if playerMounted {
+                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                                setPlayer(false)
+                                pendingDelete = [track]
+                            }, onClose: { setPlayer(false) }, onPull: {
+                                followPull($0, distance: miniFrame.minY - expandedFrame.minY)
+                            }, onPullCancelled: cancelPull)
+                            .environment(\.colorScheme, .dark)
+                            .padding(.top, geometry.safeAreaInsets.top)
+                            .padding(.bottom, geometry.safeAreaInsets.bottom)
+                            .accessibilityHidden(!showPlayer)
+                            .allowsHitTesting(showPlayer)
+                        }
+                    } collapsed: {
+                        MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
+                            .accessibilityHidden(showPlayer)
+                            .allowsHitTesting(!showPlayer)
+                    }
+                    // A tap anywhere on a closing card reverses its in-flight
+                    // spring. The generation guard below protects the reopen.
+                    .onTapGesture { if !showPlayer { setPlayer(true) } }
                     .zIndex(1)
                 }
+            }
+            .onPreferenceChange(PlayerMiniSlotKey.self) { slot in
+                if slot.frame.width > 0 { miniSlot = slot }
             }
         }
             .sheet(isPresented: $showSources) {
@@ -142,9 +144,9 @@ struct LibraryView: View {
             message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
     }
 
-    private var miniPlayer: some View {
-        MiniPlayer(library: library, player: player, zoom: playerZoom, expanded: showPlayer) { setPlayer(true) }
-    }
+    /// The system accessory reserves the slot; the persistent card owns
+    /// all visible player content, even at progress zero.
+    private var miniPlayer: some View { PlayerMiniSlotView() }
 
     @ViewBuilder private var playerTabs: some View {
         if #available(iOS 26.1, *) {
@@ -158,7 +160,7 @@ struct LibraryView: View {
         } else {
             legacyTabs.safeAreaInset(edge: .bottom, spacing: 0) {
                 if player.current != nil {
-                    miniPlayer.background(Color(.secondarySystemBackground))
+                    miniPlayer
                 }
             }
         }
@@ -525,14 +527,8 @@ struct LibraryView: View {
         reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
     }
 
-    /// Expand/collapse the player overlay with the shared spring. The
-    /// view stays mounted while the collapse plays, then unmounts; a
-    /// re-open inside that window just flips the state back.
-    ///
-    /// Drag callbacks run inside a gesture transaction that disables
-    /// animations. Without clearing that flag the dim and the player plate
-    /// keep their presented values until this view is removed, and light
-    /// mode then pops from the album color to white.
+    /// The drag and this spring write the same progress. Completion only
+    /// releases expensive expanded controls; it never swaps visible cards.
     private func setPlayer(_ expanded: Bool) {
         guard expanded != showPlayer else { return }
         playerTransition += 1
@@ -543,34 +539,27 @@ struct LibraryView: View {
         withTransaction(transaction) {
             withAnimation(playerAnimation, completionCriteria: .removed) {
                 showPlayer = expanded
-                collapseProgress = expanded ? 0 : 1
-                if expanded { playerReveal = 1 }
+                playerProgress = expanded ? 1 : 0
             } completion: {
-                // A previous close must not unmount a re-opened player, or
-                // a newer close that is still in flight.
                 guard !expanded, !showPlayer, playerTransition == transition else { return }
                 playerMounted = false
-                playerReveal = 0
             }
         }
     }
 
-    /// Finger-driven dim. Not animated: the overlay should match the drag
-    /// on the same frame. Reduce Motion keeps the dim put until dismiss.
     private func followPull(_ translation: CGFloat, distance: CGFloat) {
         guard showPlayer, !reduceMotion else { return }
-        let next = PlayerPull.reveal(for: translation, distance: distance)
-        guard abs(next - playerReveal) > 0.0001 else { return }
+        let next = PlayerCardMetrics.progress(for: translation, distance: distance)
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { playerReveal = next }
+        withTransaction(transaction) { playerProgress = next }
     }
 
     private func cancelPull() {
         guard showPlayer else { return }
         var transaction = Transaction(animation: playerAnimation)
         transaction.disablesAnimations = false
-        withTransaction(transaction) { playerReveal = 1 }
+        withTransaction(transaction) { playerProgress = 1 }
     }
 
     private func open(_ route: LibraryRoute) {
@@ -707,54 +696,18 @@ struct AlbumGroup: Identifiable {
     }
 }
 
-/// The dim and library scale follow the sheet over its full exit distance.
-/// No fixed cutoff can finish the reveal while the sheet is still onscreen.
-enum PlayerPull {
-    static func reveal(for translation: CGFloat, distance: CGFloat) -> CGFloat {
-        guard distance > 0 else { return 1 }
-        return min(1, max(0, 1 - max(0, translation) / distance))
-    }
-
-    /// Oversized drags already beyond the viewport must never reverse on release.
-    static func remainingTravel(from release: CGFloat, distance: CGFloat) -> CGFloat {
-        max(0, distance - max(0, release))
-    }
-}
-
 struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    var zoom: Namespace.ID
-    var expanded: Bool
+    var compact: Bool
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
 
     var body: some View {
-        if #available(iOS 26, *) {
-            AccessoryPlacement(title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open, zoom: zoom, expanded: expanded)
-        } else {
-            AccessoryMiniPlayer(compact: false, title: title, artist: artist, track: player.current, root: library.root, playing: player.playing, toggle: { player.toggle() }, skip: { player.skip() }, open: open, zoom: zoom, expanded: expanded)
-        }
-    }
-}
-
-@available(iOS 26, *)
-private struct AccessoryPlacement: View {
-    var title: String
-    var artist: String
-    var track: Track?
-    var root: URL
-    var playing: Bool
-    var toggle: () -> Void
-    var skip: () -> Void
-    var open: () -> Void
-    var zoom: Namespace.ID
-    var expanded: Bool
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-
-    var body: some View {
-        AccessoryMiniPlayer(compact: placement == .inline, title: title, artist: artist, track: track, root: root, playing: playing, toggle: toggle, skip: skip, open: open, zoom: zoom, expanded: expanded)
+        AccessoryMiniPlayer(compact: compact, title: title, artist: artist, track: player.current,
+                            root: library.root, playing: player.playing, toggle: { player.toggle() },
+                            skip: { player.skip() }, open: open)
     }
 }
 
@@ -768,16 +721,11 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
-    var zoom: Namespace.ID
-    var expanded: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
             ArtworkView(track: track, root: root, size: compact ? 28 : 44)
-                // The one shared element of the expand/collapse morph:
-                // this thumbnail is the source until the player opens.
-                .matchedGeometryEffect(id: "playerArtwork", in: zoom, isSource: !expanded)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     .contentTransition(.opacity)
@@ -815,10 +763,6 @@ private struct AccessoryMiniPlayer: View {
         .accessibilityIdentifier("mini-player")
     }
 }
-
-// The playerZoom namespace now carries the matched-geometry artwork
-// morph (see MiniPlayer and NowPlayingView.ArtworkMorph); the system
-// .zoom cover transition and its matchedTransitionSource are gone.
 
 private extension View {
     func searchReselect(title: String, onReselect: @escaping () -> Void) -> some View {

@@ -1091,33 +1091,40 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertTrue(preview === large)
     }
 
-    func testPullRevealUsesTheFullViewportRatherThanAFixedDimCutoff() {
-        for distance in [CGFloat(568), 844, 1024] {
-            XCTAssertEqual(PlayerPull.reveal(for: 0, distance: distance), 1)
-            XCTAssertEqual(PlayerPull.reveal(for: -40, distance: distance), 1)
-            XCTAssertEqual(PlayerPull.reveal(for: distance / 2, distance: distance), 0.5, accuracy: 0.001)
-            XCTAssertGreaterThan(PlayerPull.reveal(for: 280, distance: distance), 0)
-            XCTAssertEqual(PlayerPull.reveal(for: distance, distance: distance), 0)
-            XCTAssertEqual(PlayerPull.reveal(for: distance + 80, distance: distance), 0)
+    func testCardDragFollowsFingerOneToOneAndClampsAtRestingFrames() {
+        // Portrait, short/landscape, and tablet; the safe top is part of travel.
+        for (mini, expanded) in [
+            (CGRect(x: 8, y: 690, width: 377, height: 56), CGRect(x: 0, y: -59, width: 393, height: 852)),
+            (CGRect(x: 0, y: 260, width: 844, height: 56), CGRect(x: 0, y: 0, width: 844, height: 390)),
+            (CGRect(x: 16, y: 900, width: 992, height: 80), CGRect(x: 0, y: -24, width: 1024, height: 1024))
+        ] {
+            let distance = mini.minY - expanded.minY
+            for drag in [CGFloat(0), 45, 90, 91, distance / 2, distance, distance + 80] {
+                let progress = PlayerCardMetrics.progress(for: drag, distance: distance)
+                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
+                XCTAssertEqual(frame.minY - expanded.minY, min(drag, distance), accuracy: 0.001)
+            }
+            XCTAssertEqual(PlayerCardMetrics.frame(progress: 0, mini: mini, expanded: expanded), mini)
+            XCTAssertEqual(PlayerCardMetrics.frame(progress: 1, mini: mini, expanded: expanded), expanded)
+            XCTAssertEqual(PlayerCardMetrics.progress(for: -40, distance: distance), 1)
         }
-        XCTAssertEqual(PlayerPull.reveal(for: 90, distance: 0), 1)
-        XCTAssertEqual(PlayerPull.reveal(for: 90, distance: -1), 1)
+        XCTAssertEqual(PlayerCardMetrics.progress(for: 90, distance: 0), 1)
     }
 
-    func testDismissContinuationStartsAtReleaseAndFinishesOffscreenWithoutReversing() {
-        let distance: CGFloat = 844
-        for release in [CGFloat(91), 280, 600, 844, 950] {
-            let travel = PlayerPull.remainingTravel(from: release, distance: distance)
-            XCTAssertGreaterThanOrEqual(travel, 0)
-            XCTAssertEqual(release + travel, max(release, distance))
-            // During the close, dim and translation describe the same progress.
-            for progress in [CGFloat(0), 0.25, 0.5, 1] {
-                let y = release + travel * progress
-                let reveal = PlayerPull.reveal(for: release, distance: distance) * (1 - progress)
-                XCTAssertEqual(reveal, PlayerPull.reveal(for: y, distance: distance), accuracy: 0.001)
-            }
+    func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
+        for step in -100...1100 {
+            let progress = CGFloat(step) / 1000
+            let mini = PlayerCardMetrics.miniOpacity(progress)
+            let expanded = PlayerCardMetrics.expandedOpacity(progress)
+            XCTAssertTrue((0...1).contains(mini))
+            XCTAssertTrue((0...1).contains(expanded))
+            XCTAssertTrue(mini == 0 || expanded == 0, "Two covers visible at progress \(progress)")
         }
+        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0), 1)
+        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(1), 1)
     }
+
+
 }
 
 /// Pure format comparisons and scheduling state only: never starts an audio
