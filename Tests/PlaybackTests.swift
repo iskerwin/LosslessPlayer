@@ -1111,6 +1111,43 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(PlayerCardMetrics.progress(for: 90, distance: 0), 1)
     }
 
+    func testPlayerTopCornersStayLargeThroughPullAndLanding() {
+        for step in -100...1100 {
+            let radius = PlayerCardMetrics.topRadius(CGFloat(step) / 1000)
+            XCTAssertGreaterThanOrEqual(radius, 18)
+            XCTAssertLessThanOrEqual(radius, 32)
+        }
+        XCTAssertEqual(PlayerCardMetrics.topRadius(1), 32)
+        XCTAssertEqual(PlayerCardMetrics.topRadius(0), 18)
+    }
+
+    func testDetailCardReturnsToMeasuredSlotWithVisibleIntermediateCorners() {
+        // Non-integral, scrolled slots make an estimated grid destination fail.
+        for source in [CGRect(x: 22.5, y: 213.25, width: 165.5, height: 165.5),
+                       CGRect(x: 209.75, y: 487.5, width: 165.5, height: 165.5)] {
+            let destination = CGRect(x: 0, y: 0, width: 398, height: 720)
+            for _ in 0..<2 {
+                let opening = (0...100).map {
+                    DetailCardMetrics.frame(CGFloat($0) / 100, source: source, destination: destination)
+                }
+                let closing = (0...100).reversed().map {
+                    DetailCardMetrics.frame(CGFloat($0) / 100, source: source, destination: destination)
+                }
+                XCTAssertEqual(opening, Array(closing.reversed()))
+                XCTAssertEqual(opening.first, source)
+                XCTAssertEqual(closing.last, source)
+                XCTAssertEqual(opening.last, destination)
+            }
+        }
+        XCTAssertEqual(DetailCardMetrics.radius(0), 12)
+        XCTAssertEqual(DetailCardMetrics.radius(1), 0, accuracy: 0.0001)
+        for step in 1...90 {
+            XCTAssertGreaterThan(DetailCardMetrics.radius(CGFloat(step) / 100), 8)
+        }
+        XCTAssertEqual(DetailCardMetrics.contentOpacity(0), 0)
+        XCTAssertEqual(DetailCardMetrics.contentOpacity(1), 1)
+    }
+
     func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
         for step in -100...1100 {
             let progress = CGFloat(step) / 1000

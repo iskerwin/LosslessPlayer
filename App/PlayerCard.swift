@@ -15,6 +15,10 @@ enum PlayerCardMetrics {
                       width: mix(mini.width, expanded.width), height: mix(mini.height, expanded.height))
     }
 
+    static func topRadius(_ progress: CGFloat) -> CGFloat {
+        18 + 14 * min(1, max(0, progress))
+    }
+
     // Serial fades keep the two layout covers mutually exclusive, including
     // at slow-drag and spring frames. There is no independent landing timer.
     static func miniOpacity(_ progress: CGFloat) -> Double {
@@ -81,7 +85,11 @@ struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
         // The expanded layout keeps its resting size inside this one card:
         // its cover never scales or drifts diagonally toward the mini slot.
         .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : 18 * (1 - p), style: .continuous))
+        .clipShape(UnevenRoundedRectangle(
+            topLeadingRadius: PlayerCardMetrics.topRadius(p),
+            bottomLeadingRadius: 18 * (1 - p),
+            bottomTrailingRadius: 18 * (1 - p),
+            topTrailingRadius: PlayerCardMetrics.topRadius(p), style: .continuous))
         .contentShape(Rectangle())
         .overlay {
             // Created only after a close begins: a tap on the expanded close

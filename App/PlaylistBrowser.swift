@@ -72,9 +72,11 @@ struct PlaylistHome: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 16)], spacing: 22) {
                 ForEach(library.snapshot.playlists) { playlist in
-                    Button { onOpen(.playlist(playlist.id)) } label: {
+                    DetailCardLink(route: .playlist(playlist.id), fallback: { onOpen(.playlist(playlist.id)) }) {
+                        PlaylistCover(playlist: playlist, library: library)
+                    } label: { artwork in
                         VStack(alignment: .leading, spacing: 8) {
-                            PlaylistCover(playlist: playlist, library: library)
+                            artwork
                             Text(playlist.name).font(.subheadline.weight(.semibold)).lineLimit(1).foregroundStyle(.primary)
                             Text("\(playlist.trackIDs.count) 首歌曲").font(.caption).foregroundStyle(.secondary)
                         }
