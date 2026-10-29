@@ -19,14 +19,15 @@ enum PlayerCardMetrics {
         18 + 14 * min(1, max(0, progress))
     }
 
-    // Serial fades keep the two layout covers mutually exclusive, including
-    // at slow-drag and spring frames. There is no independent landing timer.
+    // Keep the expanded sheet opaque until the final 6% of travel. Serial
+    // fades hand over to mini only at landing, without overlapping covers
+    // or an independent timer during slow drags, reversal or spring frames.
     static func miniOpacity(_ progress: CGFloat) -> Double {
-        Double(min(1, max(0, (0.25 - progress) / 0.25)))
+        Double(min(1, max(0, (0.03 - progress) / 0.03)))
     }
 
     static func expandedOpacity(_ progress: CGFloat) -> Double {
-        Double(min(1, max(0, (progress - 0.3) / 0.35)))
+        Double(min(1, max(0, (progress - 0.03) / 0.03)))
     }
 }
 

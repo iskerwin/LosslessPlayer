@@ -1156,8 +1156,18 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
             XCTAssertTrue((0...1).contains(mini))
             XCTAssertTrue((0...1).contains(expanded))
             XCTAssertTrue(mini == 0 || expanded == 0, "Two covers visible at progress \(progress)")
+            if progress >= 0.06 {
+                XCTAssertEqual(expanded, 1, "Expanded sheet dissolved before landing at \(progress)")
+            }
+            if progress >= 0.03 {
+                XCTAssertEqual(mini, 0, "Mini appeared before landing at \(progress)")
+            }
         }
         XCTAssertEqual(PlayerCardMetrics.miniOpacity(0), 1)
+        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0), 0)
+        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0.015), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.045), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.03), 0)
         XCTAssertEqual(PlayerCardMetrics.expandedOpacity(1), 1)
     }
 
