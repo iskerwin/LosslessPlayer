@@ -177,8 +177,12 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertTrue(app.tabBars.buttons["歌单"].isHittable)
             let mini = app.descendants(matching: .any)["mini-player"]
             XCTAssertTrue(mini.exists)
-            let surface = app.descendants(matching: .any)["detail-card-surface"]
-            XCTAssertTrue(surface.exists)
+            // Use the List's existing accessibility node. NavigationStack
+            // does not export a decorative SwiftUI clipping wrapper as a node.
+            let surface = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier == %@ OR identifier == %@", "collection-list", "playlist-detail"
+            )).firstMatch
+            XCTAssertTrue(surface.waitForExistence(timeout: 8))
             // A second subtraction of the tab host's bottom inset leaves a
             // large black gap above the mini player despite passing navigation.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
