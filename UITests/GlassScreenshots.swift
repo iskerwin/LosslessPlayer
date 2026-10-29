@@ -132,7 +132,12 @@ final class GlassScreenshots: XCTestCase {
             case "artwork":
                 artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
             case "title":
-                player.staticTexts["Apologize"].tap()
+                // SwiftUI can export both title endpoints during presentation;
+                // target the visible text rather than requiring a unique label.
+                let title = artwork.staticTexts.matching(NSPredicate(
+                    format: "label == %@ AND hittable == true", "Apologize")).firstMatch
+                XCTAssertTrue(title.exists)
+                title.tap()
             case "background":
                 player.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
             default:
