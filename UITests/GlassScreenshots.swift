@@ -15,6 +15,8 @@ final class GlassScreenshots: XCTestCase {
         songs.tap()
         XCTAssertTrue(app.descendants(matching: .any)["songs-list"].waitForExistence(timeout: 8))
         save("songs")
+        app.descendants(matching: .any)["songs-list"].swipeUp()
+        save("songs-scrolled-glass")
 
         let back = app.navigationBars.buttons.element(boundBy: 0)
         XCTAssertTrue(back.waitForExistence(timeout: 5))
@@ -29,6 +31,8 @@ final class GlassScreenshots: XCTestCase {
         }
         XCTAssertTrue(app.descendants(matching: .any)["playlist-detail"].waitForExistence(timeout: 8))
         save("playlist")
+        app.descendants(matching: .any)["playlist-detail"].swipeUp()
+        save("playlist-scrolled-continuity")
 
         app.descendants(matching: .any)["mini-player"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
@@ -208,6 +212,15 @@ final class GlassScreenshots: XCTestCase {
         albums.tap()
         XCTAssertTrue(app.descendants(matching: .any)["album-grid"].waitForExistence(timeout: 8))
         save("albums")
+        let album = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "album-card-")).firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 8))
+        album.tap()
+        let albumList = app.descendants(matching: .any)["collection-list"]
+        XCTAssertTrue(albumList.waitForExistence(timeout: 8))
+        save("album-continuity")
+        albumList.swipeUp()
+        save("album-scrolled-continuity")
+        app.buttons["detail-card-back"].tap()
         app.tabBars.buttons["歌单"].tap()
         let playlist = app.descendants(matching: .any)["playlist-深夜"]
         XCTAssertTrue(playlist.waitForExistence(timeout: 8))
@@ -217,6 +230,21 @@ final class GlassScreenshots: XCTestCase {
         app.buttons["修改封面"].tap()
         XCTAssertTrue(app.buttons["从文件选择"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["恢复自动封面"].exists)
+    }
+
+    func testMiniGlassAcrossRemainingTabs() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        for (tab, name) in [("收藏", "favorites-glass"), ("搜索", "search-glass")] {
+            app.tabBars.buttons[tab].tap()
+            XCTAssertTrue(mini.waitForExistence(timeout: 8))
+            XCTAssertTrue(mini.isHittable)
+            save(name)
+        }
     }
 
     private func save(_ name: String) {

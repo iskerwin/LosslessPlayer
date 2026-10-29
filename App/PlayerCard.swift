@@ -78,6 +78,8 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
                 .frame(width: reduceMotion ? miniFrame.width : bounds.width,
                        height: reduceMotion ? miniFrame.height : bounds.height)
                 .offset(miniOrigin)
+                // The expanded backing must not sit behind the mini's glass.
+                .opacity(1 - PlayerCardMetrics.miniOpacity(p))
             // Size the surface before attaching artwork so scaled-to-fill
             // images cannot participate in the card's layout negotiation.
             // Safe-area padding and control fades apply only to content.
@@ -93,6 +95,7 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
                 .opacity(PlayerCardMetrics.expandedOpacity(p))
             collapsed
                 .frame(width: miniFrame.width, height: miniFrame.height)
+                .modifier(PlayerMiniGlass())
                 .opacity(PlayerCardMetrics.miniOpacity(p))
                 .offset(miniOrigin)
         }
@@ -117,6 +120,23 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
             }
         }
         .offset(x: bounds.minX, y: bounds.minY)
+    }
+}
+
+/// Enclose the entire mini layout in one glass surface. Every tab and slot
+/// placement reaches this same container, including the pre-iOS 26 inset.
+/// Applying glass to the sized content keeps artwork, text and controls above
+/// the frosted backdrop; no translucent color or opaque material is underneath.
+private struct PlayerMiniGlass: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        if #available(iOS 26, *) {
+            GlassEffectContainer {
+                content.glassEffect(.regular, in: shape)
+            }
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
     }
 }
 
