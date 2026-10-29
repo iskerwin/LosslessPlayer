@@ -122,6 +122,9 @@ struct CollectionPage: View {
                     }
                     .tint(MusicTheme.accent)
                 }
+                // Set this at the List row boundary, outside EquatableView
+                // and swipe actions, so the system row fill cannot mask the page.
+                .listRowBackground(Color.clear)
             }
             .onMove { offsets, destination in
                 guard let playlist else { return }

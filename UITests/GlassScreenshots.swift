@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class GlassScreenshots: XCTestCase {
     func testCaptureGlassScreens() throws {
@@ -33,6 +34,7 @@ final class GlassScreenshots: XCTestCase {
         save("playlist")
         app.descendants(matching: .any)["playlist-detail"].swipeUp()
         save("playlist-scrolled-continuity")
+        try assertCollectionBackground(app.descendants(matching: .any)["playlist-detail"])
 
         app.descendants(matching: .any)["mini-player"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
@@ -220,6 +222,7 @@ final class GlassScreenshots: XCTestCase {
         save("album-continuity")
         albumList.swipeUp()
         save("album-scrolled-continuity")
+        try assertCollectionBackground(albumList)
         app.buttons["detail-card-back"].tap()
         app.tabBars.buttons["歌单"].tap()
         let playlist = app.descendants(matching: .any)["playlist-深夜"]
@@ -244,6 +247,40 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertTrue(mini.waitForExistence(timeout: 8))
             XCTAssertTrue(mini.isHittable)
             save(name)
+        }
+    }
+
+    /// The fixture's cover yields a blue page. Sample the empty leading margin
+    /// at several track rows: an opaque system black row must fail even if all
+    /// navigation and playback interactions pass.
+    private func assertCollectionBackground(_ list: XCUIElement) throws {
+        let screenshot = XCUIScreen.main.screenshot()
+        let uiImage = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation))
+        let image = try XCTUnwrap(uiImage.cgImage)
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        try pixels.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        let screen = XCUIApplication().frame
+        let scaleX = CGFloat(image.width) / screen.width
+        let scaleY = CGFloat(image.height) / screen.height
+        var samples: [[UInt8]] = []
+        for fraction in [CGFloat(0.35), 0.5, 0.65] {
+            let x = Int((list.frame.minX + 4) * scaleX)
+            let y = Int((list.frame.minY + list.frame.height * fraction) * scaleY)
+            let offset = (y * image.width + x) * 4
+            let rgb = Array(pixels[offset..<(offset + 3)])
+            XCTAssertGreaterThan(rgb[2], 20, "System black row masks the sampled blue page at \(fraction)")
+            samples.append(rgb)
+        }
+        for sample in samples.dropFirst() {
+            for channel in 0..<3 {
+                XCTAssertEqual(Double(sample[channel]), Double(samples[0][channel]), accuracy: 3,
+                               "Collection background changes between rows")
+            }
         }
     }
 

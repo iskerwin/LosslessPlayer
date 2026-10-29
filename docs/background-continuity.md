@@ -19,6 +19,8 @@ If device inspection still shows an opaque native accessory behind this surface,
 
 Linux has no Xcode: no local iOS build or runtime test is claimed. Existing player rendering and interaction tests run in GitHub Actions. The screenshot suite additionally captures scrolled songs, album and playlist details, plus mini presence on favorites/search. Screenshots are review evidence, not automated assertions of blur quality.
 
+The first CI run passed, but visual inspection of its artifacts exposed black track rows: the reusable row's clear background did not survive the outer EquatableView/swipe-action wrappers. The clear background is now also applied at the outer List row boundary in `CollectionPage.songList`. A screenshot pixel check samples multiple empty leading margins in scrolled album and playlist rows, requiring the fixture's blue page color and consistent RGB values. This detects the black-row defect independently of successful navigation.
+
 Physical-device checklist (pending):
 
 - [ ] Library/songs scroll beneath the mini with frosted content visible, no opaque white/gray board. Match the brief's photo-5 glass state; photo-3 is the defect.
