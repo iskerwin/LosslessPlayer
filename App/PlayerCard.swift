@@ -103,34 +103,30 @@ struct PlayerMiniSlot: Equatable {
     var compact = false
 }
 
-struct PlayerMiniSlotKey: PreferenceKey {
-    static var defaultValue = PlayerMiniSlot()
-    static func reduce(value: inout PlayerMiniSlot, nextValue: () -> PlayerMiniSlot) {
-        let next = nextValue()
-        if next.frame.width > 0 { value = next }
-    }
-}
-
 /// The system still owns accessory placement/minimization and tab layout.
 /// This has no artwork or controls: there is only one visible player card.
 struct PlayerMiniSlotView: View {
+    var onMeasure: (PlayerMiniSlot) -> Void
+
     var body: some View {
         if #available(iOS 26, *) {
-            GlassPlayerMiniSlot()
+            GlassPlayerMiniSlot(onMeasure: onMeasure)
         } else {
-            PlayerMiniSlotMeasure(compact: false)
+            PlayerMiniSlotMeasure(compact: false, onMeasure: onMeasure)
         }
     }
 }
 
 @available(iOS 26, *)
 private struct GlassPlayerMiniSlot: View {
+    var onMeasure: (PlayerMiniSlot) -> Void
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-    var body: some View { PlayerMiniSlotMeasure(compact: placement == .inline) }
+    var body: some View { PlayerMiniSlotMeasure(compact: placement == .inline, onMeasure: onMeasure) }
 }
 
 private struct PlayerMiniSlotMeasure: View {
     var compact: Bool
+    var onMeasure: (PlayerMiniSlot) -> Void
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 56
 
     var body: some View {
@@ -139,11 +135,19 @@ private struct PlayerMiniSlotMeasure: View {
             .frame(height: compact ? 36 : max(56, rowHeight))
             .background {
                 GeometryReader { geometry in
-                    Color.clear.preference(key: PlayerMiniSlotKey.self,
-                                           value: PlayerMiniSlot(frame: geometry.frame(in: .global), compact: compact))
+                    let slot = PlayerMiniSlot(frame: geometry.frame(in: .global), compact: compact)
+                    Color.clear
+                        .onAppear { report(slot) }
+                        .onChange(of: slot) { _, next in report(next) }
                 }
             }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+
+    private func report(_ slot: PlayerMiniSlot) {
+        // The native accessory lays out in a separate host. Do not traverse
+        // its preferences or invalidate the parent during that layout pass.
+        DispatchQueue.main.async { onMeasure(slot) }
     }
 }

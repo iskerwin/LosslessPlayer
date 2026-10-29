@@ -44,37 +44,34 @@ struct LibraryView: View {
                                        width: geometry.size.width,
                                        height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
             let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            ZStack(alignment: .topLeading) {
-                playerTabs
-                    .accessibilityHidden(showPlayer)
-                if player.current != nil, miniFrame.width > 0 {
-                    PlayerCard(progress: playerProgress, miniFrame: miniFrame,
-                               expandedFrame: expandedFrame, reduceMotion: reduceMotion,
-                               canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
-                        if playerMounted {
-                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                                setPlayer(false)
-                                pendingDelete = [track]
-                            }, onClose: { setPlayer(false) }, onPull: {
-                                followPull($0, distance: miniFrame.minY - expandedFrame.minY)
-                            }, onPullCancelled: cancelPull)
-                            .environment(\.colorScheme, .dark)
-                            .padding(.top, geometry.safeAreaInsets.top)
-                            .padding(.bottom, geometry.safeAreaInsets.bottom)
-                            .accessibilityHidden(!showPlayer)
-                            .allowsHitTesting(showPlayer)
+            playerTabs
+                .accessibilityHidden(showPlayer)
+                .overlay(alignment: .topLeading) {
+                    if player.current != nil, miniFrame.width > 0 {
+                        PlayerCard(progress: playerProgress, miniFrame: miniFrame,
+                                   expandedFrame: expandedFrame, reduceMotion: reduceMotion,
+                                   canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
+                            if playerMounted {
+                                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                                    setPlayer(false)
+                                    pendingDelete = [track]
+                                }, onClose: { setPlayer(false) }, onPull: {
+                                    followPull($0, distance: miniFrame.minY - expandedFrame.minY)
+                                }, onPullCancelled: cancelPull)
+                                .environment(\.colorScheme, .dark)
+                                .padding(.top, geometry.safeAreaInsets.top)
+                                .padding(.bottom, geometry.safeAreaInsets.bottom)
+                                .accessibilityHidden(!showPlayer)
+                                .allowsHitTesting(showPlayer)
+                            }
+                        } collapsed: {
+                            MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
+                                .accessibilityHidden(showPlayer)
+                                .allowsHitTesting(!showPlayer)
                         }
-                    } collapsed: {
-                        MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
-                            .accessibilityHidden(showPlayer)
-                            .allowsHitTesting(!showPlayer)
+                        .zIndex(1)
                     }
-                    .zIndex(1)
                 }
-            }
-            .onPreferenceChange(PlayerMiniSlotKey.self) { slot in
-                if slot.frame.width > 0 { miniSlot = slot }
-            }
         }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
@@ -144,7 +141,14 @@ struct LibraryView: View {
 
     /// The system accessory reserves the slot; the persistent card owns
     /// all visible player content, even at progress zero.
-    private var miniPlayer: some View { PlayerMiniSlotView() }
+    private var miniPlayer: some View { PlayerMiniSlotView(onMeasure: receiveMiniSlot) }
+
+    private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
+        guard slot.frame.width > 0, slot.frame.height > 0, slot != miniSlot else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { miniSlot = slot }
+    }
 
     @ViewBuilder private var playerTabs: some View {
         if #available(iOS 26.1, *) {
