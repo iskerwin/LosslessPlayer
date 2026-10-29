@@ -334,7 +334,7 @@ final class GlassScreenshots: XCTestCase {
     private func checkNativeBottomAccessory(appearance: String) throws {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-screenshotMode", "-AppleInterfaceStyle", appearance]
+        app.launchArguments = ["-screenshotMode", "-scrollableScreenshotLibrary", "-AppleInterfaceStyle", appearance]
         app.launch()
         defer { app.terminate() }
         let songs = app.buttons["歌曲"]

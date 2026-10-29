@@ -195,3 +195,29 @@ Validation: Linux has no Xcode/Swift SDK; no local iOS compile or XCTest claim.
 Only this existing branch/PR is pushed; do not merge. On CI failure inspect the
 named failed step/test and correct one cause once; if that retry remains red,
 stop and report step/test and commit. No duplicate watcher is created.
+
+
+### Round 2 CI and the single permitted correction
+
+[f136c48 run 40910122148](https://github.com/iskerwin/LosslessPlayer/actions/runs/40910122148)
+passed all 148 unit tests, including the unchanged collapse geometry assertions,
+shared background pixel coverage and FLAC scanner/migration cases. The screenshot
+step failed three UI tests: testDarkMinimizedNativeBottomAccessory and
+testNativeBottomAccessoryHasOneMiniAcrossScrollAndReturn timed out waiting for
+compact placement; testGridDetailReturnsToSameSlotTwice read mini.frame.minY=inf
+at line 217. Seven other UI tests passed.
+
+Single correction: the accessory scroll tests used the six-song screenshot
+fixture. The saved songs-scrolled-glass.png still shows all six rows and the
+wide mini: collapsing the large title is not enough sustained scrolling to
+exercise inline placement. Add -scrollableScreenshotLibrary only to the two
+accessory tests; ScreenshotFixture adds rows 7...30 for that flag only. Keep
+all compact/wide, ownership and geometry assertions and their timeouts intact.
+Ordinary screenshotMode and the playback/queue fixtures remain unchanged.
+
+The separate infinite AX-container frame is recorded, not masked. Result
+attachments also show transient {{inf,inf},{0,0}} mini frames during taps that
+succeeded on retry. This does not prove invisible/misplaced native content, and
+this single correction does not claim to resolve it. If the retry remains red
+(including that grid geometry test), stop and report the named failure as the
+brief requires. No second correction or automatic rerun.

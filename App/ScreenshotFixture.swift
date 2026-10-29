@@ -11,7 +11,7 @@ enum ScreenshotFixture {
             try? art.write(to: root.appendingPathComponent("cover.jpg"), options: .atomic)
         }
         let audio = wavData()
-        let songs = [
+        var songs = [
             ("Apologize", "OneRepublic"),
             ("Stop and Stare", "OneRepublic"),
             ("Mercy", "OneRepublic"),
@@ -19,6 +19,11 @@ enum ScreenshotFixture {
             ("All the Right Moves", "OneRepublic"),
             ("Come Home", "OneRepublic")
         ]
+        // Accessory minimization requires sustained scrolling, not just the
+        // large navigation title collapsing over the six-song capture fixture.
+        if ProcessInfo.processInfo.arguments.contains("-scrollableScreenshotLibrary") {
+            songs += (7...30).map { ("Scroll fixture \($0)", "OneRepublic") }
+        }
         var tracks: [Track] = []
         for (index, song) in songs.enumerated() {
             let filename = "track-\(index).wav"
