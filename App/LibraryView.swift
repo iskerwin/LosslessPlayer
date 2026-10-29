@@ -35,6 +35,7 @@ struct LibraryView: View {
     @State private var songPicker: Playlist?
     @State private var pendingDelete: [Track] = []
     @State private var lyricsTrack: Track?
+    @State private var matchingTrack: Track?
     @State private var renamingPlaylist: Playlist?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exportPresented = false
@@ -119,6 +120,7 @@ struct LibraryView: View {
             .sheet(item: $songPicker) { playlist in
                 SongPickerSheet(library: library, playlist: playlist)
             }
+            .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
             .sheet(item: $lyricsTrack) { track in
                 LyricsReader(player: player, track: track)
             }
@@ -326,7 +328,8 @@ struct LibraryView: View {
             album: { open(.album($0.albumID)) },
             artist: { open(.artist($0.primaryArtist)) },
             lyrics: { lyricsTrack = $0 },
-            delete: { pendingDelete = [$0] }
+            delete: { pendingDelete = [$0] },
+            identify: { matchingTrack = $0 }
         )
     }
 

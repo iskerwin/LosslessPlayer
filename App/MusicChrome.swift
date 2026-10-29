@@ -76,6 +76,9 @@ enum SongMenuCatalog {
             MenuAction(id: "album", title: "前往专辑", symbol: "music.note") { handlers.album(track) },
             MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { handlers.artist(track) }
         ]
+        if let identify = handlers.identify {
+            navigation.append(MenuAction(id: "identify", title: "识别专辑信息", symbol: "magnifyingglass") { identify(track) })
+        }
         if model.includesLyrics {
             navigation.append(MenuAction(id: "lyrics", title: "查看完整歌词", symbol: "quote.bubble") { handlers.lyrics(track) })
         }
@@ -177,6 +180,7 @@ struct SongHandlers {
     var delete: (Track) -> Void
     var removeFromPlaylist: ((Track) -> Void)? = nil
     var setCover: ((Track) -> Void)? = nil
+    var identify: ((Track) -> Void)? = nil
 }
 
 struct ToolbarChrome: ViewModifier {

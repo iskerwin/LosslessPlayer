@@ -258,6 +258,7 @@ extension Track {
         case id, filename, title, artist, artists, contentHash, album, duration, sampleRate, bitDepth, favorite
         case folderID, relativePath, fileSize, modifiedAt, addedAt, artworkFilename, trackNumber, missing, lyrics
         case albumArtist, genre, year, discNumber, compilation, playCount, lastPlayed, catalogVersion
+        case musicBrainzReleaseMBID, musicBrainzRecordingMBID
     }
 
     init(from decoder: Decoder) throws {
@@ -268,6 +269,8 @@ extension Track {
         artist = try container.decode(String.self, forKey: .artist)
         artists = try container.decodeIfPresent([String].self, forKey: .artists)
         contentHash = try container.decodeIfPresent(String.self, forKey: .contentHash)
+        musicBrainzReleaseMBID = try container.decodeIfPresent(String.self, forKey: .musicBrainzReleaseMBID)
+        musicBrainzRecordingMBID = try container.decodeIfPresent(String.self, forKey: .musicBrainzRecordingMBID)
         album = try container.decode(String.self, forKey: .album)
         duration = try container.decode(Double.self, forKey: .duration)
         sampleRate = try container.decode(Double.self, forKey: .sampleRate)
@@ -300,6 +303,8 @@ extension Track {
         try container.encode(artist, forKey: .artist)
         try container.encodeIfPresent(artists, forKey: .artists)
         try container.encodeIfPresent(contentHash, forKey: .contentHash)
+        try container.encodeIfPresent(musicBrainzReleaseMBID, forKey: .musicBrainzReleaseMBID)
+        try container.encodeIfPresent(musicBrainzRecordingMBID, forKey: .musicBrainzRecordingMBID)
         try container.encode(album, forKey: .album)
         try container.encode(duration, forKey: .duration)
         try container.encode(sampleRate, forKey: .sampleRate)

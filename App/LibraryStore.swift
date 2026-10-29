@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 final class LibraryStore: ObservableObject {
     @Published private(set) var snapshot = LibrarySnapshot()
     @Published var errorMessage: String?
+    @Published private(set) var musicBrainzNotice: String?
     @Published private(set) var importing = false
     @Published private(set) var progressText = ""
     @Published private(set) var progress: Double = 0
@@ -218,6 +219,43 @@ final class LibraryStore: ObservableObject {
         playback.position = position.isFinite ? max(0, position) : 0
         playbackCheckpoint.writeLater(playback, to: playbackURL)
     }
+    /// Only the app catalog and thumbnail cache are written. Never resolves an audio URL.
+    @discardableResult
+    func applyMusicBrainz(_ candidate: ReleaseCandidate, reviewed track: Track,
+                         client: MusicBrainzClient = .shared) async throws -> Bool {
+        guard !importing, trackByID[track.id] == track else {
+            throw MusicBrainzApplyError.changed
+        }
+        var artwork: String?
+        var coverNotice: String?
+        if track.artworkFilename == nil {
+            do {
+                if let data = try await client.frontCover(releaseMBID: candidate.releaseMBID) {
+                    try Task.checkCancellation()
+                    artwork = await scanner.storeThumbnail(data: data)
+                    if artwork == nil { coverNotice = "信息已保存；封面无法读取，保持无封面。" }
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch let error as URLError where error.code == .cancelled { throw error }
+            catch { coverNotice = "信息已保存；封面下载失败，可稍后重试。" }
+        }
+        // Recheck after network/thumbnail suspension so a scan, deletion or edit cannot be overwritten.
+        guard !Task.isCancelled, !importing, trackByID[track.id] == track,
+              let index = snapshot.tracks.firstIndex(where: { $0.id == track.id }) else {
+            if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
+            throw MusicBrainzApplyError.changed
+        }
+        var updated = snapshot
+        updated.tracks[index] = ReleaseMatching.applying(candidate, to: track)
+        if let artwork { updated.tracks[index].artworkFilename = artwork }
+        guard persist(updated) else {
+            if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
+            return false
+        }
+        musicBrainzNotice = coverNotice
+        return true
+    }
+
     func toggleFavorite(_ track: Track) {
         var s = snapshot
         guard let i = s.tracks.firstIndex(where: { $0.id == track.id }) else { return }
