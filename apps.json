@@ -12,6 +12,14 @@
       "versions": [
         {
           "version": "0.2.0",
+          "buildVersion": "95",
+          "date": "2026-10-29",
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-95-1/LosslessPlayer-dev-unsigned.ipa",
+          "size": 5478126,
+          "localizedDescription": "dev-95-1：最新开发版（自动发布）。"
+        },
+        {
+          "version": "0.2.0",
           "buildVersion": "91",
           "date": "2026-10-28",
           "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-91-1/LosslessPlayer-dev-unsigned.ipa",
@@ -81,14 +89,6 @@
           "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-66-1/LosslessPlayer-dev-unsigned.ipa",
           "size": 5289009,
           "localizedDescription": "dev-66-1：最新开发版（自动发布）。"
-        },
-        {
-          "version": "0.2.0",
-          "buildVersion": "62",
-          "date": "2026-10-24",
-          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-62-1/LosslessPlayer-dev-unsigned.ipa",
-          "size": 5289010,
-          "localizedDescription": "dev-62-1：正在播放过渡对齐 Apple Music——收起不回弹、切歌滑动、面板淡入淡出（PR #18）。"
         }
       ]
     }
