@@ -58,12 +58,6 @@ struct NowPlayingView: View {
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var artworkDrag: CGSize = .zero
-    @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
-    /// Blurred artwork texture for the backdrop. It swaps together with its
-    /// filename key, so the crossfade animates the (image, key) pair and a
-    /// stale texture never flashes under a new identity.
-    @State private var backdropImage: UIImage?
-    @State private var backdropKey: String?
     /// MPVolumeView and AVRoutePickerView are expensive to create; mounting
     /// them during the presentation's first frames drops the zoom. They
     /// mount once it has settled, into reserved frames of the same size.
@@ -93,20 +87,6 @@ struct NowPlayingView: View {
                 }
             }
         }
-        // The backdrop hangs as a background, never as a ZStack sibling:
-        // as a sibling its scaled-to-fill image took part in the stack's
-        // size negotiation, the root could size past the window, and the
-        // 560-capped content column centered off-screen (the queue button
-        // landed at x=395 on a ~393pt screen; XCUITest found no hit point).
-        // Backgrounds are sized by the content, never the reverse.
-        .background {
-            ZStack {
-                Color(white: 0.08)
-                ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey)
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
-            }
-            .ignoresSafeArea()
-        }
         .foregroundStyle(.white)
         .tint(.white)
         .statusBarHidden(false)
@@ -114,10 +94,8 @@ struct NowPlayingView: View {
         .accessibilityIdentifier("now-playing")
         // The gesture owns the 90pt dismissal decision; the card owns motion.
         .onAppear {
-            refreshBackdrop()
             reloadLyrics()
         }
-        .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
         .onChange(of: current?.id) { _, _ in reloadLyrics() }
         .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
         .task {
@@ -517,6 +495,33 @@ struct NowPlayingView: View {
             delete: onDelete
         )
     }
+}
+
+/// The card owns this surface independently of the padded, fading controls.
+/// Its caller supplies exact card bounds and the card's single clip trims
+/// artwork overflow, including the safe-area strip above the drag handle.
+struct NowPlayingBackground: View {
+    @ObservedObject var library: LibraryStore
+    @ObservedObject var player: PlayerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
+    /// Blurred artwork texture for the backdrop. It swaps together with its
+    /// filename key, so the crossfade animates the (image, key) pair and a
+    /// stale texture never flashes under a new identity.
+    @State private var backdropImage: UIImage?
+    @State private var backdropKey: String?
+    private var current: Track? { library.track(player.current?.id) }
+
+    var body: some View {
+        Color(white: 0.08)
+            .overlay {
+                ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey,
+                                extendsIntoSafeArea: false)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+            }
+            .onAppear(perform: refreshBackdrop)
+            .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
+    }
 
     /// Backdrop data (palette + blurred texture) is computed off the main
     /// thread from a downscaled copy and cached per artwork file. The old
@@ -820,6 +825,7 @@ struct ArtworkBackdrop: View {
     var colors: [Color]
     var image: UIImage? = nil
     var imageKey: String? = nil
+    var extendsIntoSafeArea = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -842,7 +848,7 @@ struct ArtworkBackdrop: View {
                                startPoint: .top, endPoint: .bottom)
             }
         }
-        .ignoresSafeArea()
+        .ignoresSafeArea(edges: extendsIntoSafeArea ? .all : [])
         .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: imageKey)
     }
 }
