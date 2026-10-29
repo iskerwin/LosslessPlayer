@@ -93,7 +93,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                     let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: 1, height: 1,
                         bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-                    context.draw(image, in: CGRect(x: -floor(frame.midX), y: -floor(frame.minY + 28),
+                    context.draw(image, in: CGRect(x: CGFloat(-floor(frame.midX)), y: CGFloat(-floor(frame.minY + 28)),
                                                    width: CGFloat(image.width), height: CGFloat(image.height)))
                 }
                 let expected: [UInt8]
