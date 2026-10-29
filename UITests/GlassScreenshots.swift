@@ -149,6 +149,44 @@ final class GlassScreenshots: XCTestCase {
         save("now-playing-swipe")
     }
 
+    func testGridDetailReturnsToSameSlotTwice() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let albums = app.buttons["专辑"]
+        XCTAssertTrue(albums.waitForExistence(timeout: 20))
+        albums.tap()
+        let album = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "album-card-")).firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 8))
+        checkRepeatedCardReturn(app, cell: album)
+        app.tabBars.buttons["歌单"].tap()
+        let playlist = app.buttons["playlist-深夜"]
+        XCTAssertTrue(playlist.waitForExistence(timeout: 8))
+        checkRepeatedCardReturn(app, cell: playlist)
+    }
+
+    private func checkRepeatedCardReturn(_ app: XCUIApplication, cell: XCUIElement) {
+        let slot = cell.frame
+        for _ in 0..<2 {
+            cell.tap()
+            let back = app.buttons["detail-card-back"]
+            XCTAssertTrue(back.waitForExistence(timeout: 8))
+            let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
+            wait(for: [hittable], timeout: 8)
+            XCTAssertTrue(app.tabBars.buttons["歌单"].isHittable)
+            XCTAssertTrue(app.descendants(matching: .any)["mini-player"].exists)
+            back.tap()
+            let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
+            wait(for: [returned], timeout: 8)
+            XCTAssertEqual(cell.frame.minX, slot.minX, accuracy: 0.5)
+            XCTAssertEqual(cell.frame.minY, slot.minY, accuracy: 0.5)
+            XCTAssertEqual(cell.frame.width, slot.width, accuracy: 0.5)
+            XCTAssertEqual(cell.frame.height, slot.height, accuracy: 0.5)
+            XCTAssertFalse(app.buttons["detail-card-back"].exists)
+        }
+    }
+
     func testAlbumGridAndPlaylistArtworkEntry() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

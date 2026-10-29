@@ -9,6 +9,14 @@ struct LibraryView: View {
     @State private var playlistPath = NavigationPath()
     @State private var favoritesPath = NavigationPath()
     @State private var searchPath = NavigationPath()
+    @State private var detailSource: DetailCardSource?
+    @State private var detailTab: AppTab = .library
+    @State private var detailPath = NavigationPath()
+    @State private var detailProgress: CGFloat = 0
+    @State private var detailHeaderFrame: CGRect = .zero
+    @State private var detailTransitioning = false
+    @State private var detailClosing = false
+    @State private var detailGeneration = 0
     @State private var searchFieldFocused = false
     @State private var showPlayer = false
     /// Only the expensive expanded content unmounts at rest. The card and
@@ -197,6 +205,8 @@ struct LibraryView: View {
                 .trailingGlass { libraryMore }
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
+        .modifier(detailGridContext(for: .library))
+        .overlay { detailOverlay(for: .library) }
     }
 
     private var playlistStack: some View {
@@ -206,6 +216,8 @@ struct LibraryView: View {
             }, onAddSongs: { songPicker = $0 }, onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) })
             .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
         }
+        .modifier(detailGridContext(for: .playlists))
+        .overlay { detailOverlay(for: .playlists) }
     }
 
     private var favoritesStack: some View {
@@ -361,9 +373,12 @@ struct LibraryView: View {
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
                         ForEach(library.recentAlbums, id: \.id) { album in
-                            NavigationLink(value: LibraryRoute.album(album.id)) {
+                            DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
+                                ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
+                                            root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
+                            } label: { artwork in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    ArtworkView(track: album.tracks.first, root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
+                                    artwork
                                     Text(album.name).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
                                     Text(album.artist).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                                 }
@@ -450,17 +465,19 @@ struct LibraryView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
                 ForEach(library.albumGroups) { album in
-                    Button { open(.album(album.id)) } label: {
+                    DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
+                        ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
+                                    root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
+                    } label: { artwork in
                         VStack(alignment: .leading, spacing: 6) {
-                            ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
-                                        root: library.root, size: nil)
-                                .aspectRatio(1, contentMode: .fit)
+                            artwork
                             Text(album.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
                             Text(album.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("album-card-\(album.id)")
                     .modifier(ActionsContext(sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
                         preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)))
                 }
@@ -567,11 +584,96 @@ struct LibraryView: View {
     private func open(_ route: LibraryRoute) {
         setPlayer(false)
         lyricsTrack = nil
+        if detailSource != nil, detailTab == tab, !detailClosing {
+            detailPath.append(route)
+            return
+        }
         switch tab {
         case .library: libraryPath.append(route)
         case .playlists: playlistPath.append(route)
         case .favorites: favoritesPath.append(route)
         case .search: searchPath.append(route)
+        }
+    }
+
+    private func detailGridContext(for owner: AppTab) -> DetailGridModifier {
+        DetailGridModifier(context: DetailCardContext(
+            active: detailTab == owner ? detailSource?.route : nil,
+            open: { source in
+                guard detailSource == nil || detailTab != owner else { return }
+                detailTab = owner
+                detailSource = source
+                detailPath = NavigationPath()
+                detailProgress = 0
+                detailHeaderFrame = .zero
+                detailClosing = false
+                detailTransitioning = true
+                detailGeneration += 1
+            }
+        ), covered: detailSource != nil && detailTab == owner)
+    }
+
+    @ViewBuilder private func detailOverlay(for owner: AppTab) -> some View {
+        if let source = detailSource, detailTab == owner {
+            GeometryReader { geometry in
+                let origin = geometry.frame(in: .global).origin
+                // Keep the system tab bar and accessory outside this surface.
+                let expanded = CGRect(x: 0, y: 0, width: geometry.size.width,
+                                      height: max(0, geometry.size.height - geometry.safeAreaInsets.bottom))
+                let localSource = DetailCardSource(route: source.route,
+                    frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
+                DetailZoomCard(progress: detailProgress, source: localSource, expanded: expanded,
+                               headerFrame: detailHeaderFrame.offsetBy(dx: -origin.x, dy: -origin.y),
+                               transitioning: detailTransitioning, reduceMotion: reduceMotion,
+                               detail: NavigationStack(path: $detailPath) {
+                    destination(source.route)
+                        .environment(\.detailCardHeader, DetailCardHeader(
+                            hidden: detailTransitioning && !reduceMotion,
+                            measure: receiveDetailHeader, close: closeDetail))
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button(action: closeDetail) { Image(systemName: "chevron.left") }
+                                    .accessibilityLabel("返回")
+                                    .accessibilityIdentifier("detail-card-back")
+                            }
+                        }
+                        .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                })
+                .allowsHitTesting(detailProgress == 1 && !detailTransitioning)
+                .accessibilityIdentifier("detail-card")
+            }
+        }
+    }
+
+    private func receiveDetailHeader(_ frame: CGRect) {
+        guard frame.width > 0, frame.height > 0, !detailClosing else { return }
+        detailHeaderFrame = frame
+        guard detailProgress == 0, detailTransitioning else { return }
+        let generation = detailGeneration
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
+                      completionCriteria: .removed) {
+            detailProgress = 1
+        } completion: {
+            guard generation == detailGeneration, !detailClosing else { return }
+            detailTransitioning = false
+        }
+    }
+
+    private func closeDetail() {
+        guard detailSource != nil, !detailClosing else { return }
+        detailClosing = true
+        detailTransitioning = true
+        detailGeneration += 1
+        let generation = detailGeneration
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
+                      completionCriteria: .removed) {
+            detailProgress = 0
+        } completion: {
+            guard generation == detailGeneration else { return }
+            // Reveal the untouched source on the exact zero-progress frame.
+            detailSource = nil
+            detailTransitioning = false
+            detailPath = NavigationPath()
         }
     }
 
