@@ -65,13 +65,36 @@ final class GlassScreenshots: XCTestCase {
         wait(for: [changed], timeout: 5)
         let queue = app.buttons["显示播放队列"]
         queue.tap()
-        XCTAssertTrue(queue.isSelected)
+        let shortcutReachedQueue = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: queue)
+        let didReachQueue = XCTWaiter.wait(for: [shortcutReachedQueue], timeout: 5) == .completed
+        save("now-playing-queue-shortcut")
+        if !didReachQueue { print(app.debugDescription) }
+        XCTAssertTrue(didReachQueue, "Queue shortcut must finish scrolling to state B")
         XCTAssertTrue(app.staticTexts["接下来"].exists)
-        // Existence does not imply the outgoing artwork transition has finished.
+        // Preserve a settled queue screenshot as well as the shortcut diagnostic.
         sleep(1)
         save("now-playing-queue")
         queue.tap()
         XCTAssertFalse(queue.isSelected)
+        let page = app.scrollViews["now-playing-scroll"]
+        XCTAssertTrue(page.exists)
+        // Native scrolling must drive the same state as the queue shortcut.
+        page.swipeUp()
+        let reachedQueue = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: queue)
+        wait(for: [reachedQueue], timeout: 5)
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.buttons["上一首"].isHittable)
+        XCTAssertTrue(player.buttons["下一首"].isHittable)
+        XCTAssertTrue(player.descendants(matching: .any)["playback-progress"].isHittable)
+        save("now-playing-scrolled-queue")
+        page.swipeDown()
+        let reachedArtwork = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == false"), object: queue)
+        wait(for: [reachedArtwork], timeout: 5)
+        XCTAssertTrue(player.exists, "Returning to the top must scroll rather than dismiss")
+        save("now-playing-scroll-return")
         app.buttons["收起播放器"].tap()
         XCTAssertTrue(mini.waitForExistence(timeout: 8))
     }
