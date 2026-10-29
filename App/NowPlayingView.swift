@@ -36,24 +36,14 @@ struct NowPlayingView: View {
     @ObservedObject var player: PlayerStore
     var onOpen: (LibraryRoute) -> Void
     var onDelete: (Track) -> Void
-    /// The player is an overlay above the tabs, not a modal cover, so
-    /// closing is the presenter's job (it also reverses the artwork morph).
+    /// The containing card owns all expand/collapse geometry and animation.
     var onClose: () -> Void
-    /// Downward drag distance in points, or 0 when the drag is no longer
-    /// vertical. The presenter dims the library from this; it is not animated.
     var onPull: (CGFloat) -> Void
-    /// The drag ended short of dismiss. The presenter springs the dim back.
     var onPullCancelled: () -> Void
-    /// Shared-element morph with the mini player: when a namespace is
-    /// wired, the stage artwork is the morph source while `morphActive`.
-    var morphNamespace: Namespace.ID?
-    var morphActive: Bool
-    var collapseProgress: CGFloat
-    var collapseDistance: CGFloat
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, morphNamespace: Namespace.ID? = nil, morphActive: Bool = false, collapseProgress: CGFloat = 0, collapseDistance: CGFloat = 0) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
@@ -61,17 +51,12 @@ struct NowPlayingView: View {
         self.onClose = onClose
         self.onPull = onPull
         self.onPullCancelled = onPullCancelled
-        self.morphNamespace = morphNamespace
-        self.morphActive = morphActive
-        self.collapseProgress = collapseProgress
-        self.collapseDistance = collapseDistance
     }
 
     private enum Panel { case artwork, lyrics, queue }
     @State private var panel = Panel.artwork
     @State private var details = false
     @State private var playlistTarget: Track?
-    @GestureState private var dismissOffset: CGFloat = 0
     @GestureState private var artworkDrag: CGSize = .zero
     @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
     /// Blurred artwork texture for the backdrop. It swaps together with its
@@ -83,15 +68,6 @@ struct NowPlayingView: View {
     /// them during the presentation's first frames drops the zoom. They
     /// mount once it has settled, into reserved frames of the same size.
     @State private var chromeReady = false
-    /// Controls below the stage fade/slide in just behind the artwork's
-    /// morph on open, staggered the way Music brings them in.
-    @State private var entered = false
-    /// Set the moment a drag releases past the dismiss threshold: the sheet
-    /// is leaving, so the drag offsets must freeze instead of springing back
-    /// to zero while the cover slides down (that double motion reads as a
-    /// stutter). `frozenDismissY` holds the release position for the ride down.
-    @State private var dismissing = false
-    @State private var frozenDismissY: CGFloat = 0
     /// Direction of the most recent track change, so the artwork/title slide
     /// the way Music does: next slides in from the right, previous from the left.
     @State private var skipDirection: ArtworkSwipe.Direction = .next
@@ -123,11 +99,6 @@ struct NowPlayingView: View {
         // 560-capped content column centered off-screen (the queue button
         // landed at x=395 on a ~393pt screen; XCUITest found no hit point).
         // Backgrounds are sized by the content, never the reverse.
-        //
-        // Opacity is on the expanded plate itself, then the drag offset
-        // wraps the plate. An ignoresSafeArea background drawn outside the
-        // fading view stays fully opaque until the player is removed, and
-        // light mode snaps from that color to the white library.
         .background {
             ZStack {
                 Color(white: 0.08)
@@ -135,32 +106,13 @@ struct NowPlayingView: View {
                     .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
             }
             .ignoresSafeArea()
-            .compositingGroup()
-            .opacity(morphActive ? 1 : 0)
-        }
-        // Scope the cancellation spring to the drag transform. Live input
-        // and accepted releases remain unanimated, without overriding the
-        // presenter's close transaction on the artwork or backdrop.
-        .animation(dismissing || reduceMotion || dismissOffset != 0 || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
-            content.offset(y: reduceMotion ? 0 : (dismissing && !morphActive ? frozenDismissY : dismissOffset + artworkPullY))
-        }
-        // The release position is retained by the inner transform; this
-        // continuation runs to the bottom with the shared collapse progress.
-        .offset(y: reduceMotion || !dismissing ? 0 : PlayerPull.remainingTravel(from: frozenDismissY, distance: collapseDistance) * collapseProgress)
-        .onChange(of: morphActive) { _, active in
-            if active {
-                dismissing = false
-                frozenDismissY = 0
-            }
         }
         .foregroundStyle(.white)
         .tint(.white)
-        .preferredColorScheme(.dark)
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
-        // Presented as an overlay, not a cover: our drag owns dismissal
-        // outright (past 90pt it closes via onClose and the morph reverses).
+        // The gesture owns the 90pt dismissal decision; the card owns motion.
         .onAppear {
             refreshBackdrop()
             reloadLyrics()
@@ -169,9 +121,7 @@ struct NowPlayingView: View {
         .onChange(of: current?.id) { _, _ in reloadLyrics() }
         .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
         .task {
-            try? await Task.sleep(for: .milliseconds(60))
-            withAnimation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.9)) { entered = true }
-            try? await Task.sleep(for: .milliseconds(290))
+            try? await Task.sleep(for: .milliseconds(350))
             chromeReady = true
         }
         .accessibilityAction(.escape) { onClose() }
@@ -210,10 +160,6 @@ struct NowPlayingView: View {
                 bottomRow
                     .padding(.top, 18)
             }
-            // The stage (and its morphing artwork) is never offset; only
-            // the control group staggers in behind it on open.
-            .opacity(entered ? 1 : 0)
-            .offset(y: entered || reduceMotion ? 0 : 16)
         }
         .padding(.horizontal, 32)
         .padding(.bottom, 12)
@@ -223,17 +169,10 @@ struct NowPlayingView: View {
 
     private var dismissGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .updating($dismissOffset) { value, offset, _ in
-                if value.translation.height > abs(value.translation.width) * 1.5 {
-                    offset = max(0, value.translation.height)
-                }
-            }
             .onChanged { reportPull($0.translation) }
             .onEnded { value in
                 if value.translation.height > 90,
                    value.translation.height > abs(value.translation.width) * 1.5 {
-                    frozenDismissY = max(0, value.translation.height)
-                    dismissing = true
                     onClose()
                 } else {
                     onPullCancelled()
@@ -259,8 +198,6 @@ struct NowPlayingView: View {
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
-                    frozenDismissY = max(0, value.translation.height)
-                    dismissing = true
                     onClose()
                 } else {
                     onPullCancelled()
@@ -268,9 +205,7 @@ struct NowPlayingView: View {
             }
     }
 
-    /// Tell the library how far this drag has pulled the sheet down, so its
-    /// dim can fade with the finger. Reduce Motion keeps the crossfade for
-    /// the dismiss itself and does not scrub the dim mid-gesture.
+    /// The presenter converts vertical points directly into card progress.
     private func reportPull(_ translation: CGSize) {
         guard !reduceMotion else { return }
         if translation.height > abs(translation.width) * 1.5 {
@@ -278,12 +213,6 @@ struct NowPlayingView: View {
         } else {
             onPull(0)
         }
-    }
-
-    /// Vertical follow for the artwork drag: only the dominant-down part
-    /// moves the whole sheet, mirroring the handle's pull.
-    private var artworkPullY: CGFloat {
-        artworkDrag.height > abs(artworkDrag.width) * 1.5 ? max(0, artworkDrag.height) : 0
     }
 
     /// Horizontal follow for the artwork drag while it is horizontal-dominant.
@@ -309,7 +238,6 @@ struct NowPlayingView: View {
                             content.offset(x: reduceMotion ? 0 : artworkSwipeX)
                         }
                         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
-                        .modifier(ArtworkMorph(namespace: morphNamespace, active: morphActive))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .contentShape(Rectangle())
@@ -329,12 +257,7 @@ struct NowPlayingView: View {
         .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
     }
 
-    /// While the morph is wired, the artwork crossfades on track changes:
-    /// a move transition would fight the matched-geometry frame. Without
-    /// a morph namespace (previews, fixtures) the slide below stays.
-    private var artworkTransition: AnyTransition {
-        morphNamespace == nil ? trackTransition : .opacity
-    }
+    private var artworkTransition: AnyTransition { .opacity }
 
     /// Track-change transition, the way Music slides artwork: the incoming
     /// track enters from the skip direction, the outgoing one leaves the
@@ -889,22 +812,6 @@ extension UIImage {
         format.scale = 1
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             draw(in: CGRect(origin: .zero, size: target))
-        }
-    }
-}
-
-/// Matched-geometry link between the mini player's artwork and the stage
-/// artwork: one shared element grows/shrinks between the two frames, the
-/// way Music's thumbnail becomes the full cover. Inert without a namespace.
-private struct ArtworkMorph: ViewModifier {
-    var namespace: Namespace.ID?
-    var active: Bool
-
-    func body(content: Content) -> some View {
-        if let namespace {
-            content.matchedGeometryEffect(id: "playerArtwork", in: namespace, isSource: active)
-        } else {
-            content
         }
     }
 }
