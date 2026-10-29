@@ -81,9 +81,12 @@ actor AudioScanner {
                     if track.artworkFilename == nil, let image = artwork(beside: file) {
                         track.artworkFilename = storeThumbnail(at: image, id: track.id)
                     }
+                    if track.artworkFilename == nil, file.pathExtension.lowercased() == "flac" {
+                        track.artworkFilename = storeEmbeddedArtwork(try FLACComments.readMetadata(file).picture, id: track.id)
+                    }
                     result.tracks.append(track); result.skipped += 1; continue
                 }
-                var track = try await read(file, id: old[relative]?.id ?? UUID())
+                var track = try await read(file, id: old[relative]?.id ?? UUID(), folderArtwork: artwork(beside: file))
                 if track.artworkFilename == nil, let image = artwork(beside: file) {
                     track.artworkFilename = storeThumbnail(at: image, id: track.id)
                 }
@@ -111,11 +114,12 @@ actor AudioScanner {
         // Content-address copies to prevent duplicates even when filenames differ.
         let digest = try Self.digest(file)
         let target = root.appendingPathComponent(digest + "." + url.pathExtension.lowercased())
-        var track = try await read(file, id: UUID())
+        let directory = url.deletingLastPathComponent()
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let folderArtwork = FolderArtwork.url(in: directory, entries: entries)
+        var track = try await read(file, id: UUID(), folderArtwork: folderArtwork)
         if track.artworkFilename == nil {
-            let directory = url.deletingLastPathComponent()
-            let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-            if let image = FolderArtwork.url(in: directory, entries: entries) {
+            if let image = folderArtwork {
                 track.artworkFilename = storeThumbnail(at: image, id: track.id)
             }
         }
@@ -148,7 +152,7 @@ actor AudioScanner {
         if let coordinationError { throw coordinationError }; if let copyError { throw copyError }
     }
 
-    private func read(_ url: URL, id: UUID) async throws -> Track {
+    private func read(_ url: URL, id: UUID, folderArtwork: URL?) async throws -> Track {
         var audio: AVAudioFile?
         var readError: Error?, coordinationError: NSError?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { file in
@@ -164,10 +168,19 @@ actor AudioScanner {
             bitDepth: (format.settings[AVLinearPCMBitDepthKey] as? NSNumber)?.intValue ?? 0)
         track.fileSize = Int64(values.fileSize ?? 0); track.modifiedAt = values.contentModificationDate
         track.addedAt = Date(); track.missing = false
+        let flac = try FLACComments.readMetadata(url)
+        if url.pathExtension.lowercased() == "flac" {
+            if let folderArtwork { track.artworkFilename = storeThumbnail(at: folderArtwork, id: id) }
+            if track.artworkFilename == nil {
+                track.artworkFilename = storeEmbeddedArtwork(flac.picture, id: id)
+            }
+        }
         let metadata = (try? await AVURLAsset(url: url).load(.commonMetadata)) ?? []
         for item in metadata {
             try Task.checkCancellation()
-            if item.commonKey == .commonKeyArtwork, let data = try? await item.load(.dataValue), data.count < 12_000_000,
+            if item.commonKey == .commonKeyArtwork,
+               (url.pathExtension.lowercased() != "flac" || track.artworkFilename == nil),
+               let data = try? await item.load(.dataValue), data.count < FLACComments.artworkByteLimit,
                let source = CGImageSourceCreateWithData(data as CFData, nil) {
                 track.artworkFilename = storeThumbnail(source, id: id)
             }
@@ -207,7 +220,7 @@ actor AudioScanner {
                 if track.compilation != true { track.compilation = await compilation(from: item) }
             }
         }
-        let comments = try FLACComments.read(url)
+        let comments = flac.comments
         explicitArtists += comments["ARTISTS"] ?? []
         alternateArtist += (comments["ARTIST"] ?? []) + (comments["ARTIS"] ?? [])
         let names = AudioTags.artistNames(from: explicitArtists.isEmpty ? alternateArtist : explicitArtists)
@@ -231,6 +244,12 @@ actor AudioScanner {
         if let data = try? await item.load(.dataValue), AudioTags.compilation(from: data) { return true }
         if let number = try? await item.load(.numberValue), number.intValue != 0 { return true }
         return false
+    }
+
+    private func storeEmbeddedArtwork(_ data: Data?, id: UUID) -> String? {
+        guard let data, data.count < FLACComments.artworkByteLimit,
+              let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return storeThumbnail(source, id: id)
     }
 
     private func storeThumbnail(at url: URL, id: UUID) -> String? {
