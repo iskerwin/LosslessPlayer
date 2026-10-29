@@ -31,6 +31,46 @@ enum ArtworkSwipe {
     }
 }
 
+/// Independent of PlayerCard progress: only the inner page's scroll offset
+/// drives this mapping. No timers or implicit animations follow the finger.
+enum PlayerScrollMorph {
+    static let compactHeight: CGFloat = 88
+    static let queueRevealStart: CGFloat = 0.7
+    static let interactionThreshold: CGFloat = 0.98
+
+    static func progress(offset: CGFloat, travel: CGFloat) -> CGFloat {
+        guard travel > 0 else { return 0 }
+        return min(1, max(0, offset / travel))
+    }
+
+    static func state(progress: CGFloat, largeArtwork: CGFloat, reduceMotion: Bool) -> State {
+        let p = min(1, max(0, progress))
+        return State(largeTitleOpacity: Double(1 - p), compactTitleOpacity: Double(p),
+                     queueOpacity: Double(min(1, max(0, (p - queueRevealStart) / (1 - queueRevealStart)))),
+                     queueInteractive: p >= interactionThreshold,
+                     artworkSide: reduceMotion ? largeArtwork : largeArtwork + (72 - largeArtwork) * p,
+                     artworkTravel: reduceMotion ? 0 : p,
+                     largeArtworkOpacity: reduceMotion ? Double(1 - p) : 1,
+                     compactArtworkOpacity: reduceMotion ? Double(p) : 0)
+    }
+
+    struct State {
+        var largeTitleOpacity: Double
+        var compactTitleOpacity: Double
+        var queueOpacity: Double
+        var queueInteractive: Bool
+        var artworkSide: CGFloat
+        var artworkTravel: CGFloat
+        var largeArtworkOpacity: Double
+        var compactArtworkOpacity: Double
+    }
+}
+
+private struct PlayerScrollOffset: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -42,6 +82,8 @@ struct NowPlayingView: View {
     var onPullCancelled: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
+    @ScaledMetric(relativeTo: .headline) private var compactHeaderHeight: CGFloat = PlayerScrollMorph.compactHeight
 
     init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}) {
         self.library = library
@@ -53,8 +95,13 @@ struct NowPlayingView: View {
         self.onPullCancelled = onPullCancelled
     }
 
-    private enum Panel { case artwork, lyrics, queue }
+    private enum Panel { case artwork, lyrics }
     @State private var panel = Panel.artwork
+    @State private var scrollOffset: CGFloat = 0
+    @State private var scrollTravel: CGFloat = 1
+    @State private var queueScrollRequest = 0
+    @State private var revealQueueOnAppear = false
+    @State private var dragBeganAtTop: Bool?
     @State private var details = false
     @State private var playlistTarget: Track?
     @GestureState private var artworkDrag: CGSize = .zero
@@ -80,7 +127,8 @@ struct NowPlayingView: View {
             GeometryReader { geometry in
                 if geometry.size.height < 600 || dynamicTypeSize.isAccessibilitySize {
                     ScrollView {
-                        playerContent(stageHeight: min(260, max(120, geometry.size.width - 56)))
+                        playerContent(stageHeight: max(titleHeight + compactHeaderHeight,
+                            min(260, max(120, geometry.size.width - 56))))
                     }
                 } else {
                     playerContent(stageHeight: nil)
@@ -121,13 +169,16 @@ struct NowPlayingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("收起播放器")
             .highPriorityGesture(dismissGesture)
-            stage
+            Group {
+                if panel == .lyrics { stage } else { scrollingStage.transition(.opacity) }
+            }
+                .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
                 .frame(height: stageHeight)
                 .frame(minHeight: 120, maxHeight: stageHeight == nil ? .infinity : nil)
                 .padding(.bottom, 24)
             VStack(spacing: 0) {
                 VStack(spacing: 8) {
-                    if panel != .queue { titleBlock }
+                    if panel == .lyrics { titleBlock }
                     scrubber
                     transport
                         .padding(.top, 18)
@@ -158,23 +209,25 @@ struct NowPlayingView: View {
             }
     }
 
-    /// One drag gesture owns the artwork area and decides by dominant
-    /// direction on release: mostly horizontal past 60pt skips, mostly down
-    /// past 90pt dismisses. A single high-priority gesture cannot be
-    /// starved by the zoom transition or by a second competing recognizer,
-    /// which two cooperating drag gestures could not rule out.
+    /// Preserve the directional skip/dismiss decision while allowing native
+    /// upward scrolling. Downward drags begun away from the top belong to
+    /// the scroll view, including a drag that reaches the top on release.
     private var artworkGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .updating($artworkDrag) { value, state, _ in
                 state = value.translation
             }
-            .onChanged { reportPull($0.translation) }
+            .onChanged { value in
+                if dragBeganAtTop == nil { dragBeganAtTop = scrollOffset <= 1 }
+                if dragBeganAtTop == true { reportPull(value.translation) }
+            }
             .onEnded { value in
+                defer { dragBeganAtTop = nil }
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
                     skipDirection = direction
                     onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
-                } else if value.translation.height > 90,
+                } else if dragBeganAtTop == true, value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
                     onClose()
                 } else {
@@ -198,41 +251,128 @@ struct NowPlayingView: View {
         ArtworkSwipe.follows(artworkDrag) ? artworkDrag.width : 0
     }
 
-    @ViewBuilder private var stage: some View {
-        ZStack {
-            if panel == .artwork {
-                GeometryReader { geometry in
-                    let side = max(0, min(geometry.size.width * 0.90, geometry.size.height * 0.9))
-                    ArtworkView(track: current, root: library.root, size: side, placeholder: .neutral)
-                        .id(current?.id)
-                        .transition(artworkTransition)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
-                        // Flatten the blur once, then scale the texture. A
-                        // shadow inside an animating scale re-blurs every frame.
-                        .compositingGroup()
-                        .scaleEffect(player.playing ? 1 : 0.86)
-                        .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
-                            content.offset(x: reduceMotion ? 0 : artworkSwipeX)
+    private var stage: some View {
+        lyricsPanel
+            .transition(.opacity)
+    }
+
+    private var morphProgress: CGFloat {
+        PlayerScrollMorph.progress(offset: scrollOffset, travel: scrollTravel)
+    }
+
+    /// One native scroll view owns the header and queue. The fixed-height
+    /// header slot supplies scroll travel, while its visible contents pin to
+    /// the viewport and shrink. The queue continues scrolling under that slot.
+    private var scrollingStage: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let travel = max(1, height - compactHeaderHeight)
+            let p = PlayerScrollMorph.progress(offset: scrollOffset, travel: travel)
+            let look = PlayerScrollMorph.state(progress: p,
+                largeArtwork: max(0, min(geometry.size.width * 0.9, (height - titleHeight - 24) * 0.9)),
+                reduceMotion: reduceMotion)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            Color.clear.frame(height: travel)
+                            Color.clear.frame(height: compactHeaderHeight)
+                                .id("player-queue")
                         }
-                        .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(height: height)
+                        .overlay(alignment: .top) {
+                            morphHeader(size: geometry.size, look: look)
+                                .offset(y: max(0, scrollOffset))
+                        }
+                        .zIndex(1)
+                        .id("player-top")
+                        queuePanel
+                            .frame(minHeight: max(0, height - compactHeaderHeight), alignment: .top)
+                            .opacity(look.queueOpacity)
+                            .allowsHitTesting(look.queueInteractive)
+                            .accessibilityHidden(!look.queueInteractive)
+                            // Clip rows as they pass behind the pinned header;
+                            // this is a mask only, never a second background.
+                            .mask(alignment: .top) {
+                                Rectangle().padding(.top, max(0, scrollOffset - travel))
+                            }
+                    }
+                    .background {
+                        GeometryReader { content in
+                            Color.clear.preference(key: PlayerScrollOffset.self,
+                                value: -content.frame(in: .named("player-scroll")).minY)
+                        }
+                    }
                 }
-                .contentShape(Rectangle())
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("now-playing-artwork")
-                .highPriorityGesture(artworkGesture)
-                .transition(.opacity)
-            } else if panel == .lyrics {
-                lyricsPanel
-                    .transition(.opacity)
-            } else {
-                queuePanel
-                    .transition(.opacity)
+                .coordinateSpace(name: "player-scroll")
+                .scrollIndicators(.hidden)
+                .onPreferenceChange(PlayerScrollOffset.self) { scrollOffset = $0 }
+                .onAppear {
+                    scrollTravel = travel
+                    scrollOffset = 0
+                }
+                .task {
+                    if revealQueueOnAppear {
+                        await Task.yield()
+                        proxy.scrollTo("player-queue", anchor: .top)
+                        revealQueueOnAppear = false
+                    }
+                }
+                .onChange(of: travel) { _, value in scrollTravel = value }
+                .onChange(of: queueScrollRequest) { _, _ in
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
+                        proxy.scrollTo(morphProgress >= PlayerScrollMorph.interactionThreshold ? "player-top" : "player-queue", anchor: .top)
+                    }
+                }
+                .accessibilityIdentifier("now-playing-scroll")
             }
         }
-        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+    }
+
+    private func morphHeader(size: CGSize, look: PlayerScrollMorph.State) -> some View {
+        let largeSide = max(0, min(size.width * 0.9, (size.height - titleHeight - 24) * 0.9))
+        let origin = CGPoint(x: (size.width - largeSide) / 2,
+                             y: max(0, (size.height - titleHeight - 24 - largeSide) / 2))
+        let t = look.artworkTravel
+        return ZStack(alignment: .topLeading) {
+            ArtworkView(track: current, root: library.root, size: look.artworkSide, placeholder: .neutral)
+                .id(current?.id)
+                .transition(artworkTransition)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
+                .compositingGroup()
+                .scaleEffect(player.playing ? 1 : 0.86)
+                .offset(x: reduceMotion ? 0 : artworkSwipeX)
+                .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
+                .offset(x: origin.x * (1 - t), y: origin.y * (1 - t))
+                .opacity(look.largeArtworkOpacity)
+                .accessibilityHidden(look.largeArtworkOpacity < 0.5)
+            if reduceMotion {
+                ArtworkView(track: current, root: library.root, size: 72, placeholder: .neutral)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .opacity(look.compactArtworkOpacity)
+                    .accessibilityHidden(true)
+            }
+            titleBlock(compact: false)
+                .offset(y: max(0, size.height - titleHeight))
+                .opacity(look.largeTitleOpacity)
+                .allowsHitTesting(look.largeTitleOpacity > 0.5)
+                .accessibilityHidden(look.largeTitleOpacity <= 0.5)
+            titleBlock(compact: true)
+                .padding(.leading, 84)
+                .frame(minHeight: 72)
+                .opacity(look.compactTitleOpacity)
+                .allowsHitTesting(look.compactTitleOpacity >= 0.5)
+                .accessibilityHidden(look.compactTitleOpacity < 0.5)
+        }
+        .frame(width: size.width, height: max(compactHeaderHeight, size.height - scrollTravel * morphProgress), alignment: .topLeading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("now-playing-artwork")
+        // Native vertical scrolling and this existing directional decision
+        // observe the same drag. Only a pull begun at the top may dismiss.
+        .simultaneousGesture(artworkGesture)
     }
 
     private var artworkTransition: AnyTransition { .opacity }
@@ -248,12 +388,14 @@ struct NowPlayingView: View {
             removal: .move(edge: outgoing).combined(with: .opacity))
     }
 
-    private var titleBlock: some View {
+    private var titleBlock: some View { titleBlock(compact: false) }
+
+    private func titleBlock(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(current?.title ?? "未在播放")
-                        .font(panel == .queue ? .headline : .title2.bold())
+                        .font(compact ? .headline : .title2.bold())
                         .foregroundStyle(.white)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .multilineTextAlignment(.leading)
@@ -263,7 +405,7 @@ struct NowPlayingView: View {
                             onClose()
                         } label: {
                             Text(current.artist)
-                                .font(panel == .queue ? .subheadline : .title3)
+                                .font(compact ? .subheadline : .title3)
                                 .foregroundStyle(.white.opacity(0.6))
                                 .lineLimit(1)
                         }
@@ -354,7 +496,12 @@ struct NowPlayingView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: chromeReady)
             Spacer()
             bottomButton("list.bullet", label: "显示播放队列") {
-                panel = panel == .queue ? .artwork : .queue
+                if panel == .lyrics {
+                    revealQueueOnAppear = true
+                    panel = .artwork
+                } else {
+                    queueScrollRequest += 1
+                }
             }
         }
         .padding(.bottom, 4)
@@ -379,16 +526,12 @@ struct NowPlayingView: View {
     }
 
     private func panelSymbolActive(_ symbol: String) -> Bool {
-        (symbol.contains("quote") && panel == .lyrics) || (symbol.contains("list") && panel == .queue)
+        (symbol.contains("quote") && panel == .lyrics) || (symbol.contains("list") && panel != .lyrics && morphProgress >= PlayerScrollMorph.interactionThreshold)
     }
 
     private var queuePanel: some View {
         let look = NowPlayingTransport.state(playing: player.playing, shuffle: player.shuffle, repeatMode: player.repeatMode)
         return VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                ArtworkView(track: current, root: library.root, size: 72)
-                titleBlock
-            }
             HStack(spacing: 12) {
                 queueModeButton("shuffle", label: "切换随机播放", active: look.shuffleHighlighted) { player.toggleShuffle() }
                     .accessibilityValue(look.shuffleHighlighted ? "已开启" : "已关闭")
@@ -399,34 +542,49 @@ struct NowPlayingView: View {
                 Text("队列已播放完毕").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                List {
+                LazyVStack(spacing: 0) {
                     ForEach(player.upcomingTracks) { track in
-                        Button { player.load(track) } label: {
-                            SongRow(track: track, root: library.root, emphasis: .white)
-                                .equatable()
+                        HStack(spacing: 8) {
+                            Button { player.load(track) } label: {
+                                SongRow(track: track, root: library.root, emphasis: .white)
+                                    .equatable()
+                            }
+                            .buttonStyle(.plain)
+                            Image(systemName: "line.3.horizontal")
+                                .foregroundStyle(.white.opacity(0.6))
+                                .frame(width: 32, height: 44)
+                                .contentShape(Rectangle())
+                                .draggable(track.id.uuidString)
+                                .accessibilityLabel("调整播放顺序")
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let id = items.first,
+                                  let source = player.upcomingTracks.firstIndex(where: { $0.id.uuidString == id }),
+                                  let target = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) else { return false }
+                            player.moveUpcoming(from: IndexSet(integer: source), to: target > source ? target + 1 : target)
+                            return true
+                        }
                         .contextMenu {
                             Button("从队列移除", systemImage: "minus.circle", role: .destructive) {
                                 if let index = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) {
                                     player.removeUpcoming(at: IndexSet(integer: index))
                                 }
                             }
+                            Button("向前移动", systemImage: "arrow.up") { moveUpcoming(track, backwards: true) }
+                            Button("向后移动", systemImage: "arrow.down") { moveUpcoming(track, backwards: false) }
                         }
                     }
-                    .onMove { player.moveUpcoming(from: $0, to: $1) }
                 }
-                .environment(\.editMode, .constant(.active))
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .contentMargins(.top, 0, for: .scrollContent)
                 .accessibilityIdentifier("upcoming-queue")
             }
         }
         .padding(.top, 4)
+    }
+
+    private func moveUpcoming(_ track: Track, backwards: Bool) {
+        guard let index = player.upcomingTracks.firstIndex(where: { $0.id == track.id }) else { return }
+        let destination = backwards ? max(0, index - 1) : min(player.upcomingTracks.count, index + 2)
+        player.moveUpcoming(from: IndexSet(integer: index), to: destination)
     }
 
     private func queueModeButton(_ symbol: String, label: String, active: Bool, action: @escaping () -> Void) -> some View {

@@ -1272,3 +1272,72 @@ final class GaplessPlaybackTests: XCTestCase {
         XCTAssertNotNil(state.enqueue(UUID()), file: file, line: line)
     }
 }
+
+
+final class PlayerScrollMorphTests: XCTestCase {
+    func testOffsetClampingAndReversibleProgress() {
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: -30, travel: 240), 0)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 0, travel: 240), 0)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 120, travel: 240), 0.5)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 240, travel: 240), 1)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 900, travel: 240), 1)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 120, travel: 240), 0.5)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 30, travel: 0), 0)
+        XCTAssertEqual(PlayerScrollMorph.progress(offset: 30, travel: -1), 0)
+    }
+
+    func testRestingStatesAndMidpoint() {
+        let top = PlayerScrollMorph.state(progress: 0, largeArtwork: 300, reduceMotion: false)
+        XCTAssertEqual(top.artworkSide, 300)
+        XCTAssertEqual(top.artworkTravel, 0)
+        XCTAssertEqual(top.largeTitleOpacity, 1)
+        XCTAssertEqual(top.compactTitleOpacity, 0)
+        XCTAssertEqual(top.queueOpacity, 0)
+        XCTAssertFalse(top.queueInteractive)
+
+        let middle = PlayerScrollMorph.state(progress: 0.5, largeArtwork: 300, reduceMotion: false)
+        XCTAssertEqual(middle.artworkSide, 186)
+        XCTAssertEqual(middle.artworkTravel, 0.5)
+        XCTAssertEqual(middle.largeTitleOpacity, 0.5)
+        XCTAssertEqual(middle.compactTitleOpacity, 0.5)
+        XCTAssertEqual(middle.largeArtworkOpacity, 1)
+        XCTAssertEqual(middle.queueOpacity, 0)
+
+        let queue = PlayerScrollMorph.state(progress: 1, largeArtwork: 300, reduceMotion: false)
+        XCTAssertEqual(queue.artworkSide, 72)
+        XCTAssertEqual(queue.artworkTravel, 1)
+        XCTAssertEqual(queue.largeTitleOpacity, 0)
+        XCTAssertEqual(queue.compactTitleOpacity, 1)
+        XCTAssertEqual(queue.queueOpacity, 1)
+        XCTAssertTrue(queue.queueInteractive)
+    }
+
+    func testQueueRevealsLateAndOnlyAcceptsInteractionNearQueueState() {
+        func state(_ p: CGFloat) -> PlayerScrollMorph.State {
+            PlayerScrollMorph.state(progress: p, largeArtwork: 300, reduceMotion: false)
+        }
+        XCTAssertEqual(state(PlayerScrollMorph.queueRevealStart).queueOpacity, 0)
+        XCTAssertEqual(state(0.85).queueOpacity, 0.5, accuracy: 0.0001)
+        XCTAssertFalse(state(PlayerScrollMorph.interactionThreshold - 0.001).queueInteractive)
+        XCTAssertTrue(state(PlayerScrollMorph.interactionThreshold).queueInteractive)
+        XCTAssertEqual(state(-1).largeTitleOpacity, 1)
+        XCTAssertEqual(state(-1).artworkSide, 300)
+        XCTAssertEqual(state(2).queueOpacity, 1)
+        XCTAssertEqual(state(2).artworkSide, 72)
+    }
+
+    func testReduceMotionKeepsArtworkStationaryAndCrossfadesBothRestingSizes() {
+        for p in [CGFloat(0), 0.25, 0.5, 0.85, 1] {
+            let reduced = PlayerScrollMorph.state(progress: p, largeArtwork: 300, reduceMotion: true)
+            let regular = PlayerScrollMorph.state(progress: p, largeArtwork: 300, reduceMotion: false)
+            XCTAssertEqual(reduced.artworkSide, 300)
+            XCTAssertEqual(reduced.artworkTravel, 0)
+            XCTAssertEqual(reduced.largeArtworkOpacity, Double(1 - p))
+            XCTAssertEqual(reduced.compactArtworkOpacity, Double(p))
+            XCTAssertEqual(reduced.largeTitleOpacity, regular.largeTitleOpacity)
+            XCTAssertEqual(reduced.compactTitleOpacity, regular.compactTitleOpacity)
+            XCTAssertEqual(reduced.queueOpacity, regular.queueOpacity)
+            XCTAssertEqual(reduced.queueInteractive, regular.queueInteractive)
+        }
+    }
+}
