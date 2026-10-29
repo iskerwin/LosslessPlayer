@@ -1341,3 +1341,54 @@ final class PlayerScrollMorphTests: XCTestCase {
         }
     }
 }
+
+final class QueueDropMappingTests: XCTestCase {
+    func testDownwardDropInsertsAfterTarget() {
+        XCTAssertEqual(QueueDropMapping.destination(source: 1, target: 3, count: 5), 4)
+    }
+
+    func testUpwardDropInsertsBeforeTarget() {
+        XCTAssertEqual(QueueDropMapping.destination(source: 3, target: 1, count: 5), 1)
+    }
+
+    func testSelfAndInvalidDropsDoNotMove() {
+        XCTAssertNil(QueueDropMapping.destination(source: 2, target: 2, count: 5))
+        XCTAssertNil(QueueDropMapping.destination(source: 0, target: 0, count: 1))
+        XCTAssertNil(QueueDropMapping.destination(source: 0, target: 0, count: 0))
+        XCTAssertNil(QueueDropMapping.destination(source: -1, target: 0, count: 5))
+        XCTAssertNil(QueueDropMapping.destination(source: 0, target: 5, count: 5))
+        XCTAssertNil(QueueDropMapping.destination(source: 5, target: 0, count: 5))
+        XCTAssertNil(QueueDropMapping.destination(source: 0, target: -1, count: 5))
+    }
+
+    func testFirstAndLastInsertionSlotsStayInBounds() {
+        XCTAssertEqual(QueueDropMapping.destination(source: 4, target: 0, count: 5), 0)
+        XCTAssertEqual(QueueDropMapping.destination(source: 0, target: 4, count: 5), 5)
+        // Exercise the same insertion conversion as moveQueue for every pair.
+        for count in 2...12 {
+            for source in 0..<count {
+                for target in 0..<count where source != target {
+                    guard let destination = QueueDropMapping.destination(source: source, target: target, count: count) else {
+                        XCTFail("Valid hover must produce an insertion slot")
+                        continue
+                    }
+                    XCTAssertTrue((0...count).contains(destination))
+                    var ids = Array(0..<count)
+                    let moving = ids.remove(at: source)
+                    let insertion = destination - (source < destination ? 1 : 0)
+                    ids.insert(moving, at: insertion)
+                    XCTAssertEqual(ids[target], source)
+                    XCTAssertEqual(ids.filter { $0 != source }, Array(0..<count).filter { $0 != source })
+                }
+            }
+        }
+    }
+
+    func testNeighborsMakeOneRowOfSpaceBeforeCommit() {
+        let down = (0..<5).map { QueueDropMapping.offset(index: $0, source: 1, target: 3, rowHeight: 72) }
+        XCTAssertEqual(down, [0, 0, -72, -72, 0])
+        let up = (0..<5).map { QueueDropMapping.offset(index: $0, source: 3, target: 1, rowHeight: 96) }
+        XCTAssertEqual(up, [0, 96, 96, 0, 0])
+        XCTAssertEqual(QueueDropMapping.offset(index: 2, source: 2, target: 2, rowHeight: 72), 0)
+    }
+}
