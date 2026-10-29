@@ -5,6 +5,40 @@ import UIKit
 
 @MainActor
 final class PlayerCardRenderingTests: XCTestCase {
+    // Draw into the full-size bitmap before indexing top-left image rows.
+    // Translating the image into a one-pixel CGContext instead samples in
+    // Core Graphics' bottom-left coordinates, away from a collapsed card.
+    private func rgbaPixels(in image: CGImage) throws -> [UInt8] {
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        try pixels.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        return pixels
+    }
+
+    func testPixelSamplerUsesTopLeftImageCoordinates() throws {
+        let renderer = ImageRenderer(content:
+            VStack(spacing: 0) {
+                Color(red: 1, green: 0, blue: 0).frame(height: 3)
+                Color(red: 0, green: 0, blue: 1).frame(height: 5)
+            }.frame(width: 4)
+        )
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let pixels = try rgbaPixels(in: image)
+        XCTAssertEqual(image.width, 4)
+        XCTAssertEqual(image.height, 8)
+        for y in 0..<image.height {
+            let offset = (y * image.width + 2) * 4
+            XCTAssertEqual(Array(pixels[offset..<(offset + 4)]),
+                           y < 3 ? [255, 0, 0, 255] : [0, 0, 255, 255], "Row \(y)")
+        }
+    }
+
     func testArtworkFillsTopStripAndSharesCardClipAtDragAndSpringProgress() throws {
         let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
         let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
@@ -28,7 +62,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                     Color.red
                 }
                 let renderer = ImageRenderer(content:
-                    Color.blue
+                    Color(red: 0, green: 0, blue: 1)
                         .frame(width: 360, height: 720)
                         .overlay(alignment: .topLeading) { card }
                         .environment(\.colorScheme, scheme)
@@ -37,14 +71,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                 let image = try XCTUnwrap(renderer.cgImage)
                 // Normalize pixel layout instead of depending on CGImage's
                 // byte order or premultiplied-alpha representation.
-                var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
-                try pixels.withUnsafeMutableBytes { buffer in
-                    let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
-                        bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                        space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-                    context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-                }
+                let pixels = try rgbaPixels(in: image)
                 func channel(_ x: CGFloat, _ y: CGFloat, _ component: Int) -> UInt8 {
                     pixels[(Int(y) * image.width + Int(x)) * 4 + component]
                 }
@@ -88,14 +115,9 @@ final class PlayerCardRenderingTests: XCTestCase {
                 )
                 renderer.scale = 1
                 let image = try XCTUnwrap(renderer.cgImage)
-                var pixel = [UInt8](repeating: 0, count: 4)
-                try pixel.withUnsafeMutableBytes { buffer in
-                    let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: 1, height: 1,
-                        bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-                    context.draw(image, in: CGRect(x: CGFloat(-floor(frame.midX)), y: CGFloat(-floor(frame.minY + 28)),
-                                                   width: CGFloat(image.width), height: CGFloat(image.height)))
-                }
+                let pixels = try rgbaPixels(in: image)
+                let offset = (Int(frame.minY + 28) * image.width + Int(frame.midX)) * 4
+                let pixel = Array(pixels[offset..<(offset + 4)])
                 let expected: [UInt8]
                 if progress <= 0 {
                     expected = [0, 0, 255] // Mini owns the landed card, including overshoot.
