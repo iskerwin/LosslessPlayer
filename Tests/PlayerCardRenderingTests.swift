@@ -356,7 +356,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                             DetailZoomCard(progress: progress, source: source, expanded: expanded,
                                 headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
                                 transitioning: true, reduceMotion: false,
-                                detail: CollectionArtworkWash(image: washFixture(top: .blue, bottom: .cyan))))
+                                detail: CollectionArtworkWash(image: washFixture(top: .blue, bottom: .cyan)))
                         }
                         .environment(\.colorScheme, scheme))
                 renderer.scale = 1
