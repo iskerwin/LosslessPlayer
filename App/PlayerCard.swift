@@ -74,10 +74,17 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
             ? CGSize(width: miniFrame.minX - bounds.minX, height: miniFrame.minY - bounds.minY)
             : .zero
         ZStack(alignment: .topLeading) {
+            // At rest only the ultra-thin material samples the content below
+            // the mini. Keep the existing regular backing during expansion.
+            Rectangle().fill(.ultraThinMaterial)
+                .frame(width: miniFrame.width, height: miniFrame.height)
+                .offset(miniOrigin)
+                .opacity(PlayerCardMetrics.miniOpacity(p))
             Rectangle().fill(.regularMaterial)
                 .frame(width: reduceMotion ? miniFrame.width : bounds.width,
                        height: reduceMotion ? miniFrame.height : bounds.height)
                 .offset(miniOrigin)
+                .opacity(1 - PlayerCardMetrics.miniOpacity(p))
             // Size the surface before attaching artwork so scaled-to-fill
             // images cannot participate in the card's layout negotiation.
             // Safe-area padding and control fades apply only to content.
