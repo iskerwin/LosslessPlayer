@@ -94,7 +94,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                         bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
                     context.draw(image, in: CGRect(x: -floor(frame.midX), y: -floor(frame.minY + 28),
-                                                   width: image.width, height: image.height))
+                                                   width: CGFloat(image.width), height: CGFloat(image.height)))
                 }
                 let expected: [UInt8]
                 if progress <= 0 {
