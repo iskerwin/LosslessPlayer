@@ -43,7 +43,7 @@ struct CollectionPage: View {
     @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
     @State private var editing = false
     @State private var coverTarget: Playlist?
-    @State private var palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
+    @State private var backgroundColor = Color(uiColor: ArtworkColors.fallback[0])
     @State private var paletteToken = ""
     @State private var orderMemo = TrackOrderMemo()
     @Environment(\.dismiss) private var dismiss
@@ -56,11 +56,11 @@ struct CollectionPage: View {
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
             .background {
-                if kind == .playlist { ArtworkBackdrop(colors: palette) }
+                if usesArtworkBackground { backgroundColor.ignoresSafeArea() }
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: paletteToken)
-            .preferredColorScheme(kind == .playlist ? .dark : nil)
-            .toolbarBackground(kind == .playlist ? .hidden : .automatic, for: .navigationBar)
+            .preferredColorScheme(usesArtworkBackground ? .dark : nil)
+            .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
             .onAppear(perform: refreshPalette)
             .onChange(of: playlist?.customArtworkFilename) { _, _ in refreshPalette() }
@@ -80,6 +80,7 @@ struct CollectionPage: View {
     }
 
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
+    private var usesArtworkBackground: Bool { kind == .album || kind == .playlist }
 
     private var songList: some View {
         let contextID = playbackContextID
@@ -121,6 +122,9 @@ struct CollectionPage: View {
                     }
                     .tint(MusicTheme.accent)
                 }
+                // Set this at the List row boundary, outside EquatableView
+                // and swipe actions, so the system row fill cannot mask the page.
+                .listRowBackground(Color.clear)
             }
             .onMove { offsets, destination in
                 guard let playlist else { return }
@@ -141,7 +145,7 @@ struct CollectionPage: View {
             }
         }
         .listStyle(.plain)
-        .scrollContentBackground(kind == .playlist ? .hidden : .visible)
+        .scrollContentBackground(usesArtworkBackground ? .hidden : .visible)
         .accessibilityIdentifier(kind == .playlist ? "playlist-detail" : kind == .songs ? "songs-list" : "collection-list")
         .modifier(PlaylistEditing(enabled: kind == .playlist, editing: editing))
     }
@@ -171,6 +175,7 @@ struct CollectionPage: View {
             }
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
         } else if let playlist {
             VStack(spacing: 0) {
@@ -196,14 +201,16 @@ struct CollectionPage: View {
     }
 
     private var coverTrack: Track? {
-        playlist.flatMap { library.coverTrack(for: $0) }
+        if let playlist { return library.coverTrack(for: playlist) }
+        if kind == .album { return sorted.first { $0.artworkFilename != nil } ?? sorted.first }
+        return nil
     }
 
     private func refreshPalette() {
-        guard kind == .playlist else { return }
+        guard usesArtworkBackground else { return }
         let filename = playlist?.customArtworkFilename ?? coverTrack?.artworkFilename
         guard let filename else {
-            palette = ArtworkColors.fallback.map { Color(uiColor: $0) }
+            backgroundColor = Color(uiColor: ArtworkColors.fallback[0])
             paletteToken = ""
             return
         }
@@ -225,7 +232,9 @@ struct CollectionPage: View {
     }
 
     private func applyPalette(_ analysis: ArtworkAnalysis, token: String) {
-        palette = analysis.palette.map { Color(uiColor: $0) }
+        // ArtworkColors limits brightness to keep white/secondary text readable
+        // in either system appearance. All rows share this one opaque page color.
+        backgroundColor = Color(uiColor: analysis.palette.first ?? ArtworkColors.fallback[0])
         paletteToken = token
     }
 
