@@ -66,11 +66,6 @@ enum PlayerScrollMorph {
     }
 }
 
-private struct PlayerScrollOffset: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct NowPlayingView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -266,6 +261,7 @@ struct NowPlayingView: View {
     private var scrollingStage: some View {
         GeometryReader { geometry in
             let height = geometry.size.height
+            let viewportTop = geometry.frame(in: .global).minY
             let travel = max(1, height - compactHeaderHeight)
             let p = PlayerScrollMorph.progress(offset: scrollOffset, travel: travel)
             let look = PlayerScrollMorph.state(progress: p,
@@ -297,16 +293,14 @@ struct NowPlayingView: View {
                                 Rectangle().padding(.top, max(0, scrollOffset - travel))
                             }
                     }
-                    .background {
-                        GeometryReader { content in
-                            Color.clear.preference(key: PlayerScrollOffset.self,
-                                value: -content.frame(in: .named("player-scroll")).minY)
-                        }
-                    }
+                    // Observe the content's actual movement directly. A
+                    // preference propagated through ScrollView can remain at
+                    // its initial value even while the native view scrolls.
+                    .onGeometryChange(for: CGFloat.self) { content in
+                        viewportTop - content.frame(in: .global).minY
+                    } action: { scrollOffset = $0 }
                 }
-                .coordinateSpace(name: "player-scroll")
                 .scrollIndicators(.hidden)
-                .onPreferenceChange(PlayerScrollOffset.self) { scrollOffset = $0 }
                 .onAppear {
                     scrollTravel = travel
                     scrollOffset = 0

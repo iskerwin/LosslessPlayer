@@ -65,9 +65,14 @@ final class GlassScreenshots: XCTestCase {
         wait(for: [changed], timeout: 5)
         let queue = app.buttons["显示播放队列"]
         queue.tap()
-        XCTAssertTrue(queue.isSelected)
+        let shortcutReachedQueue = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: queue)
+        let didReachQueue = XCTWaiter.wait(for: [shortcutReachedQueue], timeout: 5) == .completed
+        save("now-playing-queue-shortcut")
+        if !didReachQueue { print(app.debugDescription) }
+        XCTAssertTrue(didReachQueue, "Queue shortcut must finish scrolling to state B")
         XCTAssertTrue(app.staticTexts["接下来"].exists)
-        // Existence does not imply the outgoing artwork transition has finished.
+        // Preserve a settled queue screenshot as well as the shortcut diagnostic.
         sleep(1)
         save("now-playing-queue")
         queue.tap()
