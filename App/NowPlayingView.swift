@@ -31,8 +31,8 @@ enum ArtworkSwipe {
     }
 }
 
-/// Independent of PlayerCard progress: only the inner page's scroll offset
-/// drives this mapping. No timers or implicit animations follow the finger.
+/// Header appearance mapping, independent of PlayerCard presentation.
+/// The queue button selects the expanded or compact endpoint.
 enum PlayerScrollMorph {
     static let compactHeight: CGFloat = 88
     static let queueRevealStart: CGFloat = 0.7
@@ -185,11 +185,7 @@ struct NowPlayingView: View {
 
     private enum Panel { case artwork, lyrics }
     @State private var panel = Panel.artwork
-    @State private var scrollOffset: CGFloat = 0
-    @State private var scrollTravel: CGFloat = 1
-    @State private var queueScrollRequest = 0
-    @State private var revealQueueOnAppear = false
-    @State private var dragBeganAtTop: Bool?
+    @State private var queueVisible = false
     @State private var queueRowFrames: [UUID: CGRect] = [:]
     @State private var queueDrag: QueueRowDrag?
     @State private var details = false
@@ -241,7 +237,7 @@ struct NowPlayingView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { queueDrag = nil }
         }
-        .onChange(of: morphProgress >= PlayerScrollMorph.interactionThreshold) { _, interactive in
+        .onChange(of: queueVisible) { _, interactive in
             if !interactive { queueDrag = nil }
         }
         .onDisappear { queueDrag = nil }
@@ -269,7 +265,11 @@ struct NowPlayingView: View {
             .accessibilityLabel("收起播放器")
             .highPriorityGesture(dismissGesture)
             Group {
-                if panel == .lyrics { stage } else { scrollingStage.transition(.opacity) }
+                if panel == .lyrics {
+                    stage.gesture(TapGesture().onEnded { })
+                } else {
+                    artworkStage.transition(.opacity)
+                }
             }
                 .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: panel)
                 .frame(height: stageHeight)
@@ -283,7 +283,9 @@ struct NowPlayingView: View {
                         .padding(.top, 18)
                 }
                 .fixedSize(horizontal: false, vertical: true)
+                // Keep native volume touches inside the control, including its icons.
                 SystemVolumeBar(ready: chromeReady)
+                    .gesture(TapGesture().onEnded { })
                     .padding(.top, 32)
                 bottomRow
                     .padding(.top, 18)
@@ -293,6 +295,9 @@ struct NowPlayingView: View {
         .padding(.bottom, 12)
         .frame(maxWidth: 560, maxHeight: stageHeight == nil ? .infinity : nil)
         .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        // Ordinary priority lets child buttons and sliders own their taps.
+        .gesture(TapGesture().onEnded { onClose() })
     }
 
     private var dismissGesture: some Gesture {
@@ -308,25 +313,21 @@ struct NowPlayingView: View {
             }
     }
 
-    /// Preserve the directional skip/dismiss decision while allowing native
-    /// upward scrolling. Downward drags begun away from the top belong to
-    /// the scroll view, including a drag that reaches the top on release.
+    /// Only the header owns skip/pull gestures; queue scrolling stays native.
     private var artworkGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .updating($artworkDrag) { value, state, _ in
                 state = value.translation
             }
             .onChanged { value in
-                if dragBeganAtTop == nil { dragBeganAtTop = scrollOffset <= 1 }
-                if dragBeganAtTop == true { reportPull(value.translation) }
+                reportPull(value.translation)
             }
             .onEnded { value in
-                defer { dragBeganAtTop = nil }
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
                     skipDirection = direction
                     onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
-                } else if dragBeganAtTop == true, value.translation.height > 90,
+                } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
                     onClose()
                 } else {
@@ -355,74 +356,25 @@ struct NowPlayingView: View {
             .transition(.opacity)
     }
 
-    private var morphProgress: CGFloat {
-        PlayerScrollMorph.progress(offset: scrollOffset, travel: scrollTravel)
-    }
-
-    /// One native scroll view owns the header and queue. The fixed-height
-    /// header slot supplies scroll travel, while its visible contents pin to
-    /// the viewport and shrink. The queue continues scrolling under that slot.
-    private var scrollingStage: some View {
+    /// Queue visibility has one source: the bottom-right button. The artwork
+    /// endpoint has no scroll container or offscreen queue to reveal by swiping.
+    private var artworkStage: some View {
         GeometryReader { geometry in
-            let height = geometry.size.height
-            let viewportTop = geometry.frame(in: .global).minY
-            let travel = max(1, height - compactHeaderHeight)
-            let p = PlayerScrollMorph.progress(offset: scrollOffset, travel: travel)
-            let look = PlayerScrollMorph.state(progress: p,
-                largeArtwork: max(0, min(geometry.size.width * 0.9, (height - titleHeight - 24) * 0.9)),
+            let look = PlayerScrollMorph.state(progress: queueVisible ? 1 : 0,
+                largeArtwork: max(0, min(geometry.size.width * 0.9,
+                    (geometry.size.height - titleHeight - 24) * 0.9)),
                 reduceMotion: reduceMotion)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        VStack(spacing: 0) {
-                            Color.clear.frame(height: travel)
-                            Color.clear.frame(height: compactHeaderHeight)
-                                .id("player-queue")
-                        }
-                        .frame(height: height)
-                        .overlay(alignment: .top) {
-                            morphHeader(size: geometry.size, look: look)
-                                .offset(y: max(0, scrollOffset))
-                        }
-                        .zIndex(1)
-                        .id("player-top")
+            VStack(spacing: 0) {
+                morphHeader(size: geometry.size, look: look)
+                if queueVisible {
+                    ScrollView {
                         queuePanel
-                            .frame(minHeight: max(0, height - compactHeaderHeight), alignment: .top)
-                            .opacity(look.queueOpacity)
-                            .allowsHitTesting(look.queueInteractive)
-                            .accessibilityHidden(!look.queueInteractive)
-                            // Clip rows as they pass behind the pinned header;
-                            // this is a mask only, never a second background.
-                            .mask(alignment: .top) {
-                                Rectangle().padding(.top, max(0, scrollOffset - travel))
-                            }
                     }
-                    // Observe the content's actual movement directly. A
-                    // preference propagated through ScrollView can remain at
-                    // its initial value even while the native view scrolls.
-                    .onGeometryChange(for: CGFloat.self) { content in
-                        viewportTop - content.frame(in: .global).minY
-                    } action: { scrollOffset = $0 }
+                    .scrollIndicators(.hidden)
+                    .allowsHitTesting(queueVisible)
+                    .accessibilityHidden(!queueVisible)
+                    .accessibilityIdentifier("now-playing-queue-scroll")
                 }
-                .scrollIndicators(.hidden)
-                .onAppear {
-                    scrollTravel = travel
-                    scrollOffset = 0
-                }
-                .task {
-                    if revealQueueOnAppear {
-                        await Task.yield()
-                        proxy.scrollTo("player-queue", anchor: .top)
-                        revealQueueOnAppear = false
-                    }
-                }
-                .onChange(of: travel) { _, value in scrollTravel = value }
-                .onChange(of: queueScrollRequest) { _, _ in
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
-                        proxy.scrollTo(morphProgress >= PlayerScrollMorph.interactionThreshold ? "player-top" : "player-queue", anchor: .top)
-                    }
-                }
-                .accessibilityIdentifier("now-playing-scroll")
             }
         }
     }
@@ -447,11 +399,13 @@ struct NowPlayingView: View {
                 .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                 .offset(x: origin.x * (1 - t), y: origin.y * (1 - t))
                 .opacity(look.largeArtworkOpacity)
+                .allowsHitTesting(look.largeArtworkOpacity >= 0.5)
                 .accessibilityHidden(look.largeArtworkOpacity < 0.5)
             if reduceMotion {
                 ArtworkView(track: current, root: library.root, size: 72, placeholder: .neutral)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .opacity(look.compactArtworkOpacity)
+                    .allowsHitTesting(look.compactArtworkOpacity >= 0.5)
                     .accessibilityHidden(true)
             }
             titleBlock(compact: false)
@@ -466,12 +420,11 @@ struct NowPlayingView: View {
                 .allowsHitTesting(look.compactTitleOpacity >= 0.5)
                 .accessibilityHidden(look.compactTitleOpacity < 0.5)
         }
-        .frame(width: size.width, height: max(compactHeaderHeight, size.height - scrollTravel * morphProgress), alignment: .topLeading)
+        .frame(width: size.width, height: queueVisible ? compactHeaderHeight : size.height, alignment: .topLeading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing-artwork")
-        // Native vertical scrolling and this existing directional decision
-        // observe the same drag. Only a pull begun at the top may dismiss.
+        // Tap dismissal and the 16pt directional drag recognize separately.
         .simultaneousGesture(artworkGesture)
     }
 
@@ -593,14 +546,15 @@ struct NowPlayingView: View {
                 }
             }
             .frame(width: 48, height: 44)
+            .gesture(TapGesture().onEnded { })
             .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: chromeReady)
             Spacer()
             bottomButton("list.bullet", label: "显示播放队列") {
                 if panel == .lyrics {
-                    revealQueueOnAppear = true
+                    queueVisible = true
                     panel = .artwork
                 } else {
-                    queueScrollRequest += 1
+                    queueVisible.toggle()
                 }
             }
         }
@@ -626,7 +580,7 @@ struct NowPlayingView: View {
     }
 
     private func panelSymbolActive(_ symbol: String) -> Bool {
-        (symbol.contains("quote") && panel == .lyrics) || (symbol.contains("list") && panel != .lyrics && morphProgress >= PlayerScrollMorph.interactionThreshold)
+        (symbol.contains("quote") && panel == .lyrics) || (symbol.contains("list") && panel != .lyrics && queueVisible)
     }
 
     private var queuePanel: some View {
@@ -710,7 +664,7 @@ struct NowPlayingView: View {
                                  location: CGPoint, translation: CGSize) {
         if state == .began {
             let ids = player.upcomingTracks.map(\.id)
-            guard morphProgress >= PlayerScrollMorph.interactionThreshold,
+            guard queueVisible,
                   let source = ids.firstIndex(of: track.id), queueRowFrames[track.id] != nil else { return }
             queueDrag = QueueRowDrag(ids: ids, source: source, frames: queueRowFrames,
                                      target: source, translation: translation)

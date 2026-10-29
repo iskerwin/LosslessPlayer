@@ -70,33 +70,79 @@ final class GlassScreenshots: XCTestCase {
         let didReachQueue = XCTWaiter.wait(for: [shortcutReachedQueue], timeout: 5) == .completed
         save("now-playing-queue-shortcut")
         if !didReachQueue { print(app.debugDescription) }
-        XCTAssertTrue(didReachQueue, "Queue shortcut must finish scrolling to state B")
+        XCTAssertTrue(didReachQueue, "Queue button must show state B")
         XCTAssertTrue(app.staticTexts["接下来"].exists)
         // Preserve a settled queue screenshot as well as the shortcut diagnostic.
         sleep(1)
         save("now-playing-queue")
         queue.tap()
         XCTAssertFalse(queue.isSelected)
-        let page = app.scrollViews["now-playing-scroll"]
-        XCTAssertTrue(page.exists)
-        // Native scrolling must drive the same state as the queue shortcut.
-        page.swipeUp()
-        let reachedQueue = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "selected == true"), object: queue)
-        wait(for: [reachedQueue], timeout: 5)
+        let artwork = app.descendants(matching: .any)["now-playing-artwork"]
+        XCTAssertTrue(artwork.exists)
+        XCTAssertFalse(app.scrollViews["now-playing-queue-scroll"].exists)
+        // Swiping the large artwork must never reveal a hidden queue.
+        artwork.swipeUp()
+        XCTAssertFalse(queue.isSelected)
+        XCTAssertFalse(app.staticTexts["接下来"].exists)
         let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.exists)
         XCTAssertTrue(player.buttons["上一首"].isHittable)
         XCTAssertTrue(player.buttons["下一首"].isHittable)
         XCTAssertTrue(player.descendants(matching: .any)["playback-progress"].isHittable)
-        save("now-playing-scrolled-queue")
-        page.swipeDown()
-        let reachedArtwork = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "selected == false"), object: queue)
-        wait(for: [reachedArtwork], timeout: 5)
-        XCTAssertTrue(player.exists, "Returning to the top must scroll rather than dismiss")
-        save("now-playing-scroll-return")
+        // A sub-threshold downward drag also stays in A, without a queue.
+        let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 45)))
+        XCTAssertFalse(queue.isSelected)
+        XCTAssertTrue(player.exists)
+        save("now-playing-no-swipe-queue")
+        // The lyrics shortcut must still reach the queue through the same button.
+        player.buttons["显示歌词"].tap()
+        XCTAssertTrue(player.exists)
+        queue.tap()
+        XCTAssertTrue(queue.isSelected)
+        XCTAssertTrue(app.staticTexts["接下来"].exists)
+        let queueScroll = app.scrollViews["now-playing-queue-scroll"]
+        XCTAssertTrue(queueScroll.exists)
+        queueScroll.swipeUp()
+        XCTAssertTrue(queue.isSelected)
+        XCTAssertTrue(player.exists)
+        queue.tap()
+        XCTAssertFalse(queue.isSelected)
+        XCTAssertFalse(queueScroll.exists)
         app.buttons["收起播放器"].tap()
         XCTAssertTrue(mini.waitForExistence(timeout: 8))
+    }
+
+    func testNonControlTapsCollapsePlayer() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = app.descendants(matching: .any)["mini-player"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        // Cover coordinates target the actual image, not just the page margin.
+        for region in ["artwork", "title", "background", "handle"] {
+            mini.tap()
+            let player = app.descendants(matching: .any)["now-playing"]
+            XCTAssertTrue(player.waitForExistence(timeout: 8))
+            sleep(1)
+            let artwork = player.descendants(matching: .any)["now-playing-artwork"]
+            XCTAssertTrue(artwork.exists)
+            switch region {
+            case "artwork":
+                artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+            case "title":
+                player.staticTexts["Apologize"].tap()
+            case "background":
+                player.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+            default:
+                player.buttons["收起播放器"].tap()
+            }
+            let collapsed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: player)
+            wait(for: [collapsed], timeout: 8)
+            XCTAssertTrue(mini.isHittable, "Tap on \(region) must collapse to the mini player")
+        }
     }
 
     func testPlayerPullDownThreshold() throws {
