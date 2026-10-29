@@ -8,7 +8,7 @@ final class GlassScreenshots: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["library-home"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.descendants(matching: .any)["mini-player"].waitForExistence(timeout: 10))
+        _ = try readyMini(in: app)
         save("library")
 
         let songs = app.buttons["歌曲"]
@@ -36,7 +36,7 @@ final class GlassScreenshots: XCTestCase {
         save("playlist-scrolled-continuity")
         try assertCollectionBackground(app.descendants(matching: .any)["playlist-detail"])
 
-        app.descendants(matching: .any)["mini-player"].tap()
+        try tapMini(in: app)
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         sleep(1)
         save("now-playing")
@@ -47,9 +47,7 @@ final class GlassScreenshots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
-        let mini = app.descendants(matching: .any)["mini-player"]
-        XCTAssertTrue(mini.waitForExistence(timeout: 20))
-        mini.tap()
+        try tapMini(in: app)
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         let progress = app.descendants(matching: .any)["playback-progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 8))
@@ -110,7 +108,7 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(queue.isSelected)
         XCTAssertFalse(queueScroll.exists)
         app.buttons["收起播放器"].tap()
-        XCTAssertTrue(mini.waitForExistence(timeout: 8))
+        _ = try readyMini(in: app)
     }
 
     func testNonControlTapsCollapsePlayer() throws {
@@ -154,9 +152,7 @@ final class GlassScreenshots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
-        let mini = app.descendants(matching: .any)["mini-player"]
-        XCTAssertTrue(mini.waitForExistence(timeout: 20))
-        mini.tap()
+        try tapMini(in: app)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         let handle = app.buttons["收起播放器"]
@@ -167,7 +163,7 @@ final class GlassScreenshots: XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 100, dy: 15)))
         XCTAssertTrue(player.exists)
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
-        XCTAssertTrue(mini.waitForExistence(timeout: 8))
+        _ = try readyMini(in: app)
         XCTAssertFalse(player.exists)
     }
 
@@ -181,9 +177,7 @@ final class GlassScreenshots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
-        let mini = app.descendants(matching: .any)["mini-player"]
-        XCTAssertTrue(mini.waitForExistence(timeout: 20))
-        mini.tap()
+        try tapMini(in: app)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
@@ -199,9 +193,7 @@ final class GlassScreenshots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
-        let mini = app.descendants(matching: .any)["mini-player"]
-        XCTAssertTrue(mini.waitForExistence(timeout: 20))
-        mini.tap()
+        try tapMini(in: app)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         XCTAssertTrue(player.staticTexts["Apologize"].waitForExistence(timeout: 5))
@@ -238,14 +230,14 @@ final class GlassScreenshots: XCTestCase {
         albums.tap()
         let album = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "album-card-")).firstMatch
         XCTAssertTrue(album.waitForExistence(timeout: 8))
-        checkRepeatedCardReturn(app, cell: album)
+        try checkRepeatedCardReturn(app, cell: album)
         app.tabBars.buttons["歌单"].tap()
         let playlist = app.buttons["playlist-深夜"]
         XCTAssertTrue(playlist.waitForExistence(timeout: 8))
-        checkRepeatedCardReturn(app, cell: playlist)
+        try checkRepeatedCardReturn(app, cell: playlist)
     }
 
-    private func checkRepeatedCardReturn(_ app: XCUIApplication, cell: XCUIElement) {
+    private func checkRepeatedCardReturn(_ app: XCUIApplication, cell: XCUIElement) throws {
         let slot = cell.frame
         for _ in 0..<2 {
             cell.tap()
@@ -254,7 +246,7 @@ final class GlassScreenshots: XCTestCase {
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
             XCTAssertTrue(app.tabBars.buttons["歌单"].isHittable)
-            let mini = app.descendants(matching: .any)["mini-player"]
+            let mini = try readyMini(in: app)
             XCTAssertTrue(mini.exists)
             // Use the List's existing accessibility node. NavigationStack
             // does not export a decorative SwiftUI clipping wrapper as a node.
@@ -313,11 +305,10 @@ final class GlassScreenshots: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         app.launch()
-        let mini = app.descendants(matching: .any)["mini-player"]
-        XCTAssertTrue(mini.waitForExistence(timeout: 20))
+        _ = try readyMini(in: app)
         for (tab, name) in [("收藏", "favorites-glass"), ("搜索", "search-glass")] {
             app.tabBars.buttons[tab].tap()
-            XCTAssertTrue(mini.waitForExistence(timeout: 8))
+            let mini = try readyMini(in: app)
             XCTAssertTrue(mini.isHittable)
             save(name)
         }
@@ -342,12 +333,14 @@ final class GlassScreenshots: XCTestCase {
         songs.tap()
         let list = app.descendants(matching: .any)["songs-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 8))
-        let minis = app.descendants(matching: .any).matching(identifier: "mini-player")
-        let wideHeight = minis.firstMatch.frame.height
+        let minis = app.windows.descendants(matching: .any).matching(identifier: "mini-player")
+        let mini = try readyMini(in: app)
+        let wideHeight = mini.frame.height
         XCTAssertGreaterThanOrEqual(wideHeight, 55)
         for _ in 0..<2 {
             for upward in [true, false] {
                 if upward { list.swipeUp() } else { list.swipeDown() }
+                _ = try readyMini(in: app)
                 XCTAssertEqual(minis.count, 1, "Native minimization must retain one mini owner")
                 XCTAssertTrue(minis.firstMatch.isHittable)
                 XCTAssertEqual(app.tabBars.count, 1)
@@ -360,14 +353,42 @@ final class GlassScreenshots: XCTestCase {
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
         }
-        minis.firstMatch.tap()
+        try tapMini(in: app)
         XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 8))
         app.buttons["收起播放器"].tap()
+        _ = try readyMini(in: app)
         XCTAssertTrue(minis.firstMatch.waitForExistence(timeout: 8))
         XCTAssertEqual(minis.count, 1, "Landing must return ownership to the accessory")
         save("\(appearance.lowercased())-bottom-return")
         // These captures prove placement and ownership only. A uniform backing
         // cannot reveal material transmission; device checks use varied content.
+    }
+
+    /// The native accessory can exist before XCTest exports its screen frame.
+    /// Resolve through the window host and wait before reading geometry or tapping.
+    private func readyMini(in app: XCUIApplication, file: StaticString = #filePath,
+                           line: UInt = #line) throws -> XCUIElement {
+        let mini = app.windows.descendants(matching: .any)
+            .matching(identifier: "mini-player").firstMatch
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard mini.exists else { return false }
+            let frame = mini.frame
+            guard frame.origin.x.isFinite, frame.origin.y.isFinite,
+                  frame.width.isFinite, frame.height.isFinite,
+                  frame.width > 0, frame.height > 0 else { return false }
+            return mini.isHittable
+        }, object: nil)
+        let result = XCTWaiter.wait(for: [ready], timeout: 20)
+        return try XCTUnwrap(result == .completed ? mini : nil,
+                            "Mini accessory must have a finite, nonempty frame and be hittable",
+                            file: file, line: line)
+    }
+
+    private func tapMini(in app: XCUIApplication, file: StaticString = #filePath,
+                         line: UInt = #line) throws {
+        let mini = try readyMini(in: app, file: file, line: line)
+        // Use the ready frame's center instead of the accessory's AX activation point.
+        mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     /// Sample empty row margins: the blue cover wash must remain visible.
