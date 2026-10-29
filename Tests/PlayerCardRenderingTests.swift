@@ -184,7 +184,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                 for reduced in [false, true] {
                     let mini = CGRect(x: 12, y: 600, width: 336, height: height)
                     let renderer = ImageRenderer(content:
-                        Color.magenta.frame(width: 360, height: 720)
+                        Color(red: 1, green: 0, blue: 1).frame(width: 360, height: 720)
                             .overlay(alignment: .topLeading) {
                                 PlayerCard(progress: 0, miniFrame: mini,
                                     expandedFrame: CGRect(x: 0, y: 0, width: 360, height: 720),
