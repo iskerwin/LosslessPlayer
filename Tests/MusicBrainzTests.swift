@@ -81,7 +81,8 @@ final class MusicBrainzTests: XCTestCase {
         track.artist = "Ada & Bea"
         let url = try MusicBrainzClient.searchURL(for: track)
         XCTAssertEqual(url.host, "musicbrainz.org")
-        XCTAssertEqual(url.path, "/ws/2/recording/")
+        // URL.path normalizes away a trailing slash on Darwin; components retain the request path.
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.path, "/ws/2/recording/")
         let values = Dictionary(uniqueKeysWithValues: URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) })
         XCTAssertEqual(values["fmt"], "json")
         XCTAssertEqual(values["limit"], "25")
