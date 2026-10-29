@@ -343,7 +343,9 @@ struct NowPlayingView: View {
                 .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                 .compositingGroup()
                 .scaleEffect(player.playing ? 1 : 0.86)
-                .offset(x: reduceMotion ? 0 : artworkSwipeX)
+                .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
+                    content.offset(x: reduceMotion ? 0 : artworkSwipeX)
+                }
                 .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                 .offset(x: origin.x * (1 - t), y: origin.y * (1 - t))
                 .opacity(look.largeArtworkOpacity)
