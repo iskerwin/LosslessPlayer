@@ -60,6 +60,10 @@ struct LibraryView: View {
                                    expandedFrame: expandedFrame, reduceMotion: reduceMotion,
                                    canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
                             if playerMounted {
+                                NowPlayingBackground(library: library, player: player)
+                            }
+                        } expanded: {
+                            if playerMounted {
                                 NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
                                     setPlayer(false)
                                     pendingDelete = [track]

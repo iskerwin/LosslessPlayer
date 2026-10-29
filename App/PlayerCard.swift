@@ -32,18 +32,20 @@ enum PlayerCardMetrics {
 
 /// Animatable evaluates *all* derived geometry and opacity at the presented
 /// spring value, rather than starting separate implicit layout/fade animations.
-struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
+struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Animatable {
     var progress: CGFloat
     var miniFrame: CGRect
     var expandedFrame: CGRect
     var reduceMotion: Bool
     var canReopen: Bool
     var onReopen: () -> Void
+    var background: Background
     var expanded: Expanded
     var collapsed: Collapsed
 
     init(progress: CGFloat, miniFrame: CGRect, expandedFrame: CGRect, reduceMotion: Bool,
          canReopen: Bool, onReopen: @escaping () -> Void,
+         @ViewBuilder background: () -> Background,
          @ViewBuilder expanded: () -> Expanded, @ViewBuilder collapsed: () -> Collapsed) {
         self.progress = progress
         self.miniFrame = miniFrame
@@ -51,6 +53,7 @@ struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
         self.reduceMotion = reduceMotion
         self.canReopen = canReopen
         self.onReopen = onReopen
+        self.background = background()
         self.expanded = expanded()
         self.collapsed = collapsed()
     }
@@ -74,6 +77,16 @@ struct PlayerCard<Expanded: View, Collapsed: View>: View, Animatable {
                 .frame(width: reduceMotion ? miniFrame.width : bounds.width,
                        height: reduceMotion ? miniFrame.height : bounds.height)
                 .offset(miniOrigin)
+            // Size the surface before attaching artwork so scaled-to-fill
+            // images cannot participate in the card's layout negotiation.
+            // Safe-area padding and control fades apply only to content.
+            Color.clear
+                .frame(width: bounds.width, height: bounds.height)
+                .background { background }
+                .opacity(reduceMotion ? PlayerCardMetrics.expandedOpacity(p)
+                         : 1 - PlayerCardMetrics.miniOpacity(p))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             expanded
                 .frame(width: expandedFrame.width, height: expandedFrame.height)
                 .opacity(PlayerCardMetrics.expandedOpacity(p))
