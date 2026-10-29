@@ -324,23 +324,40 @@ final class GlassScreenshots: XCTestCase {
     }
 
     func testNativeBottomAccessoryHasOneMiniAcrossScrollAndReturn() throws {
+        try checkNativeBottomAccessory(appearance: "Light")
+    }
+
+    func testDarkMinimizedNativeBottomAccessory() throws {
+        try checkNativeBottomAccessory(appearance: "Dark")
+    }
+
+    private func checkNativeBottomAccessory(appearance: String) throws {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-screenshotMode"]
+        app.launchArguments = ["-screenshotMode", "-AppleInterfaceStyle", appearance]
         app.launch()
+        defer { app.terminate() }
         let songs = app.buttons["歌曲"]
         XCTAssertTrue(songs.waitForExistence(timeout: 20))
         songs.tap()
         let list = app.descendants(matching: .any)["songs-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 8))
         let minis = app.descendants(matching: .any).matching(identifier: "mini-player")
+        let wideHeight = minis.firstMatch.frame.height
+        XCTAssertGreaterThanOrEqual(wideHeight, 55)
         for _ in 0..<2 {
             for upward in [true, false] {
                 if upward { list.swipeUp() } else { list.swipeDown() }
                 XCTAssertEqual(minis.count, 1, "Native minimization must retain one mini owner")
                 XCTAssertTrue(minis.firstMatch.isHittable)
                 XCTAssertEqual(app.tabBars.count, 1)
-                save(upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner")
+                // A screenshot labelled inline must actually exercise inline.
+                // MiniPlayer's explicit compact frame is 36 pt (wide >=56).
+                let compact = NSPredicate { _, _ in minis.firstMatch.frame.height < 45 }
+                let wide = NSPredicate { _, _ in minis.firstMatch.frame.height >= 55 }
+                let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
+                wait(for: [placement], timeout: 5)
+                save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
         }
         minis.firstMatch.tap()
@@ -348,11 +365,14 @@ final class GlassScreenshots: XCTestCase {
         app.buttons["收起播放器"].tap()
         XCTAssertTrue(minis.firstMatch.waitForExistence(timeout: 8))
         XCTAssertEqual(minis.count, 1, "Landing must return ownership to the accessory")
+        save("\(appearance.lowercased())-bottom-return")
+        // These captures prove placement and ownership only. A uniform backing
+        // cannot reveal material transmission; device checks use varied content.
     }
 
-    /// The fixture's cover yields a blue page. Sample the empty leading margin
-    /// at several track rows: an opaque system black row must fail even if all
-    /// navigation and playback interactions pass.
+    /// Sample empty row margins: the blue cover wash must remain visible.
+    /// Spatial variation is intentional; equal colors between rows would now
+    /// incorrectly require the flat plate that the wash replaces.
     private func assertCollectionBackground(_ list: XCUIElement) throws {
         let screenshot = XCUIScreen.main.screenshot()
         let uiImage = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation))
@@ -367,20 +387,12 @@ final class GlassScreenshots: XCTestCase {
         let screen = XCUIApplication().frame
         let scaleX = CGFloat(image.width) / screen.width
         let scaleY = CGFloat(image.height) / screen.height
-        var samples: [[UInt8]] = []
         for fraction in [CGFloat(0.35), 0.5, 0.65] {
             let x = Int((list.frame.minX + 4) * scaleX)
             let y = Int((list.frame.minY + list.frame.height * fraction) * scaleY)
             let offset = (y * image.width + x) * 4
             let rgb = Array(pixels[offset..<(offset + 3)])
             XCTAssertGreaterThan(rgb[2], 20, "System black row masks the sampled blue page at \(fraction)")
-            samples.append(rgb)
-        }
-        for sample in samples.dropFirst() {
-            for channel in 0..<3 {
-                XCTAssertEqual(Double(sample[channel]), Double(samples[0][channel]), accuracy: 3,
-                               "Collection background changes between rows")
-            }
         }
     }
 

@@ -44,9 +44,6 @@ struct CollectionPage: View {
     @State private var editing = false
     @State private var coverTarget: Playlist?
     @State private var matchingTrack: Track?
-    @State private var artworkColor = ArtworkColors.fallback[0]
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var paletteToken = ""
     @State private var orderMemo = TrackOrderMemo()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.detailCardHeader) private var detailHeader
@@ -59,17 +56,13 @@ struct CollectionPage: View {
             .softTopScrollEdge()
             .background {
                 if usesArtworkBackground {
-                    Color(uiColor: CollectionArtworkColor.resolve(artworkColor, scheme: colorScheme)).ignoresSafeArea()
+                    CollectionArtworkBackground(url: backgroundArtworkURL)
+                        .ignoresSafeArea()
                 }
             }
-            .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: paletteToken)
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
             .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
-            .onAppear(perform: refreshPalette)
-            .onChange(of: playlist?.customArtworkFilename) { _, _ in refreshPalette() }
-            .onChange(of: playlist?.coverTrackID) { _, _ in refreshPalette() }
-            .onChange(of: coverTrack?.artworkFilename) { _, _ in refreshPalette() }
         if editing {
             page.trailingGlass {
                 Button("完成") { editing = false }
@@ -210,35 +203,9 @@ struct CollectionPage: View {
         return nil
     }
 
-    private func refreshPalette() {
-        guard usesArtworkBackground else { return }
+    private var backgroundArtworkURL: URL? {
         let filename = playlist?.customArtworkFilename ?? coverTrack?.artworkFilename
-        guard let filename else {
-            artworkColor = ArtworkColors.fallback[0]
-            paletteToken = ""
-            return
-        }
-        if let cached = ArtworkAnalysisCache.shared.analysis(for: filename) {
-            applyPalette(cached, token: filename)
-            return
-        }
-        let url = library.root.appendingPathComponent(filename)
-        Task { @MainActor in
-            let analysis = await Task.detached(priority: .userInitiated) { () -> ArtworkAnalysis? in
-                guard let image = ArtworkCache.shared.image(at: url, maxPixel: 160) else { return nil }
-                return ArtworkAnalysis.make(from: image)
-            }.value
-            guard let analysis,
-                  (playlist?.customArtworkFilename ?? coverTrack?.artworkFilename) == filename else { return }
-            ArtworkAnalysisCache.shared.store(analysis, for: filename)
-            applyPalette(analysis, token: filename)
-        }
-    }
-
-    private func applyPalette(_ analysis: ArtworkAnalysis, token: String) {
-        // Keep the sampled hue; resolve brightness against the inherited appearance.
-        artworkColor = analysis.palette.first ?? ArtworkColors.fallback[0]
-        paletteToken = token
+        return filename.map { library.root.appendingPathComponent($0) }
     }
 
     private var playlistTransport: some View {
@@ -433,14 +400,72 @@ struct CollectionPage: View {
     }
 }
 
-/// Artwork tint is local paint, never a presentation-level appearance preference.
-enum CollectionArtworkColor {
-    static func resolve(_ sampled: UIColor, scheme: ColorScheme) -> UIColor {
-        guard scheme == .light else { return sampled }
-        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
-        guard sampled.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
-            return UIColor(white: 0.94, alpha: 1)
+/// A full-page texture, never a presentation-level appearance preference.
+/// Decode a small cover through the shared cache; the foreground cover keeps its
+/// own resolution. Key the stored image so a changed/missing cover cannot leave
+/// the previous collection's wash behind.
+struct CollectionArtworkBackground: View {
+    var url: URL?
+    @State private var image: UIImage?
+    @State private var resolvedURL: URL?
+
+    private var displayed: UIImage? {
+        guard let url else { return nil }
+        if resolvedURL == url, let image { return image }
+        return ArtworkCache.shared.bestCachedImage(at: url, maxPixel: 160)
+    }
+
+    var body: some View {
+        CollectionArtworkWash(image: displayed)
+            .task(id: url) {
+                let requested = url
+                image = nil
+                resolvedURL = nil
+                guard let requested else { return }
+                let loaded = await ArtworkCache.shared.load(at: requested, maxPixel: 160)
+                guard !Task.isCancelled else { return }
+                image = loaded
+                resolvedURL = requested
+            }
+    }
+}
+
+/// White/black veils bound every channel to a readable range while preserving
+/// the cover's spatial color variation. No multiply tint or generic grey plate.
+struct CollectionArtworkWash: View {
+    var image: UIImage?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Covers may themselves contain transparency. Keep the entire
+                // surface opaque even then, including the status-bar region.
+                (scheme == .light ? Color.white : Color.black)
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        // Extend the texture before blur so the page edges stay opaque.
+                        .scaleEffect(1.15)
+                        .blur(radius: 36, opaque: true)
+                } else {
+                    // Missing, unreadable and loading covers share an intentional
+                    // accent/pink wash, matching the artwork placeholder family.
+                    LinearGradient(colors: [MusicTheme.accent, .pink, .indigo],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+                if scheme == .light {
+                    Color.white.opacity(0.82)
+                } else {
+                    Color.black.opacity(0.72)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
-        return UIColor(hue: hue, saturation: min(0.12, saturation * 0.35), brightness: 0.96, alpha: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

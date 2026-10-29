@@ -92,7 +92,9 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
                 .opacity(PlayerCardMetrics.expandedOpacity(p))
             collapsed
                 .frame(width: miniFrame.width, height: miniFrame.height)
-                .modifier(PlayerMiniGlass())
+                // The accessory surface remains visible when its CONTENT is
+                // hidden during travel. A second glass here nests two outlines
+                // at landing (also over the legacy inset's material).
                 .opacity(PlayerCardMetrics.miniOpacity(p))
                 .offset(miniOrigin)
         }
@@ -120,8 +122,8 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
     }
 }
 
-/// Enclose the entire mini layout in one glass surface. Every tab and slot
-/// placement reaches this same container, including the pre-iOS 26 inset.
+/// Glass for the pre-iOS 26 inset. The resting iOS 26
+/// accessory intentionally relies on the system surface (see GlassPlayerMiniSlot).
 /// Applying glass to the sized content keeps artwork, text and controls above
 /// the frosted backdrop; no translucent color or opaque material is underneath.
 struct PlayerMiniGlass: ViewModifier {
@@ -165,6 +167,8 @@ private struct GlassPlayerMiniSlot<Content: View>: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
     var body: some View {
         let compact = placement == .inline
+        // No app material here: inline/expanded backing is drawn by the native
+        // accessory. Adding another glass surface cannot remove an opaque host.
         PlayerMiniSlotMeasure(compact: compact, onMeasure: onMeasure) { content(compact) }
     }
 }

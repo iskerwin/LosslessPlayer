@@ -133,14 +133,87 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testDetailTintTracksInheritedAppearance() {
-        for sampled in ArtworkColors.fallback + [UIColor.blue, .red, .black] {
-            let light = CollectionArtworkColor.resolve(sampled, scheme: .light)
-            let dark = CollectionArtworkColor.resolve(sampled, scheme: .dark)
-            var brightness: CGFloat = 0
-            light.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil)
-            XCTAssertGreaterThanOrEqual(brightness, 0.93)
-            XCTAssertEqual(dark, sampled)
+    func testDetailArtworkWashPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
+        let fixtures: [(String, UIImage?)] = [
+            ("warm", washFixture(top: .red, bottom: .yellow)),
+            ("cool", washFixture(top: .blue, bottom: .cyan)),
+            ("neutral", washFixture(top: .black, bottom: .white)),
+            ("missing", nil)
+        ]
+        for scheme in [ColorScheme.light, .dark] {
+            for (name, texture) in fixtures {
+                let renderer = ImageRenderer(content: CollectionArtworkWash(image: texture)
+                    .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.cgImage)
+                let pixels = try rgbaPixels(in: image)
+                var samples: [[UInt8]] = []
+                // Top/bottom edges and list region must all be opaque wash.
+                for y in [0, 180, 540, 719] {
+                    let offset = (y * image.width + 180) * 4
+                    let rgb = Array(pixels[offset..<(offset + 3)])
+                    XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(scheme), \(y)")
+                    for channel in rgb {
+                        if scheme == .light {
+                            XCTAssertGreaterThanOrEqual(channel, 205, "Light wash became dark")
+                        } else {
+                            XCTAssertLessThanOrEqual(channel, 75, "Dark wash is too bright")
+                        }
+                    }
+                    if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
+                    if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
+                    if name == "neutral" {
+                        XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 2)
+                    }
+                    samples.append(rgb)
+                }
+                let variation = (0..<3).map { channel in
+                    Int(samples.map { $0[channel] }.max()!) - Int(samples.map { $0[channel] }.min()!)
+                }.max()!
+                XCTAssertGreaterThan(variation, 5, "Flat plate instead of texture: \(name), \(scheme)")
+            }
+        }
+    }
+
+    func testLandedPlayerAddsNoBackingOverAccessorySurface() throws {
+        // The native accessory (or legacy inset) already owns the material.
+        // Transparent travelling content must not add a second surface even
+        // while the spring completion has not yet unmounted the card.
+        for scheme in [ColorScheme.light, .dark] {
+            for height in [CGFloat(36), 56] {
+                for reduced in [false, true] {
+                    let mini = CGRect(x: 12, y: 600, width: 336, height: height)
+                    let renderer = ImageRenderer(content:
+                        Color.magenta.frame(width: 360, height: 720)
+                            .overlay(alignment: .topLeading) {
+                                PlayerCard(progress: 0, miniFrame: mini,
+                                    expandedFrame: CGRect(x: 0, y: 0, width: 360, height: 720),
+                                    reduceMotion: reduced, canReopen: false, onReopen: {}) {
+                                        Color.black
+                                    } expanded: { Color.black } collapsed: { Color.clear }
+                            }
+                            .environment(\.colorScheme, scheme))
+                    renderer.scale = 1
+                    let image = try XCTUnwrap(renderer.cgImage)
+                    let pixels = try rgbaPixels(in: image)
+                    for x in [30, 180, 330] {
+                        let offset = (Int(mini.midY) * image.width + x) * 4
+                        let expected = [255, 0, 255, 255]
+                        for channel in 0..<4 {
+                            XCTAssertEqual(Int(pixels[offset + channel]), expected[channel], accuracy: 2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func washFixture(top: UIColor, bottom: UIColor) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { context in
+            top.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 60))
+            bottom.setFill()
+            context.fill(CGRect(x: 0, y: 60, width: 120, height: 60))
         }
     }
 
@@ -184,6 +257,92 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
+    func testDetailReturnHasNoDelayedAppearanceChange() async throws {
+        for kind in [CollectionPage.Kind.album, .playlist] {
+            try await checkReturnAppearance(kind: kind)
+        }
+    }
+
+    func testPlayerReturnHasNoDelayedAppearanceChange() async throws {
+        try await checkReturnAppearance(kind: nil)
+    }
+
+    /// Keep one window, controller and SwiftUI identity for the entire sequence.
+    /// Replacing the controller per sample would discard a lingering preference.
+    private func checkReturnAppearance(kind: CollectionPage.Kind?) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        let player = PlayerStore(library: library)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let originalKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKey?.makeKeyAndVisible()
+        }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            window.overrideUserInterfaceStyle = style
+            let state = ReturnAppearanceState()
+            let baseProbe = AppearanceProbeView()
+            let contentProbe = AppearanceProbeView()
+            let host = UIHostingController(rootView: ReturnAppearanceHarness(
+                state: state, library: library, player: player, kind: kind,
+                baseProbe: baseProbe, contentProbe: contentProbe))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            try await Task.sleep(for: .milliseconds(100))
+
+            func sample(_ phase: String, contentVisible: Bool) throws {
+                host.view.layoutIfNeeded()
+                let expected: ColorScheme = style == .light ? .light : .dark
+                let context = "\(String(describing: kind)), \(style.rawValue), \(phase)"
+                XCTAssertEqual(host.traitCollection.userInterfaceStyle, style, context)
+                XCTAssertEqual(baseProbe.scheme, expected, context)
+                if contentVisible {
+                    // Detail inherits the system; expanded player stays dark by design.
+                    XCTAssertEqual(contentProbe.scheme, kind == nil ? .dark : expected, context)
+                }
+                let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8),
+                    format: UIGraphicsImageRendererFormat.default()).image { renderer in
+                    baseProbe.layer.render(in: renderer.cgContext)
+                }
+                let cgImage = try XCTUnwrap(image.cgImage)
+                let pixels = try rgbaPixels(in: cgImage)
+                let offset = ((cgImage.height / 2) * cgImage.width + cgImage.width / 2) * 4
+                for channel in 0..<3 {
+                    if style == .light {
+                        XCTAssertGreaterThan(pixels[offset + channel], 245, context)
+                    } else {
+                        XCTAssertLessThan(pixels[offset + channel], 8, context)
+                    }
+                }
+            }
+            try sample("before opening", contentVisible: false)
+            state.mounted = true
+            for progress in [CGFloat(0), 0.5, 1] {
+                state.progress = progress
+                try await Task.sleep(for: .milliseconds(100))
+                try sample("opening \(progress)", contentVisible: true)
+            }
+            for progress in [CGFloat(0.5), 0] {
+                state.progress = progress
+                try await Task.sleep(for: .milliseconds(100))
+                try sample("closing \(progress), still mounted", contentVisible: true)
+            }
+            state.mounted = false
+            // First rendered return frame, then 0.5, 1 and 1.5 seconds from it.
+            // Test-only waits observe retention; production has no delayed reset.
+            try await Task.sleep(for: .milliseconds(20))
+            try sample("first return frame", contentVisible: false)
+            for milliseconds in [500, 1000, 1500] {
+                try await Task.sleep(for: .milliseconds(500))
+                try sample("returned \(milliseconds) ms", contentVisible: false)
+            }
+        }
+    }
+
     func testDetailZoomKeepsUnderlyingAppearanceAtEverySampleInBothDirections() throws {
         let source = DetailCardSource(route: .albums,
             frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))
@@ -197,7 +356,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                             DetailZoomCard(progress: progress, source: source, expanded: expanded,
                                 headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
                                 transitioning: true, reduceMotion: false,
-                                detail: Color(uiColor: CollectionArtworkColor.resolve(.blue, scheme: scheme)))
+                                detail: CollectionArtworkWash(image: washFixture(top: .blue, bottom: .cyan))))
                         }
                         .environment(\.colorScheme, scheme))
                 renderer.scale = 1
@@ -258,6 +417,78 @@ final class PlayerCardRenderingTests: XCTestCase {
                                    "Wrong content at \(progress), \(scheme), channel \(component)")
                 }
             }
+        }
+    }
+}
+
+@MainActor
+private final class ReturnAppearanceState: ObservableObject {
+    @Published var mounted = false
+    @Published var progress: CGFloat = 0
+}
+
+private final class AppearanceProbeView: UIView {
+    var scheme: ColorScheme?
+}
+
+private struct AppearanceProbe: UIViewRepresentable {
+    var view: AppearanceProbeView
+    @Environment(\.colorScheme) private var scheme
+    func makeUIView(context: Context) -> AppearanceProbeView { view }
+    func updateUIView(_ uiView: AppearanceProbeView, context: Context) {
+        uiView.scheme = scheme
+        uiView.backgroundColor = .systemBackground
+    }
+}
+
+/// Uses the real destination and card types, with the same local dark scope as
+/// LibraryView. It isolates preference propagation, not native tab-bar animation.
+private struct ReturnAppearanceHarness: View {
+    @ObservedObject var state: ReturnAppearanceState
+    var library: LibraryStore
+    var player: PlayerStore
+    var kind: CollectionPage.Kind?
+    var baseProbe: AppearanceProbeView
+    var contentProbe: AppearanceProbeView
+
+    var body: some View {
+        GeometryReader { geometry in
+            let expanded = CGRect(origin: .zero, size: geometry.size)
+            let mini = CGRect(x: 12, y: geometry.size.height - 80,
+                              width: geometry.size.width - 24, height: 56)
+            Color(uiColor: .systemBackground)
+                .overlay(alignment: .topLeading) {
+                    AppearanceProbe(view: baseProbe).frame(width: 8, height: 8)
+                }
+                .overlay(alignment: .topLeading) {
+                    if state.mounted {
+                        if let kind {
+                            DetailZoomCard(progress: state.progress,
+                                source: DetailCardSource(route: .albums,
+                                    frame: mini, artwork: AnyView(Color.green)),
+                                expanded: expanded, headerFrame: mini,
+                                transitioning: true, reduceMotion: false,
+                                detail: NavigationStack {
+                                    CollectionPage(library: library, player: player, title: "Detail",
+                                        tracks: [], kind: kind, onOpen: { _ in },
+                                        onAddToPlaylist: { _ in }, onDelete: { _ in }, onLyrics: { _ in })
+                                        .overlay { AppearanceProbe(view: contentProbe).frame(width: 8, height: 8) }
+                                })
+                        } else {
+                            PlayerCard(progress: state.progress, miniFrame: mini,
+                                expandedFrame: expanded, reduceMotion: false,
+                                canReopen: false, onReopen: {}) {
+                                    NowPlayingBackground(library: library, player: player)
+                                } expanded: {
+                                    NowPlayingView(library: library, player: player)
+                                        .overlay { AppearanceProbe(view: contentProbe).frame(width: 8, height: 8) }
+                                        .environment(\.colorScheme, .dark)
+                                } collapsed: {
+                                    MiniPlayer(library: library, player: player, compact: false) {}
+                                }
+                        }
+                    }
+                }
         }
     }
 }

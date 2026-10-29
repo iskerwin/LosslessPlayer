@@ -632,8 +632,8 @@ struct LibraryView: View {
         if let source = detailSource, detailTab == owner {
             GeometryReader { geometry in
                 let origin = geometry.frame(in: .global).origin
-                // The tab host has already reserved its bottom chrome. Do not
-                // subtract that inset again from the available detail surface.
+                // This reader includes the safe areas: the card clip must cover
+                // the status bar and translucent bottom chrome as well as the list.
                 let expanded = CGRect(origin: .zero, size: geometry.size)
                 let localSource = DetailCardSource(route: source.route,
                     frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
@@ -657,6 +657,7 @@ struct LibraryView: View {
                 .allowsHitTesting(detailProgress == 1 && !detailTransitioning)
                 .accessibilityIdentifier("detail-card")
             }
+            .ignoresSafeArea(.container)
         }
     }
 
