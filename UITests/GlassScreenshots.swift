@@ -134,9 +134,8 @@ final class GlassScreenshots: XCTestCase {
             case "title":
                 // SwiftUI can export both title endpoints during presentation;
                 // target the visible text rather than requiring a unique label.
-                let title = artwork.staticTexts.matching(NSPredicate(
-                    format: "label == %@ AND hittable == true", "Apologize")).firstMatch
-                XCTAssertTrue(title.exists)
+                let title = try XCTUnwrap(artwork.staticTexts.matching(
+                    identifier: "Apologize").allElementsBoundByIndex.first { $0.isHittable })
                 title.tap()
             case "background":
                 player.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
