@@ -74,18 +74,15 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
             ? CGSize(width: miniFrame.minX - bounds.minX, height: miniFrame.minY - bounds.minY)
             : .zero
         ZStack(alignment: .topLeading) {
-            Rectangle().fill(.regularMaterial)
-                .frame(width: reduceMotion ? miniFrame.width : bounds.width,
-                       height: reduceMotion ? miniFrame.height : bounds.height)
-                .offset(miniOrigin)
-                // The expanded backing must not sit behind the mini's glass.
-                .opacity(1 - PlayerCardMetrics.miniOpacity(p))
-            // Size the surface before attaching artwork so scaled-to-fill
-            // images cannot participate in the card's layout negotiation.
-            // Safe-area padding and control fades apply only to content.
-            Color.clear
-                .frame(width: bounds.width, height: bounds.height)
-                .background { background }
+            // Keep the backdrop at its full-screen resting size. Resizing it
+            // to the shrinking card compresses the dark bottom gradient upward
+            // while the expanded controls still use full-screen coordinates.
+            // Crop one continuous texture through the card until mini takes over.
+            background
+                .frame(width: expandedFrame.width, height: expandedFrame.height)
+                .clipped()
+                .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
+                .clipped()
                 .opacity(reduceMotion ? PlayerCardMetrics.expandedOpacity(p)
                          : 1 - PlayerCardMetrics.miniOpacity(p))
                 .allowsHitTesting(false)
@@ -127,7 +124,7 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
 /// placement reaches this same container, including the pre-iOS 26 inset.
 /// Applying glass to the sized content keeps artwork, text and controls above
 /// the frosted backdrop; no translucent color or opaque material is underneath.
-private struct PlayerMiniGlass: ViewModifier {
+struct PlayerMiniGlass: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         if #available(iOS 26, *) {
@@ -145,34 +142,41 @@ struct PlayerMiniSlot: Equatable {
     var compact = false
 }
 
-/// The system still owns accessory placement/minimization and tab layout.
-/// This has no artwork or controls: there is only one visible player card.
-struct PlayerMiniSlotView: View {
+/// Native accessory ownership keeps placement and content in the same animation.
+struct PlayerMiniSlotView<Content: View>: View {
     var onMeasure: (PlayerMiniSlot) -> Void
+    @ViewBuilder var content: (Bool) -> Content
 
     var body: some View {
         if #available(iOS 26, *) {
-            GlassPlayerMiniSlot(onMeasure: onMeasure)
+            GlassPlayerMiniSlot(onMeasure: onMeasure, content: content)
         } else {
-            PlayerMiniSlotMeasure(compact: false, onMeasure: onMeasure)
+            PlayerMiniSlotMeasure(compact: false, onMeasure: onMeasure) {
+                content(false).modifier(PlayerMiniGlass())
+            }
         }
     }
 }
 
 @available(iOS 26, *)
-private struct GlassPlayerMiniSlot: View {
+private struct GlassPlayerMiniSlot<Content: View>: View {
     var onMeasure: (PlayerMiniSlot) -> Void
+    @ViewBuilder var content: (Bool) -> Content
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-    var body: some View { PlayerMiniSlotMeasure(compact: placement == .inline, onMeasure: onMeasure) }
+    var body: some View {
+        let compact = placement == .inline
+        PlayerMiniSlotMeasure(compact: compact, onMeasure: onMeasure) { content(compact) }
+    }
 }
 
-private struct PlayerMiniSlotMeasure: View {
+private struct PlayerMiniSlotMeasure<Content: View>: View {
     var compact: Bool
     var onMeasure: (PlayerMiniSlot) -> Void
+    @ViewBuilder var content: () -> Content
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 56
 
     var body: some View {
-        Color.clear
+        content()
             .frame(maxWidth: .infinity)
             .frame(height: compact ? 36 : max(56, rowHeight))
             .background {
@@ -183,13 +187,11 @@ private struct PlayerMiniSlotMeasure: View {
                         .onChange(of: slot) { _, next in report(next) }
                 }
             }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
     }
 
     private func report(_ slot: PlayerMiniSlot) {
-        // The native accessory lays out in a separate host. Do not traverse
-        // its preferences or invalidate the parent during that layout pass.
+        // Measurement is only a target for player expansion/collapse. The
+        // visible resting mini stays in this host during native minimization.
         DispatchQueue.main.async { onMeasure(slot) }
     }
 }

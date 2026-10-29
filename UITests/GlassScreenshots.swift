@@ -323,6 +323,33 @@ final class GlassScreenshots: XCTestCase {
         }
     }
 
+    func testNativeBottomAccessoryHasOneMiniAcrossScrollAndReturn() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let songs = app.buttons["歌曲"]
+        XCTAssertTrue(songs.waitForExistence(timeout: 20))
+        songs.tap()
+        let list = app.descendants(matching: .any)["songs-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        let minis = app.descendants(matching: .any).matching(identifier: "mini-player")
+        for _ in 0..<2 {
+            for upward in [true, false] {
+                if upward { list.swipeUp() } else { list.swipeDown() }
+                XCTAssertEqual(minis.count, 1, "Native minimization must retain one mini owner")
+                XCTAssertTrue(minis.firstMatch.isHittable)
+                XCTAssertEqual(app.tabBars.count, 1)
+                save(upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner")
+            }
+        }
+        minis.firstMatch.tap()
+        XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 8))
+        app.buttons["收起播放器"].tap()
+        XCTAssertTrue(minis.firstMatch.waitForExistence(timeout: 8))
+        XCTAssertEqual(minis.count, 1, "Landing must return ownership to the accessory")
+    }
+
     /// The fixture's cover yields a blue page. Sample the empty leading margin
     /// at several track rows: an opaque system black row must fail even if all
     /// navigation and playback interactions pass.

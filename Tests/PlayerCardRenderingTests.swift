@@ -92,6 +92,131 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
+    func testCollapseCropsFullSizeBackdropWithoutCompressingDarkLowerRegion() throws {
+        let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
+        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
+        // An abrupt lower band makes compression unmistakable. The production
+        // backdrop has a gradual dark lower gradient; both must remain in the
+        // same full-screen coordinates as the expanded controls.
+        let backdrop = GeometryReader { geometry in
+            VStack(spacing: 0) {
+                Color.green.frame(height: geometry.size.height * 0.75)
+                Color.black
+            }
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            for progress in [CGFloat(0.03), 0.06, 0.25, 0.5, 0.7, 0.9] {
+                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
+                let card = PlayerCard(progress: progress, miniFrame: mini, expandedFrame: expanded,
+                                      reduceMotion: false, canReopen: false, onReopen: {}) {
+                    backdrop
+                } expanded: { Color.clear } collapsed: { Color.red }
+                let renderer = ImageRenderer(content:
+                    Color.blue.frame(width: 360, height: 720)
+                        .overlay(alignment: .topLeading) { card }
+                        .environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.cgImage)
+                let pixels = try rgbaPixels(in: image)
+                for fraction in [CGFloat(0.1), 0.4, 0.7, 0.9] {
+                    let localY = frame.height * fraction
+                    let offset = (Int(frame.minY + localY) * image.width + Int(frame.midX)) * 4
+                    // Allow three 8-bit levels for rasterization. A lower dark
+                    // region above its original y=540 fails the green channel.
+                    let expected: Double = localY < 540 ? 255 : 0
+                    XCTAssertEqual(Double(pixels[offset + 1]), expected, accuracy: 3,
+                                   "Backdrop reflow at progress \(progress), fraction \(fraction), \(scheme)")
+                    XCTAssertLessThan(pixels[offset], 4)
+                    XCTAssertLessThan(pixels[offset + 2], 4)
+                }
+            }
+        }
+    }
+
+    func testDetailTintTracksInheritedAppearance() {
+        for sampled in ArtworkColors.fallback + [UIColor.blue, .red, .black] {
+            let light = CollectionArtworkColor.resolve(sampled, scheme: .light)
+            let dark = CollectionArtworkColor.resolve(sampled, scheme: .dark)
+            var brightness: CGFloat = 0
+            light.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil)
+            XCTAssertGreaterThanOrEqual(brightness, 0.93)
+            XCTAssertEqual(dark, sampled)
+        }
+    }
+
+    func testCollectionOverlayDoesNotChangeLightWindowAppearance() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        let player = PlayerStore(library: library)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let originalKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.overrideUserInterfaceStyle = .light
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKey?.makeKeyAndVisible()
+        }
+        let page = CollectionPage(library: library, player: player, title: "Album", tracks: [], kind: .album,
+            onOpen: { _ in }, onAddToPlaylist: { _ in }, onDelete: { _ in }, onLyrics: { _ in })
+        let size = window.bounds.size
+        let expanded = CGRect(origin: .zero, size: size)
+        let source = DetailCardSource(route: .albums,
+            frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))
+        let samples: [CGFloat] = [0, 0.2, 0.5, 0.8, 1]
+        for progress in samples + samples.reversed() {
+            let host = UIHostingController(rootView:
+                Color(uiColor: .systemBackground)
+                    .overlay(alignment: .topLeading) {
+                        DetailZoomCard(progress: progress, source: source, expanded: expanded,
+                            headerFrame: source.frame, transitioning: true, reduceMotion: false,
+                            detail: NavigationStack { page })
+                    })
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.layoutIfNeeded()
+            // Let SwiftUI propagate presentation preferences through UIKit.
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(host.traitCollection.userInterfaceStyle, .light,
+                           "Collection preference escaped its overlay at progress \(progress)")
+            XCTAssertEqual(window.overrideUserInterfaceStyle, .light)
+        }
+    }
+
+    func testDetailZoomKeepsUnderlyingAppearanceAtEverySampleInBothDirections() throws {
+        let source = DetailCardSource(route: .albums,
+            frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))
+        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
+        let samples: [CGFloat] = [0, 0.15, 0.35, 0.65, 0.85]
+        for scheme in [ColorScheme.light, .dark] {
+            for progress in samples + samples.reversed() {
+                let renderer = ImageRenderer(content:
+                    Color(uiColor: .systemBackground).frame(width: 360, height: 720)
+                        .overlay(alignment: .topLeading) {
+                            DetailZoomCard(progress: progress, source: source, expanded: expanded,
+                                headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
+                                transitioning: true, reduceMotion: false,
+                                detail: Color(uiColor: CollectionArtworkColor.resolve(.blue, scheme: scheme)))
+                        }
+                        .environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.cgImage)
+                let pixels = try rgbaPixels(in: image)
+                // x=2,y=2 stays outside the growing card at every sample.
+                // Only the intentional 12% dimming is allowed, never a scheme flip.
+                let offset = (2 * image.width + 2) * 4
+                for channel in 0..<3 {
+                    if scheme == .light {
+                        XCTAssertGreaterThan(pixels[offset + channel], 220)
+                    } else {
+                        XCTAssertLessThan(pixels[offset + channel], 8)
+                    }
+                }
+            }
+        }
+    }
+
     func testExpandedContentStaysOpaqueUntilLandingHandover() throws {
         let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
         let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)

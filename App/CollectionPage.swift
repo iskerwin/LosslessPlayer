@@ -43,8 +43,9 @@ struct CollectionPage: View {
     @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
     @State private var editing = false
     @State private var coverTarget: Playlist?
-    @State private var backgroundColor = Color(uiColor: ArtworkColors.fallback[0])
     @State private var matchingTrack: Track?
+    @State private var artworkColor = ArtworkColors.fallback[0]
+    @Environment(\.colorScheme) private var colorScheme
     @State private var paletteToken = ""
     @State private var orderMemo = TrackOrderMemo()
     @Environment(\.dismiss) private var dismiss
@@ -57,10 +58,11 @@ struct CollectionPage: View {
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
             .background {
-                if usesArtworkBackground { backgroundColor.ignoresSafeArea() }
+                if usesArtworkBackground {
+                    Color(uiColor: CollectionArtworkColor.resolve(artworkColor, scheme: colorScheme)).ignoresSafeArea()
+                }
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: paletteToken)
-            .preferredColorScheme(usesArtworkBackground ? .dark : nil)
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
             .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
@@ -104,7 +106,7 @@ struct CollectionPage: View {
                     playing: player.playing && player.current?.id == track.id,
                     indexLabel: kind == .album ? indexLabel(track) : nil,
                     showsMenu: !editing,
-                    emphasis: kind == .playlist ? .white : MusicTheme.accent,
+                    emphasis: kind == .playlist ? .primary : MusicTheme.accent,
                     showsLocalStatus: kind == .playlist,
                     contextID: contextID,
                     handlers: handlers
@@ -212,7 +214,7 @@ struct CollectionPage: View {
         guard usesArtworkBackground else { return }
         let filename = playlist?.customArtworkFilename ?? coverTrack?.artworkFilename
         guard let filename else {
-            backgroundColor = Color(uiColor: ArtworkColors.fallback[0])
+            artworkColor = ArtworkColors.fallback[0]
             paletteToken = ""
             return
         }
@@ -234,9 +236,8 @@ struct CollectionPage: View {
     }
 
     private func applyPalette(_ analysis: ArtworkAnalysis, token: String) {
-        // ArtworkColors limits brightness to keep white/secondary text readable
-        // in either system appearance. All rows share this one opaque page color.
-        backgroundColor = Color(uiColor: analysis.palette.first ?? ArtworkColors.fallback[0])
+        // Keep the sampled hue; resolve brightness against the inherited appearance.
+        artworkColor = analysis.palette.first ?? ArtworkColors.fallback[0]
         paletteToken = token
     }
 
@@ -246,7 +247,7 @@ struct CollectionPage: View {
                 Image(systemName: "shuffle")
                     .font(.title3.weight(.semibold))
                     .frame(width: 48, height: 48)
-                    .background(.white.opacity(0.1), in: Circle())
+                    .background(Color.primary.opacity(0.1), in: Circle())
             }
             .disabled(!sorted.contains(where: \.available))
             .accessibilityLabel("随机播放")
@@ -254,8 +255,8 @@ struct CollectionPage: View {
                 Label("播放", systemImage: "play.fill")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 48)
-                    .foregroundStyle(Color(white: 0.2))
-                    .background(.white, in: Capsule())
+                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .background(Color.primary, in: Capsule())
             }
             .disabled(!sorted.contains(where: \.available))
             .accessibilityLabel("播放歌单")
@@ -265,11 +266,11 @@ struct CollectionPage: View {
                 Image(systemName: "plus")
                     .font(.title3.weight(.medium))
                     .frame(width: 48, height: 48)
-                    .background(.white.opacity(0.1), in: Circle())
+                    .background(Color.primary.opacity(0.1), in: Circle())
             }
             .accessibilityLabel("添加歌曲")
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .buttonStyle(PressScaleStyle())
         .listRowInsets(EdgeInsets(top: 0, leading: 52, bottom: 22, trailing: 52))
         .listRowSeparator(.hidden)
@@ -429,5 +430,17 @@ struct CollectionPage: View {
             setCover: playlist.map { list in { track in library.setCover(track, for: list) } },
             identify: { matchingTrack = $0 }
         )
+    }
+}
+
+/// Artwork tint is local paint, never a presentation-level appearance preference.
+enum CollectionArtworkColor {
+    static func resolve(_ sampled: UIColor, scheme: ColorScheme) -> UIColor {
+        guard scheme == .light else { return sampled }
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        guard sampled.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
+            return UIColor(white: 0.94, alpha: 1)
+        }
+        return UIColor(hue: hue, saturation: min(0.12, saturation * 0.35), brightness: 0.96, alpha: 1)
     }
 }
