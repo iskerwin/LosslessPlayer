@@ -238,7 +238,7 @@ actor AudioScanner {
         return storeThumbnail(source, id: id)
     }
 
-    private func storeThumbnail(_ source: CGImageSource, id: UUID) -> String? {
+    func storeThumbnail(_ source: CGImageSource, id: UUID) -> String? {
         let name = id.uuidString + ".artwork"
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

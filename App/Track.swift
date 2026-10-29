@@ -11,6 +11,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var bitDepth: Int
     var artists: [String]?
     var contentHash: String?
+    var musicBrainzReleaseMBID: String?
+    var musicBrainzRecordingMBID: String?
     var favorite = false
     // Nil values preserve compatibility with the original copied-file library.
     var folderID: UUID?

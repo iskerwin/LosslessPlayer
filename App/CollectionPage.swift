@@ -44,6 +44,7 @@ struct CollectionPage: View {
     @State private var editing = false
     @State private var coverTarget: Playlist?
     @State private var backgroundColor = Color(uiColor: ArtworkColors.fallback[0])
+    @State private var matchingTrack: Track?
     @State private var paletteToken = ""
     @State private var orderMemo = TrackOrderMemo()
     @Environment(\.dismiss) private var dismiss
@@ -61,6 +62,7 @@ struct CollectionPage: View {
             .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: paletteToken)
             .preferredColorScheme(usesArtworkBackground ? .dark : nil)
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
+            .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
             .onAppear(perform: refreshPalette)
             .onChange(of: playlist?.customArtworkFilename) { _, _ in refreshPalette() }
@@ -424,7 +426,8 @@ struct CollectionPage: View {
             lyrics: onLyrics,
             delete: { onDelete([$0]) },
             removeFromPlaylist: playlist.map { list in { track in library.removeFromPlaylist(track, playlist: list) } },
-            setCover: playlist.map { list in { track in library.setCover(track, for: list) } }
+            setCover: playlist.map { list in { track in library.setCover(track, for: list) } },
+            identify: { matchingTrack = $0 }
         )
     }
 }
