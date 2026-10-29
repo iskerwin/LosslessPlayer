@@ -257,7 +257,8 @@ final class GlassScreenshots: XCTestCase {
             // A second subtraction of the tab host's bottom inset leaves a
             // large black gap above the mini player despite passing navigation.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
-            XCTAssertTrue(mini.isHittable)
+            let freshMini = try readyMini(in: app)
+            XCTAssertTrue(freshMini.isHittable)
             back.tap()
             let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
             wait(for: [returned], timeout: 8)
@@ -309,7 +310,8 @@ final class GlassScreenshots: XCTestCase {
         for (tab, name) in [("收藏", "favorites-glass"), ("搜索", "search-glass")] {
             app.tabBars.buttons[tab].tap()
             let mini = try readyMini(in: app)
-            XCTAssertTrue(mini.isHittable)
+            let freshMini = try readyMini(in: app)
+            XCTAssertTrue(freshMini.isHittable)
             save(name)
         }
     }
@@ -342,7 +344,6 @@ final class GlassScreenshots: XCTestCase {
                 if upward { list.swipeUp() } else { list.swipeDown() }
                 _ = try readyMini(in: app)
                 XCTAssertEqual(minis.count, 1, "Native minimization must retain one mini owner")
-                XCTAssertTrue(minis.firstMatch.isHittable)
                 XCTAssertEqual(app.tabBars.count, 1)
                 // A screenshot labelled inline must actually exercise inline.
                 // MiniPlayer's explicit compact frame is 36 pt (wide >=56).
@@ -350,6 +351,8 @@ final class GlassScreenshots: XCTestCase {
                 let wide = NSPredicate { _, _ in minis.firstMatch.frame.height >= 55 }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
+                let freshMini = try readyMini(in: app)
+                XCTAssertTrue(freshMini.isHittable)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
         }
@@ -388,7 +391,15 @@ final class GlassScreenshots: XCTestCase {
                          line: UInt = #line) throws {
         let mini = try readyMini(in: app, file: file, line: line)
         // Use the ready frame's center instead of the accessory's AX activation point.
+        let firstTapTime = ProcessInfo.processInfo.systemUptime
         mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let player = app.descendants(matching: .any)["now-playing"]
+        if !player.waitForExistence(timeout: 2) {
+            let freshMini = try readyMini(in: app, file: file, line: line)
+            freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let remaining = max(0, 8 - (ProcessInfo.processInfo.systemUptime - firstTapTime))
+            XCTAssertTrue(player.waitForExistence(timeout: remaining), file: file, line: line)
+        }
     }
 
     /// Sample empty row margins: the blue cover wash must remain visible.
