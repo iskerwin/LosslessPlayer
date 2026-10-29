@@ -100,7 +100,9 @@ final class PlayerCardRenderingTests: XCTestCase {
         // same full-screen coordinates as the expanded controls.
         let backdrop = GeometryReader { geometry in
             VStack(spacing: 0) {
-                Color.green.frame(height: geometry.size.height * 0.75)
+                // Color.green is adaptive system green (52/199/89 in light),
+                // not the pure RGB green required by these channel assertions.
+                Color(red: 0, green: 1, blue: 0).frame(height: geometry.size.height * 0.75)
                 Color.black
             }
         }
@@ -133,7 +135,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testDetailArtworkWashPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
+    func testSharedArtworkBackgroundPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),
             ("cool", washFixture(top: .blue, bottom: .cyan)),
@@ -142,7 +144,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         ]
         for scheme in [ColorScheme.light, .dark] {
             for (name, texture) in fixtures {
-                let renderer = ImageRenderer(content: CollectionArtworkWash(image: texture)
+                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
                     .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
                 renderer.scale = 1
                 let image = try XCTUnwrap(renderer.cgImage)
@@ -356,7 +358,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                             DetailZoomCard(progress: progress, source: source, expanded: expanded,
                                 headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
                                 transitioning: true, reduceMotion: false,
-                                detail: CollectionArtworkWash(image: washFixture(top: .blue, bottom: .cyan)))
+                                detail: ArtworkBackgroundSurface(analysis: ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)), followsAppearance: true))
                         }
                         .environment(\.colorScheme, scheme))
                 renderer.scale = 1

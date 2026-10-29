@@ -56,7 +56,7 @@ struct CollectionPage: View {
             .softTopScrollEdge()
             .background {
                 if usesArtworkBackground {
-                    CollectionArtworkBackground(url: backgroundArtworkURL)
+                    ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
                         .ignoresSafeArea()
                 }
             }
@@ -397,75 +397,5 @@ struct CollectionPage: View {
             setCover: playlist.map { list in { track in library.setCover(track, for: list) } },
             identify: { matchingTrack = $0 }
         )
-    }
-}
-
-/// A full-page texture, never a presentation-level appearance preference.
-/// Decode a small cover through the shared cache; the foreground cover keeps its
-/// own resolution. Key the stored image so a changed/missing cover cannot leave
-/// the previous collection's wash behind.
-struct CollectionArtworkBackground: View {
-    var url: URL?
-    @State private var image: UIImage?
-    @State private var resolvedURL: URL?
-
-    private var displayed: UIImage? {
-        guard let url else { return nil }
-        if resolvedURL == url, let image { return image }
-        return ArtworkCache.shared.bestCachedImage(at: url, maxPixel: 160)
-    }
-
-    var body: some View {
-        CollectionArtworkWash(image: displayed)
-            .task(id: url) {
-                let requested = url
-                image = nil
-                resolvedURL = nil
-                guard let requested else { return }
-                let loaded = await ArtworkCache.shared.load(at: requested, maxPixel: 160)
-                guard !Task.isCancelled else { return }
-                image = loaded
-                resolvedURL = requested
-            }
-    }
-}
-
-/// White/black veils bound every channel to a readable range while preserving
-/// the cover's spatial color variation. No multiply tint or generic grey plate.
-struct CollectionArtworkWash: View {
-    var image: UIImage?
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Covers may themselves contain transparency. Keep the entire
-                // surface opaque even then, including the status-bar region.
-                (scheme == .light ? Color.white : Color.black)
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        // Extend the texture before blur so the page edges stay opaque.
-                        .scaleEffect(1.15)
-                        .blur(radius: 36, opaque: true)
-                } else {
-                    // Missing, unreadable and loading covers share an intentional
-                    // accent/pink wash, matching the artwork placeholder family.
-                    LinearGradient(colors: [MusicTheme.accent, .pink, .indigo],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                }
-                if scheme == .light {
-                    Color.white.opacity(0.82)
-                } else {
-                    Color.black.opacity(0.72)
-                }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipped()
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }

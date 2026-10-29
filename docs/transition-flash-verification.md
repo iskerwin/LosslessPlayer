@@ -82,3 +82,116 @@ Two surfaces CAN overlap in the previous branch code: the system accessory backi
 `testLandedPlayerAddsNoBackingOverAccessorySurface` covers light/dark, 36/56-point slots and Reduce Motion on/off: transparent collapsed content over a magenta host must preserve all RGBA channels within 2/255 at three interior samples. This checks absence of app paint, not the native glass's optical behavior. UI captures cover light/dark inline/wide and player return, but a single accessible mini does not prove a single visual outline.
 
 Required device check: compare with the Apple single-capsule reference in all four appearance/width combinations, both settled and throughout scroll/player landing, including interrupted close and Reduce Motion. There must be exactly one capsule edge. Repeat A's varied-backdrop transmission check after removing this overlap. **Still unresolved:** a double outline in a fully settled current-build native host, or persistent dark inline opacity, requires Xcode View Debugger on the exact affected iOS version; the screenshot does not prove a forced opaque system layer. If that host owns the extra layer/opacity and public API cannot remove it, retain the blocker and shared-overlay workaround described in A for user decision. Hardware reproduction and optical acceptance remain pending; this patch does not claim A/D fully resolved.
+
+
+## Round 2 — shared playback background and album metadata (2026-10-29)
+
+This section supersedes the separate CollectionArtworkBackground/CollectionArtworkWash
+implementation and its earlier visual description. All other first-round fixes and
+hardware limitations above remain applicable.
+
+Baseline: fetched origin; clean existing codex/transition-flash-fix at b00463c
+already merged origin/main c7428db, including a6b02c8 (#39) and #38. Explicit
+`git merge origin/main` reports already up to date. #39 uses QueueDragHandle,
+QueueRowDrag and QueueDropMapping on this baseline (not draggable/dropDestination
+as the brief anticipated); its entire implementation is preserved. #38's
+flac.picture extraction, folder-cover priority, bounds and thumbnail storage are
+preserved. No rebase, force push, engine, morph, threshold, queue, lyrics,
+MusicBrainz, workflow or apps.json changes in this round.
+
+### Red rendering test: fixture mismatch, not demonstrated production reflow
+
+Run 40891528069 failed only
+`testCollapseCropsFullSizeBackdropWithoutCompressingDarkLowerRegion`.
+Its GeometryReader uses Color.green, an adaptive system color, but expects
+RGB (0,255,0). The light failures report green=199, red=52, blue=89: exactly
+system green, rather than a shifted black band. 138 assertions across samples
+are consistent with that fixture mismatch. Use explicit Color(red:0,green:1,blue:0)
+in that one band. Keep every progress (including .03), appearance, vertical
+sample and RGB tolerance (3 / <4) unchanged. No PlayerCard production change:
+its full expanded frame followed by top-leading crop remains in force.
+GitHub Actions must still verify the unchanged geometry assertions; this Linux
+host cannot establish an iOS rendering pass.
+
+### One background component and explicit inputs
+
+NowPlayingBackground is a small adapter into ArtworkBackground(url:).
+CollectionPage uses that same component, passing backgroundArtworkURL derived
+from its collection: playlist custom cover first, otherwise its selected cover
+track; album uses its own sorted cover track. It never reads player.current to
+choose detail art. URL-keyed ArtworkAnalysisCache entries also separate files
+with the same basename under different roots. Cancelled loads cannot install a
+stale result; displayed analysis is matched to the current URL.
+
+ArtworkBackgroundSurface uses the existing ArtworkAnalysis palette + downsampled
+blur-like texture and ArtworkBackdrop composition, with an opaque base and
+bounded clipping. Missing/unreadable art uses the same colored fallback palette;
+gray covers preserve neutral texture. Playback keeps its existing shading;
+detail adds white .82 / black .72 legibility veils under inherited appearance.
+No third wash renderer remains. CollectionPage's ignoresSafeArea and the outer
+detail card's safe-area extension remain, as do removal of forced dark scheme,
+native mini accessory ownership, no travelling PlayerMiniGlass, and normal
+search-tab role. The warm/cool/neutral/missing pixel regression now exercises
+this shared surface, retaining its hue, opacity and brightness requirements.
+
+### Album audit: all three breakpoints checked
+
+(a) Confirmed missing path: AudioTags.Role and the fullMetadata switch had no
+album role. Format-specific id3/TALB, itsk/©alb, vorbis/ALBUM and riff/IPRD were
+silently ignored if commonMetadata omitted the album. Add only the album role
+and fallback assignment, preserving commonMetadata precedence and keeping
+album artist separate. Identifier regression tests cover both roles.
+
+(b) No demonstrated parser defect for the requested layouts. The reader checks
+each block against file size, seeks to its declared end, traverses PICTURE
+before COMMENT, and stops at last-block. Existing semantics intentionally keep
+the first COMMENT only, cap it at 4 MiB and cap traversal at 128 blocks.
+Tests cover ALBUM first/last among comment fields, pictures before/after,
+5 MiB padding, multiple COMMENT blocks, oversized COMMENT and last-block audio
+exclusion. These limits and VORBIS_COMMENT semantics are unchanged. Such bounded
+or malformed files may still lack an album; do not claim universal recovery.
+
+(c) The skip predicate is equal size + modifiedAt + catalogVersion, not
+contentHash. Git history shows FLAC album fallback AND version 3 arrived in
+0bcbf3c; catalogs predating that already qualify for a reread. There is no
+evidence that a version-2 entry is permanently skipped. Version-3 entries
+previously affected by (a), however, would otherwise retain unknown album;
+bump to 4 so the next folder scan rereads them. The integration test constructs
+a stale version-3 entry with unchanged hash/size/mtime, verifies album recovery,
+stable ID/favorite and version, then verifies subsequent scans skip normally.
+
+Valid synthetic FLACs (real STREAMINFO/audio, with ALBUM and with no ALBUM) go
+through AudioScanner, not only the comment parser. Unknown albums in Morning/
+Evening remain separate groups. Linux ffmpeg validates the synthetic audio;
+AVAudioFile/scanner behavior must pass on CI. The affected user's original
+file/catalog was not supplied, so (a) is a confirmed code defect and (c) its
+persistence/migration path, not a proven forensic diagnosis of that file.
+
+Rescan steps: after installing the build, open Sources and rescan the indexed
+folder; version 4 forces metadata re-read even when the file is unchanged.
+Copied imports are not folder-scanned: remove and re-import the affected copied
+file (playlist membership may need restoring). No automatic reread of copied
+imports or destructive library reset is introduced.
+
+### Required physical-device acceptance (pending)
+
+- While another song is playing, open album/playlist details: background follows
+  the collection cover, including custom playlist art; switch collections and
+  test missing, unreadable, warm, cool and neutral covers.
+- Light/dark: text readable, inherited window appearance unchanged through open,
+  reverse, interruption and close; background fills the top safe-area strip.
+- Confirm search and repeated search-tab selection remain usable.
+- Tagged files display their album; genuinely untagged files remain 未知专辑
+  and group by folder. Rescan existing indexed files as described above.
+- Collapse slowly at .03 in light appearance: no background reflow/compressed
+  dark region; reverse and spring to landing, including Reduce Motion.
+- First-round bottom-bar checklist remains: light/dark, inline/wide, scroll,
+  return and interrupted landing have one capsule outline, correct native
+  accessory ownership and softened backdrop. Check exact iOS build and Reduce
+  Transparency; simulator node counts cannot settle the double-capsule report.
+
+Validation: Linux has no Xcode/Swift SDK; no local iOS compile or XCTest claim.
+`git diff --check` passes. Await GitHub Actions full unit suite and screenshots.
+Only this existing branch/PR is pushed; do not merge. On CI failure inspect the
+named failed step/test and correct one cause once; if that retry remains red,
+stop and report step/test and commit. No duplicate watcher is created.

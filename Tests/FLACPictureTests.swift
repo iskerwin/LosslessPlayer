@@ -84,6 +84,89 @@ final class FLACPictureTests: XCTestCase {
         }
     }
 
+    func testAlbumSurvivesCommentFieldOrderLargeBlocksAndLastFlag() throws {
+        for fields in [["ALBUM=Record", "TITLE=Song"], ["TITLE=Song", "ALBUM=Record"]] {
+            let tags = comments(fields)
+            for blocks in [
+                [(6, picture(3, Data([7]))), (4, tags)],
+                [(4, tags), (6, picture(3, Data([7])))],
+                [(1, Data(repeating: 0, count: 5 * 1024 * 1024)), (4, tags)],
+                [(4, tags), (4, comments(["ALBUM=Ignored second block"]))]
+            ] {
+                XCTAssertEqual(try read(flac(blocks)).comments["ALBUM"], ["Record"])
+            }
+        }
+        // A last-block flag terminates metadata; apparent tags in audio are ignored.
+        let fakeAudio = flac([(4, comments(["ALBUM=Audio is not metadata"]))])
+        XCTAssertNil(try read(flac([(4, comments(["TITLE=Song"]))],
+                                  audio: Data(fakeAudio.dropFirst(4)))).comments["ALBUM"])
+        // Existing bounded-reader semantics: oversized COMMENT is ignored, not
+        // replaced with a later COMMENT; do not change this to guess an album.
+        XCTAssertTrue(try read(flac([(4, Data(repeating: 0, count: 4 * 1024 * 1024 + 1)),
+                                    (4, comments(["ALBUM=Second"]))])).comments.isEmpty)
+    }
+
+    @MainActor
+    func testScannerReadsAlbumAndMigratesUnchangedVersionThreeCatalog() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = base.appendingPathComponent("Source")
+        let cache = base.appendingPathComponent("Cache")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        // ffmpeg-generated 882-sample mono silence: real STREAMINFO + audio frame.
+        let stream = try XCTUnwrap(Data(base64Encoded: "EgASAAAADQAADQrEQPAAAANytSO6L0Q+sIuEhLoiI0mWaA=="))
+        let audio = try XCTUnwrap(Data(base64Encoded: "//h5CAADcQ4AAAAB4A=="))
+        let cover = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { _ in
+            UIColor.red.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        }
+        let image = picture(3, try XCTUnwrap(cover.pngData()))
+        let layouts = [
+            [(0, stream), (4, comments(["ALBUM=Record", "TITLE=Song", "ARTIST=Ada"])), (6, image)],
+            [(0, stream), (6, image), (4, comments(["TITLE=Song", "ARTIST=Ada", "ALBUM=Record"]))]
+        ]
+        for (index, blocks) in layouts.enumerated() {
+            try flac(blocks, audio: audio).write(to: source.appendingPathComponent("\(index).flac"))
+        }
+        for directory in ["Morning", "Evening"] {
+            let target = source.appendingPathComponent(directory)
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            try flac([(0, stream), (4, comments(["TITLE=Song", "ARTIST=Ada"]))], audio: audio)
+                .write(to: target.appendingPathComponent("untagged.flac"))
+        }
+        let folder = MusicFolder(id: UUID(), name: "Source", bookmark: Data())
+        let scanner = AudioScanner(root: cache)
+        let first = try await scanner.scan(url: source, folder: folder, existing: []) { _, _, _ in }
+        XCTAssertTrue(first.failures.isEmpty, "\(first.failures)")
+        XCTAssertEqual(first.tracks.count, 4)
+        let tagged = first.tracks.filter { $0.album == "Record" }
+        XCTAssertEqual(tagged.count, 2)
+        XCTAssertTrue(tagged.allSatisfy { $0.artworkFilename != nil })
+        let unknown = first.tracks.filter { $0.album == "未知专辑" }
+        XCTAssertEqual(unknown.count, 2)
+        XCTAssertEqual(Set(unknown.map(\.albumID)).count, 2, "Unknown albums remain folder-scoped")
+        var legacy = try XCTUnwrap(tagged.first)
+        let originalHash = legacy.contentHash
+        legacy.album = "未知专辑"
+        legacy.catalogVersion = 3
+        legacy.favorite = true
+        // File size, modification date and hash are unchanged; version alone
+        // must force read(), instead of preserving the stale unknown album.
+        let migrated = try await scanner.scan(url: source, folder: folder, existing: [legacy]) { _, _, _ in }
+        XCTAssertTrue(migrated.failures.isEmpty, "\(migrated.failures)")
+        let updated = try XCTUnwrap(migrated.tracks.first { $0.id == legacy.id })
+        XCTAssertEqual(updated.album, "Record")
+        XCTAssertEqual(updated.contentHash, originalHash)
+        XCTAssertEqual(updated.modifiedAt, legacy.modifiedAt)
+        XCTAssertEqual(updated.fileSize, legacy.fileSize)
+        XCTAssertTrue(updated.favorite)
+        XCTAssertEqual(updated.catalogVersion, AudioTags.catalogVersion)
+        XCTAssertGreaterThan(AudioTags.catalogVersion, 3)
+        let second = try await scanner.scan(url: source, folder: folder, existing: migrated.tracks) { _, _, _ in }
+        XCTAssertEqual(second.skipped, 4)
+        XCTAssertEqual(second.tracks.first { $0.id == legacy.id }?.album, "Record")
+    }
+
     func testTruncatedPictureFieldsAndPayloadAreSkipped() throws {
         let valid = picture(3, Data([1, 2, 3]))
         for length in 0..<valid.count {

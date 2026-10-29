@@ -772,64 +772,87 @@ struct NowPlayingView: View {
     }
 }
 
-/// The card owns this surface independently of the padded, fading controls.
-/// Its caller supplies exact card bounds and the card's single clip trims
-/// artwork overflow, including the safe-area strip above the drag handle.
+/// Playback supplies its artwork; collection pages supply their own cover URL.
 struct NowPlayingBackground: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var palette: [Color] = ArtworkColors.fallback.map { Color($0) }
-    /// Blurred artwork texture for the backdrop. It swaps together with its
-    /// filename key, so the crossfade animates the (image, key) pair and a
-    /// stale texture never flashes under a new identity.
-    @State private var backdropImage: UIImage?
-    @State private var backdropKey: String?
-    private var current: Track? { library.track(player.current?.id) }
 
     var body: some View {
-        Color(white: 0.08)
-            .overlay {
-                ArtworkBackdrop(colors: palette, image: backdropImage, imageKey: backdropKey,
-                                extendsIntoSafeArea: false)
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: palette)
+        ArtworkBackground(url: library.track(player.current?.id)?.artworkFilename.map {
+            library.root.appendingPathComponent($0)
+        })
+    }
+}
+
+/// One palette/texture loader for playback and collection covers. Key both the
+/// cache and displayed result by URL so another collection cannot show stale art.
+struct ArtworkBackground: View {
+    var url: URL?
+    var followsAppearance = false
+    @State private var analysis: ArtworkAnalysis?
+    @State private var resolvedURL: URL?
+
+    private var displayed: ArtworkAnalysis? {
+        if resolvedURL == url { return analysis }
+        return url.flatMap { ArtworkAnalysisCache.shared.analysis(for: $0.absoluteString) }
+    }
+
+    var body: some View {
+        ArtworkBackgroundSurface(analysis: displayed,
+                                 imageKey: url?.absoluteString, followsAppearance: followsAppearance)
+            .task(id: url) {
+                analysis = nil
+                resolvedURL = nil
+                guard let requested = url else { return }
+                let key = requested.absoluteString
+                if let cached = ArtworkAnalysisCache.shared.analysis(for: key) {
+                    analysis = cached
+                    resolvedURL = requested
+                    return
+                }
+                let loaded = await Task.detached(priority: .userInitiated) { () -> ArtworkAnalysis? in
+                    guard let image = ArtworkCache.shared.image(at: requested, maxPixel: 160) else { return nil }
+                    let ready = ArtworkAnalysis.make(from: image)
+                    ArtworkAnalysisCache.shared.store(ready, for: key)
+                    return ready
+                }.value
+                guard !Task.isCancelled, url == requested else { return }
+                analysis = loaded
+                resolvedURL = requested
             }
-            .onAppear(perform: refreshBackdrop)
-            .onChange(of: current?.artworkFilename) { _, _ in refreshBackdrop() }
     }
+}
 
-    /// Backdrop data (palette + blurred texture) is computed off the main
-    /// thread from a downscaled copy and cached per artwork file. The old
-    /// version ran Core Image over the full-resolution image on the main
-    /// thread, inside the presentation's first frames.
-    private func refreshBackdrop() {
-        guard let filename = current?.artworkFilename else {
-            palette = ArtworkColors.fallback.map { Color($0) }
-            backdropImage = nil
-            backdropKey = nil
-            return
-        }
-        if let cached = ArtworkAnalysisCache.shared.analysis(for: filename) {
-            applyBackdrop(cached, key: filename)
-            return
-        }
-        let url = library.root.appendingPathComponent(filename)
-        Task { @MainActor in
-            let ready = await Task.detached(priority: .userInitiated) { () -> Bool in
-                guard let image = ArtworkCache.shared.image(at: url, maxPixel: 160) else { return false }
-                ArtworkAnalysisCache.shared.store(ArtworkAnalysis.make(from: image), for: filename)
-                return true
-            }.value
-            guard ready, current?.artworkFilename == filename,
-                  let analysis = ArtworkAnalysisCache.shared.analysis(for: filename) else { return }
-            applyBackdrop(analysis, key: filename)
-        }
-    }
+/// Shared opaque full-size surface. Details inherit the window appearance and
+/// add a legibility veil; playback retains its existing dark presentation.
+struct ArtworkBackgroundSurface: View {
+    var analysis: ArtworkAnalysis?
+    var imageKey: String? = nil
+    var followsAppearance = false
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private func applyBackdrop(_ analysis: ArtworkAnalysis, key: String) {
-        palette = analysis.palette.map { Color(uiColor: $0) }
-        backdropImage = analysis.backdrop
-        backdropKey = key
+    var body: some View {
+        GeometryReader { geometry in
+            Color(white: 0.08)
+                .overlay {
+                    ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
+                                    image: analysis?.backdrop, imageKey: imageKey,
+                                    extendsIntoSafeArea: false)
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.5),
+                                   value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
+                }
+                .overlay {
+                    if followsAppearance {
+                        if scheme == .light { Color.white.opacity(0.82) }
+                        else { Color.black.opacity(0.72) }
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

@@ -210,6 +210,9 @@ actor AudioScanner {
                 if track.trackNumber == nil { track.trackNumber = await number(from: item) }
             case .disc:
                 if track.discNumber == nil { track.discNumber = await number(from: item) }
+            case .album:
+                if track.album == "未知专辑", let value = try? await item.load(.stringValue),
+                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { track.album = value }
             case .albumArtist:
                 if track.albumArtist == nil, let value = try? await item.load(.stringValue), !value.isEmpty { track.albumArtist = value }
             case .genre:
