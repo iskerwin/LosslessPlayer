@@ -86,10 +86,10 @@ final class GlassScreenshots: XCTestCase {
         // a scroll the accessory can still be reattaching, and run
         // 41059485740 read an infinite frame there one second after two
         // equal reads. Require the settled frame, as the post-scroll
-        // hittability checks do.
-        let mini = try readySettledMini(in: app)
+        // hittability checks do, and drag from that frame's screen point.
+        let mini = try readyMiniFrame(in: app, settled: true)
         // Begin on the title, away from both transport buttons and screen edges.
-        let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+        let start = screenPoint(in: app, mini.frame, dx: 0.35, dy: 0.5)
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
         let player = app.descendants(matching: .any)["now-playing"]
         if !player.waitForExistence(timeout: 8) {
@@ -100,8 +100,8 @@ final class GlassScreenshots: XCTestCase {
             // double-dragged; re-resolve a settled mini first, then deliver
             // the drag once more with the same full 8 s budget. The final
             // gate below is unchanged.
-            let freshMini = try readySettledMini(in: app)
-            let retryStart = freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+            let freshMini = try readyMiniFrame(in: app, settled: true)
+            let retryStart = screenPoint(in: app, freshMini.frame, dx: 0.35, dy: 0.5)
             retryStart.press(forDuration: 0.1, thenDragTo: retryStart.withOffset(CGVector(dx: 0, dy: -100)))
         }
         XCTAssertTrue(player.waitForExistence(timeout: 8), "The mini host must deliver the upward drag")
@@ -372,8 +372,8 @@ final class GlassScreenshots: XCTestCase {
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
             assertHittable(app.tabBars.buttons["歌单"], "Playlist tab must be hittable after card return")
-            let mini = try readyMini(in: app)
-            XCTAssertTrue(mini.exists)
+            let mini = try readyMiniFrame(in: app)
+            XCTAssertTrue(mini.element.exists)
             // Use the List's existing accessibility node. NavigationStack
             // does not export a decorative SwiftUI clipping wrapper as a node.
             let surface = app.descendants(matching: .any).matching(NSPredicate(
@@ -382,6 +382,7 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertTrue(surface.waitForExistence(timeout: 8))
             // A second subtraction of the tab host's bottom inset leaves a
             // large black gap above the mini player despite passing navigation.
+            // mini.frame is the recorded ready frame, not a fresh AX read.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
             let freshMini = try readyMini(in: app)
             assertMiniIsHittable(freshMini)
@@ -462,8 +463,7 @@ final class GlassScreenshots: XCTestCase {
         let list = app.descendants(matching: .any)["songs-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 8))
         let minis = app.windows.descendants(matching: .any).matching(identifier: "mini-player")
-        let mini = try readyMini(in: app)
-        let wideHeight = mini.frame.height
+        let wideHeight = try readyMiniFrame(in: app).frame.height
         XCTAssertGreaterThanOrEqual(wideHeight, 55)
         for _ in 0..<2 {
             for upward in [true, false] {
@@ -565,25 +565,7 @@ final class GlassScreenshots: XCTestCase {
     /// assert hittability on the returned, settled element.
     private func readyMini(in app: XCUIApplication, file: StaticString = #filePath,
                            line: UInt = #line) throws -> XCUIElement {
-        let mini = app.windows.descendants(matching: .any)
-            .matching(identifier: "mini-player").firstMatch
-        let deadline = ProcessInfo.processInfo.systemUptime + 20
-        while ProcessInfo.processInfo.systemUptime < deadline {
-            if mini.exists {
-                let first = mini.frame
-                if isValidMiniFrame(first) {
-                    Thread.sleep(forTimeInterval: 0.25)
-                    let second = mini.frame
-                    if second == first {
-                        return mini
-                    }
-                }
-            }
-            Thread.sleep(forTimeInterval: 0.25)
-        }
-        return try XCTUnwrap(nil as XCUIElement?,
-                            "Mini accessory must have a finite, nonempty, stable frame",
-                            file: file, line: line)
+        try readyMiniFrame(in: app, file: file, line: line).element
     }
 
     /// Stronger variant of readyMini for post-scroll checks: the accessory
@@ -593,6 +575,17 @@ final class GlassScreenshots: XCTestCase {
     /// callers keep readyMini's behavior.
     private func readySettledMini(in app: XCUIApplication, file: StaticString = #filePath,
                                   line: UInt = #line) throws -> XCUIElement {
+        try readyMiniFrame(in: app, settled: true, file: file, line: line).element
+    }
+
+    /// The ready element plus the frame that passed the stability check.
+    /// Reading mini.frame or mini.coordinate later resolves the accessory
+    /// again, and a reattach in between yields an infinite frame (run
+    /// 41059485740: the swipe-up drag; run 41064019285: the gap check).
+    /// Measure and press with this frame instead.
+    private func readyMiniFrame(in app: XCUIApplication, settled: Bool = false,
+                                file: StaticString = #filePath,
+                                line: UInt = #line) throws -> (element: XCUIElement, frame: CGRect) {
         let mini = app.windows.descendants(matching: .any)
             .matching(identifier: "mini-player").firstMatch
         let deadline = ProcessInfo.processInfo.systemUptime + 20
@@ -600,19 +593,27 @@ final class GlassScreenshots: XCTestCase {
             if mini.exists {
                 let first = mini.frame
                 if isValidMiniFrame(first) {
-                    var settled = true
-                    for _ in 0..<3 {
+                    var stable = true
+                    for _ in 0..<(settled ? 3 : 1) {
                         Thread.sleep(forTimeInterval: 0.25)
-                        if mini.frame != first { settled = false; break }
+                        if mini.frame != first { stable = false; break }
                     }
-                    if settled { return mini }
+                    if stable { return (mini, first) }
                 }
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
-        return try XCTUnwrap(nil as XCUIElement?,
-                            "Mini accessory must have a finite, nonempty, settled frame",
-                            file: file, line: line)
+        let frame = try XCTUnwrap(nil as CGRect?,
+                                  "Mini accessory must have a finite, nonempty, \(settled ? "settled" : "stable") frame",
+                                  file: file, line: line)
+        return (mini, frame)
+    }
+
+    /// A screen point inside a recorded frame, without resolving any element.
+    private func screenPoint(in app: XCUIApplication, _ frame: CGRect,
+                             dx: CGFloat, dy: CGFloat) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.minX + frame.width * dx, dy: frame.minY + frame.height * dy))
     }
 
     private func isValidMiniFrame(_ frame: CGRect) -> Bool {
@@ -623,13 +624,13 @@ final class GlassScreenshots: XCTestCase {
 
     private func tapMini(in app: XCUIApplication, file: StaticString = #filePath,
                          line: UInt = #line) throws {
-        let mini = try readyMini(in: app, file: file, line: line)
+        let mini = try readyMiniFrame(in: app, file: file, line: line)
         // Use the ready frame's center instead of the accessory's AX activation point.
-        mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        screenPoint(in: app, mini.frame, dx: 0.5, dy: 0.5).tap()
         let player = app.descendants(matching: .any)["now-playing"]
         if !player.waitForExistence(timeout: 2) {
-            let freshMini = try readyMini(in: app, file: file, line: line)
-            freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let freshMini = try readyMiniFrame(in: app, file: file, line: line)
+            screenPoint(in: app, freshMini.frame, dx: 0.5, dy: 0.5).tap()
             // Each attempt gets the full appearance budget. Sharing the
             // original 8 s across first tap and retry left no expand time
             // after a lost first tap (run 41019339693: retry at 17.55 s,
