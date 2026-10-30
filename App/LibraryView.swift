@@ -387,7 +387,7 @@ struct LibraryView: View {
                     HStack {
                         Text("最近添加").font(.title2.bold())
                         Spacer()
-                        Text("\(library.tracks.count) 首").font(.caption).foregroundStyle(.secondary)
+                        Text("\(library.recentAlbums.count) 张专辑").font(.caption).foregroundStyle(.secondary)
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
                         ForEach(library.recentAlbums, id: \.id) { album in
