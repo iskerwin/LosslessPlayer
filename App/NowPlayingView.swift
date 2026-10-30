@@ -374,8 +374,10 @@ struct NowPlayingView: View {
                     .allowsHitTesting(queueVisible)
                     .accessibilityHidden(!queueVisible)
                     .accessibilityIdentifier("now-playing-queue-scroll")
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: queueVisible)
         }
     }
 

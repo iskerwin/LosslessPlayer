@@ -878,6 +878,7 @@ private struct AccessoryMiniPlayer: View {
         .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
+        .simultaneousGesture(MiniPlayerReopenGesture(onReopen: open))
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("mini-player")

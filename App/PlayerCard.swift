@@ -1,5 +1,21 @@
 import SwiftUI
 
+/// Shared by the resting mini (in either host) and the closing card overlay.
+/// Ordinary drag priority preserves taps on the mini's transport buttons.
+struct MiniPlayerReopenGesture: Gesture {
+    var onReopen: () -> Void
+
+    var body: some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .onEnded { value in
+                if value.translation.height <= -16,
+                   -value.translation.height > abs(value.translation.width) * 1.5 {
+                    onReopen()
+                }
+            }
+    }
+}
+
 /// Pure mapping shared by the finger, spring and rendered card. Progress is
 /// zero in the accessory slot and one at full screen.
 enum PlayerCardMetrics {
@@ -114,6 +130,7 @@ struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Anim
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onReopen)
+                    .simultaneousGesture(MiniPlayerReopenGesture(onReopen: onReopen))
                     .accessibilityLabel("展开播放器")
                     .accessibilityAddTraits(.isButton)
             }
