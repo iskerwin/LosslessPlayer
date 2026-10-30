@@ -167,6 +167,163 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertEqual(second.tracks.first { $0.id == legacy.id }?.album, "Record")
     }
 
+    private func playableFLAC(_ fields: [String]) throws -> Data {
+        let stream = try XCTUnwrap(Data(base64Encoded: "EgASAAAADQAADQrEQPAAAANytSO6L0Q+sIuEhLoiI0mWaA=="))
+        let audio = try XCTUnwrap(Data(base64Encoded: "//h5CAADcQ4AAAAB4A=="))
+        return flac([(0, stream), (4, comments(fields))], audio: audio)
+    }
+
+    func testScannerReadsFLACGenreDateTrackAndDisc() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fields = ["GENRE=Jazz", "DATE=2026-10-30", "TRACKNUMBER=03/12", "DISCNUMBER=2/3"]
+        let file = root.appendingPathComponent("song.flac")
+        let data = try playableFLAC(fields)
+        try data.write(to: file)
+        let result = try await AudioScanner(root: root).scan(url: root,
+            folder: MusicFolder(id: UUID(), name: "Music", bookmark: Data()), existing: []) { _, _, _ in }
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        let track = try XCTUnwrap(result.tracks.first)
+        XCTAssertEqual(track.genre, "Jazz")
+        XCTAssertEqual(track.year, 2026)
+        XCTAssertEqual(track.trackNumber, 3)
+        XCTAssertEqual(track.discNumber, 2)
+        XCTAssertEqual(track.catalogVersion, 5)
+        XCTAssertEqual(try Data(contentsOf: file), data)
+    }
+
+    func testScannerSkipsEmptyFirstFLACCommentValues() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Exercise both album-artist spellings, including an empty preferred key.
+        for (index, artistKey) in ["ALBUMARTIST", "ALBUM ARTIST"].enumerated() {
+            let fields = ["ALBUM=", "ALBUM=Record", "TITLE=", "TITLE=Song",
+                          "ALBUMARTIST=", "\(artistKey)=Ada",
+                          "GENRE= \t", "GENRE=Jazz", "GENRE=Rock",
+                          "DATE=", "DATE=2026-10-30", "DATE=2000",
+                          "TRACKNUMBER=", "TRACKNUMBER=03/12", "TRACKNUMBER=8",
+                          "DISCNUMBER=", "DISCNUMBER=2/3", "DISCNUMBER=9"]
+            try playableFLAC(fields).write(to: root.appendingPathComponent("\(index).flac"))
+        }
+        let result = try await AudioScanner(root: root).scan(url: root,
+            folder: MusicFolder(id: UUID(), name: "Music", bookmark: Data()), existing: []) { _, _, _ in }
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(result.tracks.count, 2)
+        for track in result.tracks {
+            XCTAssertEqual(track.album, "Record")
+            XCTAssertEqual(track.title, "Song")
+            XCTAssertEqual(track.albumArtist, "Ada")
+            XCTAssertEqual(track.genre, "Jazz")
+            XCTAssertEqual(track.year, 2026)
+            XCTAssertEqual(track.trackNumber, 3)
+            XCTAssertEqual(track.discNumber, 2)
+        }
+    }
+
+    @MainActor
+    func testStartupMigratesOnlyStaleFoldersAndLegacyCopiesOnceToVersionFive() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("Library")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let data = try playableFLAC(["ALBUM=Record", "TITLE=Song", "ARTIST=Ada",
+                                    "GENRE=Jazz", "DATE=2026-10-30", "TRACKNUMBER=3/12", "DISCNUMBER=2/3"])
+        let library = LibraryStore(root: root)
+        for name in ["OldFour", "OldNil", "Current", "Future"] {
+            let directory = base.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: directory.appendingPathComponent("song.flac"))
+            await library.addFolder(directory)
+        }
+        // Seed a legacy copy directly to exercise the original library format.
+        try data.write(to: root.appendingPathComponent("legacy.flac"))
+        var snapshot = library.snapshot
+        var copy = try XCTUnwrap(snapshot.tracks.first)
+        copy.id = UUID(); copy.filename = "legacy.flac"; copy.folderID = nil; copy.relativePath = nil
+        snapshot.tracks.append(copy)
+        let played = Date(timeIntervalSince1970: 123456)
+        let added = Date(timeIntervalSince1970: 100000)
+        var staleIDs = Set<UUID>()
+        for i in snapshot.tracks.indices {
+            let name = snapshot.folders.first { $0.id == snapshot.tracks[i].folderID }?.name
+            if name == "Current" { snapshot.tracks[i].catalogVersion = 5; continue }
+            if name == "Future" { snapshot.tracks[i].catalogVersion = 6; continue }
+            staleIDs.insert(snapshot.tracks[i].id)
+            snapshot.tracks[i].catalogVersion = name == "OldNil" ? nil : 4
+            snapshot.tracks[i].album = "未知专辑"
+            snapshot.tracks[i].genre = nil; snapshot.tracks[i].year = nil
+            snapshot.tracks[i].trackNumber = nil; snapshot.tracks[i].discNumber = nil
+            snapshot.tracks[i].favorite = true; snapshot.tracks[i].playCount = 7
+            snapshot.tracks[i].lastPlayed = played; snapshot.tracks[i].addedAt = added
+        }
+        let lastScans = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.id, $0.lastScan) })
+        var playlist = Playlist(name: "Keep")
+        playlist.trackIDs = snapshot.tracks.map(\.id)
+        snapshot.playlists.append(playlist)
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        let restarted = LibraryStore(root: root)
+        await restarted.migrateCatalogIfNeeded()
+        XCTAssertFalse(restarted.importing)
+        XCTAssertNil(restarted.errorMessage)
+        XCTAssertEqual(restarted.tracks.count, 5)
+        for track in restarted.tracks where staleIDs.contains(track.id) {
+            XCTAssertEqual(track.catalogVersion, 5)
+            XCTAssertEqual(track.album, "Record")
+            XCTAssertEqual(track.genre, "Jazz")
+            XCTAssertEqual(track.year, 2026)
+            XCTAssertEqual(track.trackNumber, 3)
+            XCTAssertEqual(track.discNumber, 2)
+            XCTAssertTrue(track.favorite)
+            XCTAssertEqual(track.playCount, 7)
+            XCTAssertEqual(track.lastPlayed, played)
+            XCTAssertEqual(track.addedAt, added)
+        }
+        for folder in restarted.snapshot.folders where ["Current", "Future"].contains(folder.name) {
+            XCTAssertEqual(folder.lastScan, lastScans[folder.id] ?? nil, "Fresh/future folders must not be scanned")
+        }
+        XCTAssertEqual(restarted.snapshot.playlists.first?.trackIDs, playlist.trackIDs)
+        let migrated = try Data(contentsOf: root.appendingPathComponent("library.json"))
+        await restarted.migrateCatalogIfNeeded()
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("library.json")), migrated)
+        let nextLaunch = LibraryStore(root: root)
+        await nextLaunch.migrateCatalogIfNeeded()
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("library.json")), migrated,
+                       "Version five must not trigger another migration")
+        for folder in snapshot.folders {
+            XCTAssertEqual(try Data(contentsOf: restarted.resolve(folder).appendingPathComponent("song.flac")), data)
+        }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("legacy.flac")), data)
+    }
+
+    @MainActor
+    func testFailedLegacyMigrationRetriesNextLaunchWithoutLooping() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var snapshot = LibrarySnapshot()
+        let old = Track(id: UUID(), filename: "missing.flac", title: "Old", artist: "未知艺术家",
+                        album: "未知专辑", duration: 1, sampleRate: 44100, bitDepth: 16)
+        snapshot.tracks = [old]
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        let library = LibraryStore(root: root)
+        await library.migrateCatalogIfNeeded()
+        XCTAssertNotNil(library.errorMessage)
+        XCTAssertFalse(library.importing)
+        XCTAssertNil(library.tracks.first?.catalogVersion)
+        let data = try playableFLAC(["ALBUM=Recovered"])
+        try data.write(to: root.appendingPathComponent(old.filename))
+        await library.migrateCatalogIfNeeded()
+        XCTAssertNil(library.tracks.first?.catalogVersion, "No retry loop within a launch")
+        let nextLaunch = LibraryStore(root: root)
+        await nextLaunch.migrateCatalogIfNeeded()
+        XCTAssertEqual(nextLaunch.tracks.first?.id, old.id)
+        XCTAssertEqual(nextLaunch.tracks.first?.album, "Recovered")
+        XCTAssertEqual(nextLaunch.tracks.first?.catalogVersion, 5)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(old.filename)), data)
+    }
+
     func testTruncatedPictureFieldsAndPayloadAreSkipped() throws {
         let valid = picture(3, Data([1, 2, 3]))
         for length in 0..<valid.count {

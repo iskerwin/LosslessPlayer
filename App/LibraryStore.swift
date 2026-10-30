@@ -15,6 +15,8 @@ final class LibraryStore: ObservableObject {
     let root: URL
     private let scanner: AudioScanner
     private var job: Task<Void, Never>?
+    private var attemptedCatalogMigration = false
+    private var catalogMigrationJob: Task<Void, Never>?
     private var indexURL: URL { root.appendingPathComponent("library.json") }
     private var backupURL: URL { root.appendingPathComponent("library.backup.json") }
     private var playbackURL: URL { root.appendingPathComponent("playback.json") }
@@ -501,13 +503,59 @@ final class LibraryStore: ObservableObject {
         persist(s)
     }
 
+    func startCatalogMigration() {
+        guard !ScreenshotFixture.enabled, !attemptedCatalogMigration, catalogMigrationJob == nil else { return }
+        catalogMigrationJob = Task { await migrateCatalogIfNeeded() }
+    }
+
+    /// Once per launch, wait for imports and upgrade only stale catalog sources.
+    /// Failures keep their old version so the next launch can retry.
+    func migrateCatalogIfNeeded() async {
+        guard !ScreenshotFixture.enabled, !attemptedCatalogMigration else { return }
+        while importing {
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return }
+        }
+        guard !Task.isCancelled, !attemptedCatalogMigration else { return }
+        attemptedCatalogMigration = true
+        func stale(_ track: Track) -> Bool { (track.catalogVersion ?? 0) < AudioTags.catalogVersion }
+        let folderIDs = Set(tracks.filter(stale).compactMap(\.folderID))
+        for folder in snapshot.folders where folderIDs.contains(folder.id) {
+            if Task.isCancelled { return }
+            await scanFolder(folder.id)
+        }
+        let copies = tracks.filter { $0.folderID == nil && stale($0) }
+        guard !copies.isEmpty, !Task.isCancelled, !importing else { return }
+        importing = true
+        defer { importing = false }
+        var failures: [String] = []
+        for (index, old) in copies.enumerated() {
+            if Task.isCancelled { break }
+            updateProgress(index + 1, total: copies.count, name: old.filename)
+            do {
+                var track = try await scanner.rereadCopy(old)
+                try Task.checkCancellation()
+                var s = snapshot
+                guard let i = s.tracks.firstIndex(where: { $0.id == old.id }) else { continue }
+                track.favorite = s.tracks[i].favorite
+                track.playCount = s.tracks[i].playCount
+                track.lastPlayed = s.tracks[i].lastPlayed
+                s.tracks[i] = track
+                persist(s)
+            } catch is CancellationError { break }
+            catch { failures.append("\(old.filename)：\(error.localizedDescription)") }
+        }
+        ArtworkCache.shared.removeAll()
+        if !failures.isEmpty { errorMessage = failures.prefix(8).joined(separator: "\n") }
+    }
+
     func startScan(_ id: UUID) { guard !importing else { return }; job = Task { await scanFolder(id) } }
     func startImport(_ urls: [URL]) { guard !importing else { return }; job = Task { await importFiles(urls) } }
     func startAddFolders(_ urls: [URL]) {
         guard !importing else { return }
         job = Task { for url in urls { if Task.isCancelled { break }; await addFolder(url) } }
     }
-    func cancelScan() { job?.cancel() }
+    func cancelScan() { job?.cancel(); catalogMigrationJob?.cancel() }
 
     func scanFolder(_ id: UUID) async {
         guard !importing, let folder = snapshot.folders.first(where: { $0.id == id }) else { return }

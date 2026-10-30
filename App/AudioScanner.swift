@@ -133,6 +133,18 @@ actor AudioScanner {
         return track
     }
 
+    /// Re-read an app-owned legacy copy without copying, moving or writing audio.
+    func rereadCopy(_ old: Track) async throws -> Track {
+        let file = root.appendingPathComponent(old.filename)
+        var track = try await read(file, id: old.id, folderArtwork: nil)
+        if track.title == file.deletingPathExtension().lastPathComponent { track.title = old.title }
+        track.contentHash = old.contentHash
+        track.addedAt = old.addedAt
+        track.lyrics = track.lyrics ?? old.lyrics
+        track.artworkFilename = track.artworkFilename ?? old.artworkFilename
+        return track
+    }
+
     static func digest(_ file: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
@@ -228,9 +240,19 @@ actor AudioScanner {
         alternateArtist += (comments["ARTIST"] ?? []) + (comments["ARTIS"] ?? [])
         let names = AudioTags.artistNames(from: explicitArtists.isEmpty ? alternateArtist : explicitArtists)
         if !names.isEmpty { track.artists = names; track.artist = names.joined(separator: ", ") }
-        if track.albumArtist == nil { track.albumArtist = (comments["ALBUMARTIST"] ?? comments["ALBUM ARTIST"])?.first }
-        if track.album == "未知专辑", let album = comments["ALBUM"]?.first { track.album = album }
-        if track.title == url.deletingPathExtension().lastPathComponent, let title = comments["TITLE"]?.first { track.title = title }
+        func firstNonempty(_ keys: [String]) -> String? {
+            keys.flatMap { comments[$0] ?? [] }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+        }
+        if track.albumArtist == nil { track.albumArtist = firstNonempty(["ALBUMARTIST", "ALBUM ARTIST"]) }
+        if track.album == "未知专辑", let album = firstNonempty(["ALBUM"]) { track.album = album }
+        if track.title == url.deletingPathExtension().lastPathComponent,
+           let title = firstNonempty(["TITLE"]) { track.title = title }
+        if track.genre == nil, let value = firstNonempty(["GENRE"]) { track.genre = AudioTags.genre(from: value) }
+        if track.year == nil, let value = firstNonempty(["DATE"]) { track.year = AudioTags.year(from: value) }
+        if track.trackNumber == nil, let value = firstNonempty(["TRACKNUMBER"]) { track.trackNumber = AudioTags.number(from: value) }
+        if track.discNumber == nil, let value = firstNonempty(["DISCNUMBER"]) { track.discNumber = AudioTags.number(from: value) }
         track.catalogVersion = AudioTags.catalogVersion
         return track
     }
