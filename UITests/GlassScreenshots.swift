@@ -41,14 +41,11 @@ final class GlassScreenshots: XCTestCase {
         let mini = try readyMini(in: app)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(mini.staticTexts["Apologize"].exists)
-        mini.buttons["播放"].tap()
-        XCTAssertTrue(mini.buttons["暂停"].waitForExistence(timeout: 5))
+        try tapMiniControl("播放", in: app, until: mini.buttons["暂停"], timeout: 5)
         XCTAssertFalse(player.exists, "Mini play must not expand the player")
-        mini.buttons["暂停"].tap()
-        XCTAssertTrue(mini.buttons["播放"].waitForExistence(timeout: 5))
+        try tapMiniControl("暂停", in: app, until: mini.buttons["播放"], timeout: 5)
         XCTAssertFalse(player.exists, "Mini pause must not expand the player")
-        mini.buttons["下一首"].tap()
-        XCTAssertTrue(mini.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        try tapMiniControl("下一首", in: app, until: mini.staticTexts["Stop and Stare"], timeout: 8)
         XCTAssertFalse(player.exists, "Mini skip must not expand the player")
         try tapMini(in: app)
         XCTAssertTrue(player.waitForExistence(timeout: 8))
@@ -637,6 +634,23 @@ final class GlassScreenshots: XCTestCase {
             // budget exhausted at 19.29 s). The assertion itself is
             // unchanged: the player appears after tapping the mini.
             XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
+        }
+    }
+
+    /// Taps a mini control and asserts its effect. The simulator accessory
+    /// can drop a touch outright (run 41071297827: a tap on 播放 left the
+    /// screen unchanged for 22 s), so retry once — but only after the full
+    /// budget expires: these controls toggle or skip, and a second tap on a
+    /// merely slow first one would undo or overshoot it, failing honestly
+    /// below rather than passing. The final assertion and budget are the
+    /// ones the test used before.
+    private func tapMiniControl(_ label: String, in app: XCUIApplication, until effect: XCUIElement,
+                                timeout: TimeInterval, file: StaticString = #filePath,
+                                line: UInt = #line) throws {
+        try readyMini(in: app, file: file, line: line).buttons[label].tap()
+        if !effect.waitForExistence(timeout: timeout) {
+            try readyMini(in: app, file: file, line: line).buttons[label].tap()
+            XCTAssertTrue(effect.waitForExistence(timeout: timeout), file: file, line: line)
         }
     }
 
