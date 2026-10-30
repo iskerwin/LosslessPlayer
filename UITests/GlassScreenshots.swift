@@ -2,6 +2,96 @@ import XCTest
 import UIKit
 
 final class GlassScreenshots: XCTestCase {
+    func testMiniPlayerSwipeUpReopens() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        try swipeMiniOpen(in: app)
+        app.buttons["收起播放器"].tap()
+        // Exercise the same gesture again after ownership returns to the host.
+        try swipeMiniOpen(in: app)
+    }
+
+    func testInlineMiniPlayerSwipeUpReopens() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-scrollableScreenshotLibrary"]
+        app.launch()
+        let songs = app.buttons["歌曲"]
+        XCTAssertTrue(songs.waitForExistence(timeout: 20))
+        songs.tap()
+        let list = app.descendants(matching: .any)["songs-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        _ = try readyMini(in: app)
+        list.swipeUp()
+        let mini = app.windows.descendants(matching: .any)
+            .matching(identifier: "mini-player").firstMatch
+        let compact = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in mini.exists && mini.frame.height < 45 }, object: nil)
+        wait(for: [compact], timeout: 5)
+        try swipeMiniOpen(in: app)
+    }
+
+    func testMiniPlayerButtonsAndTapReopen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let mini = try readyMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(mini.staticTexts["Apologize"].exists)
+        mini.buttons["播放"].tap()
+        XCTAssertTrue(mini.buttons["暂停"].waitForExistence(timeout: 5))
+        XCTAssertFalse(player.exists, "Mini play must not expand the player")
+        mini.buttons["暂停"].tap()
+        XCTAssertTrue(mini.buttons["播放"].waitForExistence(timeout: 5))
+        XCTAssertFalse(player.exists, "Mini pause must not expand the player")
+        mini.buttons["下一首"].tap()
+        XCTAssertTrue(mini.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        XCTAssertFalse(player.exists, "Mini skip must not expand the player")
+        try tapMini(in: app)
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+    }
+
+    func testQueueButtonShowsAndHidesQueue() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        try tapMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        let button = player.buttons["显示播放队列"]
+        let queue = player.scrollViews["now-playing-queue-scroll"]
+        XCTAssertFalse(queue.exists)
+        for _ in 0..<2 {
+            button.tap()
+            XCTAssertTrue(queue.waitForExistence(timeout: 5))
+            XCTAssertTrue(button.isSelected)
+            XCTAssertTrue(queue.staticTexts["接下来"].isHittable)
+            button.tap()
+            let hidden = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: queue)
+            wait(for: [hidden], timeout: 5)
+            XCTAssertFalse(button.isSelected)
+            XCTAssertTrue(player.exists)
+            XCTAssertTrue(player.buttons["下一首"].isHittable)
+        }
+    }
+
+    private func swipeMiniOpen(in app: XCUIApplication) throws {
+        let mini = try readyMini(in: app)
+        // Begin on the title, away from both transport buttons and screen edges.
+        let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8), "The mini host must deliver the upward drag")
+        XCTAssertTrue(player.buttons["收起播放器"].isHittable)
+        XCTAssertFalse(player.scrollViews["now-playing-queue-scroll"].exists)
+    }
+
     func testCaptureGlassScreens() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
