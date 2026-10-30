@@ -89,6 +89,20 @@ class ProofTests(unittest.TestCase):
         self.assertTrue(ci.proof_matches(self.proof(plan()), plan(head='merge', reason='other words')))
 
 
+class NotesTests(unittest.TestCase):
+    def test_preview_without_proof(self):
+        text = ci.notes('preview', None, None, 'abc')
+        self.assertIn('源码：abc。预览包只编译', text)
+        self.assertNotIn('测试范围', text)
+
+    def test_dev_reused_or_own_run(self):
+        reused = ci.notes('dev', plan(), {'url': 'https://x/1'}, 'abc')
+        self.assertIn('测试由 PR 检查完成并复用：https://x/1', reused)
+        self.assertIn('测试范围：r；基线 dev-155-2', reused)
+        own = ci.notes('dev', plan(), {'unit_passed': 3, 'ui_passed': 2}, 'abc')
+        self.assertIn('单元测试通过 3 项，界面测试通过 2 项', own)
+
+
 class SelectorTests(unittest.TestCase):
     def test_manual_selectors(self):
         for good in ('LosslessPlayerTests', 'LosslessPlayerTests/PlaybackTests',
