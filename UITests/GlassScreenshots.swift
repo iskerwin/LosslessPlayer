@@ -70,14 +70,14 @@ final class GlassScreenshots: XCTestCase {
             button.tap()
             XCTAssertTrue(queue.waitForExistence(timeout: 5))
             XCTAssertTrue(button.isSelected)
-            XCTAssertTrue(queue.staticTexts["接下来"].isHittable)
+            assertHittable(queue.staticTexts["接下来"], "Queue header must be hittable after showing the queue")
             button.tap()
             let hidden = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == false"), object: queue)
             wait(for: [hidden], timeout: 5)
             XCTAssertFalse(button.isSelected)
             XCTAssertTrue(player.exists)
-            XCTAssertTrue(player.buttons["下一首"].isHittable)
+            assertHittable(player.buttons["下一首"], "Next button must be hittable after hiding the queue")
         }
     }
 
@@ -87,8 +87,20 @@ final class GlassScreenshots: XCTestCase {
         let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
         let player = app.descendants(matching: .any)["now-playing"]
+        if !player.waitForExistence(timeout: 8) {
+            // A drag can be lost on a slow simulator, the same class as the
+            // lost scroll gesture already retried once in
+            // checkNativeBottomAccessory. Only retry after the full
+            // appearance budget expires, so a merely slow expansion is never
+            // double-dragged; re-resolve a stable mini first, then deliver
+            // the drag once more with the same full 8 s budget. The final
+            // gate below is unchanged.
+            let freshMini = try readyMini(in: app)
+            let retryStart = freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+            retryStart.press(forDuration: 0.1, thenDragTo: retryStart.withOffset(CGVector(dx: 0, dy: -100)))
+        }
         XCTAssertTrue(player.waitForExistence(timeout: 8), "The mini host must deliver the upward drag")
-        XCTAssertTrue(player.buttons["收起播放器"].isHittable)
+        assertHittable(player.buttons["收起播放器"], "Player collapse button must be hittable after swipe-up expand")
         XCTAssertFalse(player.scrollViews["now-playing-queue-scroll"].exists)
     }
 
@@ -174,9 +186,9 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(app.staticTexts["接下来"].exists)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(player.exists)
-        XCTAssertTrue(player.buttons["上一首"].isHittable)
-        XCTAssertTrue(player.buttons["下一首"].isHittable)
-        XCTAssertTrue(player.descendants(matching: .any)["playback-progress"].isHittable)
+        assertHittable(player.buttons["上一首"], "Previous button must be hittable")
+        assertHittable(player.buttons["下一首"], "Next button must be hittable")
+        assertHittable(player.descendants(matching: .any)["playback-progress"], "Progress control must be hittable")
         // A sub-threshold downward drag also stays in A, without a queue.
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 45)))
@@ -226,8 +238,17 @@ final class GlassScreenshots: XCTestCase {
             case "title":
                 // SwiftUI can export both title endpoints during presentation;
                 // target the visible text rather than requiring a unique label.
-                let title = try XCTUnwrap(artwork.staticTexts.matching(
-                    identifier: "Apologize").allElementsBoundByIndex.first { $0.isHittable })
+                // Pick the visible title with a non-recording wait, not a
+                // raw isHittable read: a transiently invalid frame during
+                // presentation would fatal the test instead of returning
+                // false. Semantics unchanged: tap the hittable title.
+                let titleCandidates = artwork.staticTexts.matching(
+                    identifier: "Apologize").allElementsBoundByIndex
+                let title = try XCTUnwrap(titleCandidates.first(where: { candidate in
+                    let expectation = XCTNSPredicateExpectation(
+                        predicate: NSPredicate(format: "hittable == true"), object: candidate)
+                    return XCTWaiter.wait(for: [expectation], timeout: 8) == .completed
+                }), "A hittable Apologize title must exist")
                 title.tap()
             case "background":
                 player.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
@@ -241,7 +262,7 @@ final class GlassScreenshots: XCTestCase {
             // test-start snapshot: the collapse transition can leave the
             // stale resolution facing a transiently invalid frame.
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable, "Tap on \(region) must collapse to the mini player")
+            assertMiniIsHittable(freshMini, "Tap on \(region) must collapse to the mini player")
         }
     }
 
@@ -343,7 +364,7 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertTrue(back.waitForExistence(timeout: 8))
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
-            XCTAssertTrue(app.tabBars.buttons["歌单"].isHittable)
+            assertHittable(app.tabBars.buttons["歌单"], "Playlist tab must be hittable after card return")
             let mini = try readyMini(in: app)
             XCTAssertTrue(mini.exists)
             // Use the List's existing accessibility node. NavigationStack
@@ -356,7 +377,7 @@ final class GlassScreenshots: XCTestCase {
             // large black gap above the mini player despite passing navigation.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable)
+            assertMiniIsHittable(freshMini)
             back.tap()
             let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
             wait(for: [returned], timeout: 8)
@@ -409,7 +430,7 @@ final class GlassScreenshots: XCTestCase {
             app.tabBars.buttons[tab].tap()
             let mini = try readyMini(in: app)
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable)
+            assertMiniIsHittable(freshMini)
             save(name)
         }
     }
@@ -461,7 +482,7 @@ final class GlassScreenshots: XCTestCase {
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
                 let freshMini = try readyMini(in: app)
-                XCTAssertTrue(freshMini.isHittable)
+                assertMiniIsHittable(freshMini)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
         }
@@ -474,6 +495,29 @@ final class GlassScreenshots: XCTestCase {
         save("\(appearance.lowercased())-bottom-return")
         // These captures prove placement and ownership only. A uniform backing
         // cannot reveal material transmission; device checks use varied content.
+    }
+
+    /// Same non-recording pattern as assertMiniIsHittable, for any element
+    /// read right after a transition: a transiently invalid frame counts as
+    /// not yet fulfilled, never as a fatal failure. The assertion is still
+    /// "hittable within the file's existing 8 s budget".
+    private func assertHittable(_ element: XCUIElement, _ message: String = "",
+                                file: StaticString = #filePath, line: UInt = #line) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 8), .completed,
+                       message, file: file, line: line)
+    }
+
+    /// A stable frame and hittability use separate AX snapshots. Predicate
+    /// evaluation treats a transiently invalid frame during accessory re-hosting
+    /// as not yet fulfilled; a raw isHittable query would record a fatal failure.
+    private func assertMiniIsHittable(_ mini: XCUIElement, _ message: String = "",
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: mini)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 8), .completed,
+                       message, file: file, line: line)
     }
 
     /// The native accessory can exist before XCTest exports its screen frame.
@@ -522,14 +566,17 @@ final class GlassScreenshots: XCTestCase {
                          line: UInt = #line) throws {
         let mini = try readyMini(in: app, file: file, line: line)
         // Use the ready frame's center instead of the accessory's AX activation point.
-        let firstTapTime = ProcessInfo.processInfo.systemUptime
         mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let player = app.descendants(matching: .any)["now-playing"]
         if !player.waitForExistence(timeout: 2) {
             let freshMini = try readyMini(in: app, file: file, line: line)
             freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            let remaining = max(0, 8 - (ProcessInfo.processInfo.systemUptime - firstTapTime))
-            XCTAssertTrue(player.waitForExistence(timeout: remaining), file: file, line: line)
+            // Each attempt gets the full appearance budget. Sharing the
+            // original 8 s across first tap and retry left no expand time
+            // after a lost first tap (run 41019339693: retry at 17.55 s,
+            // budget exhausted at 19.29 s). The assertion itself is
+            // unchanged: the player appears after tapping the mini.
+            XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
         }
     }
 
