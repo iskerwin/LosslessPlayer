@@ -357,6 +357,17 @@ final class GlassScreenshots: XCTestCase {
                 // MiniPlayer's explicit compact frame is 36 pt (wide >=56).
                 let compact = NSPredicate { _, _ in minis.firstMatch.frame.height < 45 }
                 let wide = NSPredicate { _, _ in minis.firstMatch.frame.height >= 55 }
+                // The scroll gesture itself can be lost on a slow simulator
+                // (run 40987569389 and run 40993662408 both saw this placement
+                // wait time out after a swipe down). Retry the GESTURE once
+                // with a non-recording wait first; the final gate is still
+                // the same 5 s wait on the same predicate, so a genuinely
+                // unmoved accessory still fails exactly as before.
+                let firstPlacement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
+                if XCTWaiter.wait(for: [firstPlacement], timeout: 5) != .completed {
+                    if upward { list.swipeUp() } else { list.swipeDown() }
+                    _ = try readyMini(in: app)
+                }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
                 let freshMini = try readyMini(in: app)
