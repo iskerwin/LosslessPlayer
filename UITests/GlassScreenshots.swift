@@ -120,7 +120,11 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(mini.waitForExistence(timeout: 20))
         // Cover coordinates target the actual image, not just the page margin.
         for region in ["artwork", "title", "background", "handle"] {
-            mini.tap()
+            // Use the retry-hardened tap: a raw mini.tap() loses the first
+            // tap when the player is still appearing (run 40987569389 :125,
+            // now-playing 8 s timeout), while tapMini retries within the
+            // same 8 s budget.
+            try tapMini(in: app)
             let player = app.descendants(matching: .any)["now-playing"]
             XCTAssertTrue(player.waitForExistence(timeout: 8))
             sleep(1)
@@ -143,7 +147,11 @@ final class GlassScreenshots: XCTestCase {
             let collapsed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == false"), object: player)
             wait(for: [collapsed], timeout: 8)
-            XCTAssertTrue(mini.isHittable, "Tap on \(region) must collapse to the mini player")
+            // Assert hittability on a freshly stabilized element, not on the
+            // test-start snapshot: the collapse transition can leave the
+            // stale resolution facing a transiently invalid frame.
+            let freshMini = try readyMini(in: app)
+            XCTAssertTrue(freshMini.isHittable, "Tap on \(region) must collapse to the mini player")
         }
     }
 
@@ -349,6 +357,17 @@ final class GlassScreenshots: XCTestCase {
                 // MiniPlayer's explicit compact frame is 36 pt (wide >=56).
                 let compact = NSPredicate { _, _ in minis.firstMatch.frame.height < 45 }
                 let wide = NSPredicate { _, _ in minis.firstMatch.frame.height >= 55 }
+                // The scroll gesture itself can be lost on a slow simulator
+                // (run 40987569389 and run 40993662408 both saw this placement
+                // wait time out after a swipe down). Retry the GESTURE once
+                // with a non-recording wait first; the final gate is still
+                // the same 5 s wait on the same predicate, so a genuinely
+                // unmoved accessory still fails exactly as before.
+                let firstPlacement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
+                if XCTWaiter.wait(for: [firstPlacement], timeout: 5) != .completed {
+                    if upward { list.swipeUp() } else { list.swipeDown() }
+                    _ = try readyMini(in: app)
+                }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
                 let freshMini = try readyMini(in: app)
@@ -369,22 +388,44 @@ final class GlassScreenshots: XCTestCase {
 
     /// The native accessory can exist before XCTest exports its screen frame.
     /// Resolve through the window host and wait before reading geometry or tapping.
+    ///
+    /// Do not evaluate isHittable inside this wait. XCTest resolves isHittable
+    /// through the accessibility snapshot, and a transiently invalid frame
+    /// (seen during scroll/expand/collapse transitions) raises "Failed to
+    /// determine hittability" as a fatal error instead of returning false.
+    /// The old frame guard could not prevent that: frame and isHittable are
+    /// separate snapshot queries, so the frame can be valid at the guard and
+    /// invalid at the isHittable evaluation. Instead, wait for a STABLE
+    /// frame — two consecutive reads, 0.25 s apart, that are finite,
+    /// nonempty, and equal — within the same 20 s budget. Callers still
+    /// assert hittability on the returned, settled element.
     private func readyMini(in app: XCUIApplication, file: StaticString = #filePath,
                            line: UInt = #line) throws -> XCUIElement {
         let mini = app.windows.descendants(matching: .any)
             .matching(identifier: "mini-player").firstMatch
-        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard mini.exists else { return false }
-            let frame = mini.frame
-            guard frame.origin.x.isFinite, frame.origin.y.isFinite,
-                  frame.width.isFinite, frame.height.isFinite,
-                  frame.width > 0, frame.height > 0 else { return false }
-            return mini.isHittable
-        }, object: nil)
-        let result = XCTWaiter.wait(for: [ready], timeout: 20)
-        return try XCTUnwrap(result == .completed ? mini : nil,
-                            "Mini accessory must have a finite, nonempty frame and be hittable",
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if mini.exists {
+                let first = mini.frame
+                if isValidMiniFrame(first) {
+                    Thread.sleep(forTimeInterval: 0.25)
+                    let second = mini.frame
+                    if second == first {
+                        return mini
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return try XCTUnwrap(nil as XCUIElement?,
+                            "Mini accessory must have a finite, nonempty, stable frame",
                             file: file, line: line)
+    }
+
+    private func isValidMiniFrame(_ frame: CGRect) -> Bool {
+        frame.origin.x.isFinite && frame.origin.y.isFinite
+            && frame.width.isFinite && frame.height.isFinite
+            && frame.width > 0 && frame.height > 0
     }
 
     private func tapMini(in app: XCUIApplication, file: StaticString = #filePath,
