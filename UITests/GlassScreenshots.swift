@@ -112,6 +112,9 @@ final class GlassScreenshots: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["library-home"].waitForExistence(timeout: 20))
+        // The fixture is six songs on one album: the Recently Added count
+        // describes the album grid beneath it, not the whole library.
+        XCTAssertTrue(app.staticTexts["1 张专辑"].exists)
         _ = try readyMini(in: app)
         save("library")
 
@@ -145,6 +148,10 @@ final class GlassScreenshots: XCTestCase {
         try tapMini(in: app)
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         sleep(1)
+        // The fixture is WAV, so the badge beside the artist reads Lossless.
+        let badge = app.descendants(matching: .any)["now-playing"].buttons["quality-badge"]
+        XCTAssertTrue(badge.exists)
+        XCTAssertEqual(badge.label, "音质 Lossless")
         save("now-playing")
     }
 
@@ -524,10 +531,9 @@ final class GlassScreenshots: XCTestCase {
         // cannot reveal material transmission; device checks use varied content.
     }
 
-    /// Same non-recording pattern as assertMiniIsHittable, for any element
-    /// read right after a transition: a transiently invalid frame counts as
-    /// not yet fulfilled, never as a fatal failure. The assertion is still
-    /// "hittable within the file's existing 8 s budget".
+    /// "Hittable within the file's existing 8 s budget" for ordinary
+    /// elements. A predicate wait does not shield an invalidated AX node
+    /// from being recorded as a failure; the mini uses assertMiniIsHittable.
     private func assertHittable(_ element: XCUIElement, _ message: String = "",
                                 file: StaticString = #filePath, line: UInt = #line) {
         let hittable = XCTNSPredicateExpectation(
@@ -536,16 +542,39 @@ final class GlassScreenshots: XCTestCase {
                        message, file: file, line: line)
     }
 
-    /// A stable frame and hittability use separate AX snapshots. Pass a
-    /// settled mini: even inside this predicate wait, a transiently invalid
-    /// frame during accessory re-hosting records "Failed to determine
-    /// hittability" (run 41093669072, after a detail card's back navigation).
+    /// True while `assertMiniIsHittable` probes; see `record(_:)`.
+    private var probingMini = false
+    private var miniProbeFaulted = false
+
+    /// While the bottom accessory re-hosts the mini (after a detail card's
+    /// back navigation it flips between 48 and 56 pt), its AX node is
+    /// invalidated: the frame read fails with kAXErrorInvalidUIElement and
+    /// comes back {inf, inf}. XCTest records that as "Failed to determine
+    /// hittability", even inside a predicate wait, 1.5 s after a settled
+    /// frame (run 41137504605). During a probe that issue means "not yet";
+    /// every other issue is recorded as usual.
+    override func record(_ issue: XCTIssue) {
+        if probingMini, issue.compactDescription.contains("Failed to determine hittability of \"mini-player\"") {
+            miniProbeFaulted = true
+            return
+        }
+        super.record(issue)
+    }
+
+    /// Hittable within 8 s, as before; a probe that hits an invalidated
+    /// node is retried instead of failing the test.
     private func assertMiniIsHittable(_ mini: XCUIElement, _ message: String = "",
                                       file: StaticString = #filePath, line: UInt = #line) {
-        let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == true"), object: mini)
-        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 8), .completed,
-                       message, file: file, line: line)
+        let deadline = ProcessInfo.processInfo.systemUptime + 8
+        repeat {
+            probingMini = true
+            miniProbeFaulted = false
+            let hittable = mini.isHittable
+            probingMini = false
+            if hittable && !miniProbeFaulted { return }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        XCTFail(message.isEmpty ? "Mini player must be hittable" : message, file: file, line: line)
     }
 
     /// The native accessory can exist before XCTest exports its screen frame.
