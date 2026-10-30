@@ -5,3 +5,8 @@ xcuserdata/
 *.xcresult/
 LosslessPlayer.xcodeproj/
 App/Info.plist
+.ship/
+dist/
+build/
+*.log
+__pycache__/

@@ -379,7 +379,7 @@ struct SongMenuPreview: View {
                 Text(track.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
                 Text(track.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 2) {
-                    Text(track.album).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Text(track.albumTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.tertiary)

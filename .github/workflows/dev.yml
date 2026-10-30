@@ -1,0 +1,56 @@
+name: Lossless Dev
+run-name: 'Dev · ${{ github.ref_name }}'
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+# Dev and Preview share one lock: both update apps.json. A running publication
+# is never cancelled; only the newest queued one is kept.
+concurrency:
+  group: lossless-publication
+  cancel-in-progress: false
+jobs:
+  refuse:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse publication off main
+        run: |
+          echo '开发版只能发布 main：Run workflow 的 Branch 请选择 main'
+          exit 1
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure bot identity for apps.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Static checks and tool tests
+        run: python3 tools/ci.py check
+      - name: Reuse PR proof or test, then build and publish
+        run: python3 tools/ci.py dev
+      - name: Keep logs, results and package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-dev-${{ github.run_id }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            .ship/
+            *.log
+            TestResults.xcresult
+            build/UIResults.xcresult
+            build/screenshots
+            dist/

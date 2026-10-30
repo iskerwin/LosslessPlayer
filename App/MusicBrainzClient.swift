@@ -82,6 +82,15 @@ actor MusicBrainzClient {
             .nilIfEmpty
     }
 
+    /// The release's own front cover, else the cover CAA picks for its release
+    /// group (another edition of the same album).
+    func frontCover(for candidate: ReleaseCandidate) async throws -> Data? {
+        if let data = try await frontCover(releaseMBID: candidate.releaseMBID) { return data }
+        guard let group = candidate.releaseGroupMBID, UUID(uuidString: group) != nil else { return nil }
+        return try await request(URL(string: "https://coverartarchive.org/release-group/\(group)/front-500")!, missingIsEmpty: true)
+            .nilIfEmpty
+    }
+
     private func acquire() async {
         if busy { await withCheckedContinuation { waiters.append($0) } }
         else { busy = true }

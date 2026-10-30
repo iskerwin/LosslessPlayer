@@ -1,0 +1,99 @@
+name: Lossless CI
+run-name: "${{ github.event_name == 'pull_request' && format('CI · PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'CI · 每周全量 · main' || format('CI · 手动测试 · {0}', github.ref_name) }}"
+on:
+  pull_request:
+    branches: [main]
+  # Sunday 22:00 Beijing: the full suite on main, verify only, so what PR
+  # selection misses is found within a week. Publishes nothing.
+  schedule:
+    - cron: '0 14 * * 0'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: '全量（only 留空时也按全量）'
+        type: boolean
+        default: true
+      only:
+        description: '只跑指定测试：Target/Class[/method]，空格分隔；例 LosslessPlayerUITests/GlassScreenshots'
+        default: ''
+permissions:
+  contents: read
+# One PR keeps only its newest check. Nothing here publishes, so cancelling is safe.
+concurrency:
+  group: lossless-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  gate:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Static checks and tool tests
+        run: python3 tools/ci.py check
+      - name: Same plan and executor as Dev, on the PR merge result
+        run: python3 tools/ci.py gate
+      # Dev reuses this when main becomes this same tree with the same plan.
+      - name: Keep PR proof
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-pr-proof-${{ github.run_id }}
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error
+          path: .ship/proof.json
+      - name: Keep logs, results and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-pr-${{ github.run_id }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            .ship/
+            *.log
+            TestResults.xcresult
+            build/UIResults.xcresult
+            build/screenshots
+  test:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Static checks and tool tests
+        run: python3 tools/ci.py check
+      - name: Run tests (verify only)
+        env:
+          FULL: ${{ github.event_name == 'schedule' || inputs.full }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ONLY}" ] && [ "${FULL}" != "true" ]; then
+            read -r -a selectors <<< "${ONLY}"
+            python3 tools/ci.py test --only "${selectors[@]}"
+          else
+            python3 tools/ci.py test --full
+          fi
+      - name: Keep logs, results and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-test-${{ github.run_id }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            .ship/
+            *.log
+            TestResults.xcresult
+            build/UIResults.xcresult
+            build/screenshots
