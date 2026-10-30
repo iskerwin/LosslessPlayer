@@ -5,6 +5,23 @@ import UIKit
 
 @MainActor
 final class PlayerCardRenderingTests: XCTestCase {
+    func testSongRowHeightIs56PointsAndGrowsWithDynamicType() throws {
+        let track = Track(id: UUID(), filename: "row.wav", title: "Song", artist: "Artist",
+                          album: "Album", duration: 1, sampleRate: 44100, bitDepth: 16)
+        func height(at size: DynamicTypeSize) throws -> Int {
+            let renderer = ImageRenderer(content:
+                SongRow(track: track, root: FileManager.default.temporaryDirectory)
+                    .environment(\.dynamicTypeSize, size)
+                    .frame(width: 320)
+                    .fixedSize(horizontal: false, vertical: true)
+            )
+            renderer.scale = 1
+            return try XCTUnwrap(renderer.cgImage).height
+        }
+        XCTAssertEqual(try height(at: .large), 56)
+        XCTAssertGreaterThan(try height(at: .accessibility5), 56)
+    }
+
     // Draw into the full-size bitmap before indexing top-left image rows.
     // Translating the image into a one-pixel CGContext instead samples in
     // Core Graphics' bottom-left coordinates, away from a collapsed card.

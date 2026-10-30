@@ -117,6 +117,7 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(songs.waitForExistence(timeout: 8))
         songs.tap()
         XCTAssertTrue(app.descendants(matching: .any)["songs-list"].waitForExistence(timeout: 8))
+        try assertCompactSongRows(app.descendants(matching: .any)["songs-list"])
         save("songs")
         app.descendants(matching: .any)["songs-list"].swipeUp()
         save("songs-scrolled-glass")
@@ -133,6 +134,7 @@ final class GlassScreenshots: XCTestCase {
             playlist.tap()
         }
         XCTAssertTrue(app.descendants(matching: .any)["playlist-detail"].waitForExistence(timeout: 8))
+        try assertCompactSongRows(app.descendants(matching: .any)["playlist-detail"])
         save("playlist")
         app.descendants(matching: .any)["playlist-detail"].swipeUp()
         save("playlist-scrolled-continuity")
@@ -578,6 +580,19 @@ final class GlassScreenshots: XCTestCase {
             // unchanged: the player appears after tapping the mini.
             XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
         }
+    }
+
+    /// Measure actual List cells, including any system insets outside SongRow.
+    private func assertCompactSongRows(_ list: XCUIElement) throws {
+        let rows = list.cells.allElementsBoundByIndex
+            .filter { $0.buttons["更多操作"].exists }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 2)
+        let first = try XCTUnwrap(rows.first)
+        let second = try XCTUnwrap(rows.dropFirst().first)
+        XCTAssertEqual(first.frame.height, 56, accuracy: 0.5)
+        XCTAssertEqual(second.frame.minY - first.frame.minY, 56, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(first.frame.height, 44)
     }
 
     /// Sample empty row margins: the blue cover wash must remain visible.

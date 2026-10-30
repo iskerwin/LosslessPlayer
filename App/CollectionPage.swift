@@ -119,8 +119,9 @@ struct CollectionPage: View {
                     }
                     .tint(MusicTheme.accent)
                 }
-                // Set this at the List row boundary, outside EquatableView
-                // and swipe actions, so the system row fill cannot mask the page.
+                // List traits must be on the row boundary, outside EquatableView
+                // and swipe actions. Inner insets leave the system's vertical padding.
+                .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             }
             .onMove { offsets, destination in
