@@ -81,7 +81,13 @@ enum ScreenshotFixture {
     }
 
     private static func wavData() -> Data {
-        let frames = 44100 * 8
+        // Skips autoplay, so a short file advances to the next track while a
+        // UI test is still asserting the current title (run 41035473576:
+        // 8 s files rolled "Stop and Stare" over to "Mercy"). 60 s outlasts
+        // any test; 8 kHz keeps the 30-track scroll fixture near 29 MB.
+        // Displayed rates come from Track metadata, not from this file.
+        let rate = 8000
+        let frames = rate * 60
         let dataSize = frames * 2
         var data = Data()
         func append32(_ value: UInt32) {
@@ -99,8 +105,8 @@ enum ScreenshotFixture {
         append32(16)
         append16(1)
         append16(1)
-        append32(44100)
-        append32(88200)
+        append32(UInt32(rate))
+        append32(UInt32(rate * 2))
         append16(2)
         append16(16)
         data.append(contentsOf: "data".utf8)

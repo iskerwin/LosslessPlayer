@@ -52,26 +52,7 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(player.exists, "Mini skip must not expand the player")
         try tapMini(in: app)
         XCTAssertTrue(player.waitForExistence(timeout: 8))
-        // The player exists in AX as soon as expansion starts. Run
-        // 41015787137 failed the title check after the player existed;
-        // run 41023538843 failed it again even with the close button
-        // already hittable (morph complete), so the lag is in the title's
-        // own artwork-stage subtree reaching AX, not in the morph. Gate
-        // the title check on that subtree itself: wait, without asserting,
-        // for the artwork stage to exist, then resolve the player fresh
-        // (the reference above predates expansion) for the title query.
-        // This is a readiness gate, not a longer budget: the title
-        // assertion and its 5 s budget below are unchanged, so a
-        // genuinely missing title still fails there.
-        let closeHittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in player.buttons["收起播放器"].isHittable }, object: nil)
-        _ = wait(for: [closeHittable], timeout: 5)
-        let stageExists = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true"),
-            object: player.descendants(matching: .any)["now-playing-artwork"])
-        _ = wait(for: [stageExists], timeout: 5)
-        let freshPlayer = app.descendants(matching: .any)["now-playing"]
-        XCTAssertTrue(freshPlayer.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+        XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
     }
 
     func testQueueButtonShowsAndHidesQueue() throws {
