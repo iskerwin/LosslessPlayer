@@ -445,6 +445,24 @@ struct NowPlayingView: View {
 
     private var titleBlock: some View { titleBlock(compact: false) }
 
+    /// File quality at a glance; the full playback path stays in 歌曲信息.
+    private func qualityBadge(_ track: Track) -> some View {
+        Button { details = true } label: {
+            Text(track.qualityBadge)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.white.opacity(0.16), in: Capsule())
+                .fixedSize()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("音质 \(track.qualityBadge)")
+        .accessibilityHint("显示歌曲信息")
+        .accessibilityIdentifier("quality-badge")
+    }
+
     private func titleBlock(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
@@ -455,16 +473,21 @@ struct NowPlayingView: View {
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .multilineTextAlignment(.leading)
                     if let current {
-                        Button {
-                            onOpen(.artist(current.primaryArtist))
-                            onClose()
-                        } label: {
-                            Text(current.artist)
-                                .font(compact ? .subheadline : .title3)
-                                .foregroundStyle(.white.opacity(0.6))
-                                .lineLimit(1)
+                        HStack(spacing: 8) {
+                            Button {
+                                onOpen(.artist(current.primaryArtist))
+                                onClose()
+                            } label: {
+                                Text(current.artist)
+                                    .font(compact ? .subheadline : .title3)
+                                    .foregroundStyle(.white.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
+                            // Beside the artist, not on its own row, so the title
+                            // block keeps the height the artwork stage reserves.
+                            if !compact { qualityBadge(current) }
                         }
-                        .buttonStyle(.plain)
                     } else {
                         Text("选择一首歌曲").font(.title3).foregroundStyle(.white.opacity(0.6))
                     }

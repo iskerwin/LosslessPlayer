@@ -141,6 +141,10 @@ final class GlassScreenshots: XCTestCase {
         try tapMini(in: app)
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         sleep(1)
+        // The fixture is WAV, so the badge beside the artist reads Lossless.
+        let badge = app.descendants(matching: .any)["now-playing"].buttons["quality-badge"]
+        XCTAssertTrue(badge.exists)
+        XCTAssertEqual(badge.label, "音质 Lossless")
         save("now-playing")
     }
 
