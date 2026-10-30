@@ -495,8 +495,29 @@ final class GlassScreenshots: XCTestCase {
                 }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
-                // Settled frame (#45) plus non-recording predicate wait (#46):
-                // the frame must hold still before hittability is evaluated.
+                // After a scroll the system accessory can detach/reattach
+                // mid-restore, so a frame that reads equal twice can still
+                // be transient when isHittable is evaluated (run
+                // 41015787137: the wide placement was achieved, then
+                // "Activation point invalid"; run 41021623911: the same
+                // raise after a 0.75 s stable frame). Frame stability
+                // alone cannot observe the placement flip rebuilding the
+                // mini's children (compact drops the skip button and the
+                // artist). Wait for the settled child set, then require
+                // the frame to hold still again, before asserting
+                // hittability; the assertion itself is unchanged, and
+                // these waits are gates only, like the placement waits.
+                _ = try readySettledMini(in: app)
+                let settledMini = app.windows.descendants(matching: .any)
+                    .matching(identifier: "mini-player").firstMatch
+                if upward {
+                    let skipGone = XCTNSPredicateExpectation(
+                        predicate: NSPredicate(format: "exists == false"),
+                        object: settledMini.buttons["下一首"])
+                    _ = wait(for: [skipGone], timeout: 5)
+                } else {
+                    _ = settledMini.buttons["下一首"].waitForExistence(timeout: 5)
+                }
                 let freshMini = try readySettledMini(in: app)
                 assertMiniIsHittable(freshMini)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
