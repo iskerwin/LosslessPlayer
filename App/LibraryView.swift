@@ -19,8 +19,8 @@ struct LibraryView: View {
     @State private var detailGeneration = 0
     @State private var searchFieldFocused = false
     @State private var showPlayer = false
-    /// Only the expensive expanded content unmounts at rest. The card and
-    /// its collapsed row persist through both directions of the transition.
+    /// The overlay owns player travel; the native accessory owns the resting
+    /// mini. Completion transfers ownership in one update.
     @State private var playerMounted = false
     @State private var playerProgress: CGFloat = 0
     @State private var miniSlot = PlayerMiniSlot()
@@ -56,7 +56,7 @@ struct LibraryView: View {
             playerTabs
                 .accessibilityHidden(showPlayer)
                 .overlay(alignment: .topLeading) {
-                    if player.current != nil, miniFrame.width > 0 {
+                    if player.current != nil, playerMounted, miniFrame.width > 0 {
                         PlayerCard(progress: playerProgress, miniFrame: miniFrame,
                                    expandedFrame: expandedFrame, reduceMotion: reduceMotion,
                                    canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
@@ -153,9 +153,17 @@ struct LibraryView: View {
             message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
     }
 
-    /// The system accessory reserves the slot; the persistent card owns
-    /// all visible player content, even at progress zero.
-    private var miniPlayer: some View { PlayerMiniSlotView(onMeasure: receiveMiniSlot) }
+    /// At rest the native host owns the visible mini and its scroll animation.
+    /// The overlay owns it only during player presentation, with one handover
+    /// at animation completion. There is no detached glass surface at rest.
+    private var miniPlayer: some View {
+        PlayerMiniSlotView(onMeasure: receiveMiniSlot) { compact in
+            MiniPlayer(library: library, player: player, compact: compact) { setPlayer(true) }
+                .opacity(playerMounted ? 0 : 1)
+                .allowsHitTesting(!playerMounted)
+                .accessibilityHidden(playerMounted)
+        }
+    }
 
     private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
         guard slot.frame.width > 0, slot.frame.height > 0, slot != miniSlot else { return }
@@ -188,7 +196,7 @@ struct LibraryView: View {
             Tab("资料库", systemImage: "square.stack", value: AppTab.library) { libraryStack }
             Tab("歌单", systemImage: "music.note.list", value: AppTab.playlists) { playlistStack }
             Tab("收藏", systemImage: "star.fill", value: AppTab.favorites) { favoritesStack }
-            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: .search) { searchStack }
+            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { searchStack }
         }
         .searchReselect(title: "搜索") { searchFieldFocused = true }
     }
@@ -624,8 +632,8 @@ struct LibraryView: View {
         if let source = detailSource, detailTab == owner {
             GeometryReader { geometry in
                 let origin = geometry.frame(in: .global).origin
-                // The tab host has already reserved its bottom chrome. Do not
-                // subtract that inset again from the available detail surface.
+                // This reader includes the safe areas: the card clip must cover
+                // the status bar and translucent bottom chrome as well as the list.
                 let expanded = CGRect(origin: .zero, size: geometry.size)
                 let localSource = DetailCardSource(route: source.route,
                     frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
@@ -649,6 +657,7 @@ struct LibraryView: View {
                 .allowsHitTesting(detailProgress == 1 && !detailTransitioning)
                 .accessibilityIdentifier("detail-card")
             }
+            .ignoresSafeArea(.container)
         }
     }
 

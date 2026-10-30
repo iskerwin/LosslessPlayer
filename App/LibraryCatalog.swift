@@ -46,9 +46,9 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 }
 
 enum AudioTags {
-    static let catalogVersion = 3
+    static let catalogVersion = 4
 
-    enum Role: Equatable { case track, disc, artist, artists, albumArtist, genre, year, compilation }
+    enum Role: Equatable { case track, disc, artist, artists, album, albumArtist, genre, year, compilation }
 
     static func role(for key: String) -> Role? {
         let value = key.lowercased()
@@ -56,6 +56,7 @@ enum AudioTags {
         if value.hasSuffix("disk") || value.hasSuffix("tpos") || value.hasSuffix("discnumber") || value.hasSuffix("/disc") || value.contains("disc number") { return .disc }
         if value.hasSuffix("aart") || value.hasSuffix("tpe2") || value.contains("albumartist") || value.contains("album artist") { return .albumArtist }
         let leaf = value.split(separator: "/").last.map(String.init) ?? value
+        if ["album", "talb", "©alb", "iprd"].contains(leaf) || value.hasSuffix(":album") { return .album }
         if leaf == "artists" || value.hasSuffix(":artists") { return .artists }
         if ["artist", "artis", "tpe1", "©art"].contains(leaf) || value.hasSuffix(":artis") { return .artist }
         if value.hasSuffix("©gen") || value.hasSuffix("/gen") || value.hasSuffix("tcon") || value.hasSuffix("genre") { return .genre }

@@ -13,6 +13,16 @@ final class ArtistTagTests: XCTestCase {
                        ["Ada", "Bea", "AC/DC", "Earth, Wind & Fire"])
     }
 
+    func testFormatSpecificAlbumIdentifiersDoNotConsumeAlbumArtist() {
+        for key in ["id3/TALB", "itsk/©alb", "vorbis/ALBUM", "riff/IPRD"] {
+            XCTAssertEqual(AudioTags.role(for: key), .album, key)
+        }
+        for key in ["id3/TPE2", "itsk/aART", "vorbis/ALBUMARTIST", "vorbis/ALBUM ARTIST"] {
+            XCTAssertEqual(AudioTags.role(for: key), .albumArtist, key)
+        }
+        XCTAssertNil(AudioTags.role(for: "vorbis/NOT_AN_ALBUM"))
+    }
+
     func testVorbisCommentsPreserveRepeatedArtistsAndRejectTruncation() {
         var data = Data()
         func integer(_ value: Int) { var little = UInt32(value).littleEndian; withUnsafeBytes(of: &little) { data.append(contentsOf: $0) } }
