@@ -469,9 +469,9 @@ final class MusicBrainzTests: XCTestCase {
 
     func testAutomaticAlbumPrefersOfficialStudioAlbumAndNeverGuesses() throws {
         struct Results: Decodable { var recordings: [MusicBrainzRecording] }
-        func candidates(_ releases: [[String: Any]], album: String = "未知专辑", title: String = "Song") throws -> [ReleaseCandidate] {
+        func candidates(_ releases: [[String: Any]], album: String = "未知专辑", title: String = "Song") -> [ReleaseCandidate] {
             var track = localTrack(); track.album = album
-            let results = try JSONDecoder().decode(Results.self, from: search(releases, title: title))
+            let results = try! JSONDecoder().decode(Results.self, from: search(releases, title: title))
             return ReleaseMatching.candidates(for: track, recordings: results.recordings)
         }
         let mixed = [
