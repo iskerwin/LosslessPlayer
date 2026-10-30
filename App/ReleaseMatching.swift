@@ -44,6 +44,7 @@ struct ReleaseCandidate: Identifiable, Equatable, Sendable {
     var album: String
     var albumArtist: String
     var year: Int?
+    var genre: String? = nil
     var date: String?
     var country: String?
     var disambiguation: String?
@@ -113,9 +114,13 @@ enum ReleaseMatching {
         updated.title = candidate.title
         updated.artist = candidate.artist
         updated.artists = [candidate.artist]
-        updated.album = candidate.album
-        updated.albumArtist = candidate.albumArtist
-        if let year = candidate.year { updated.year = year }
+        if !known(track.album) { updated.album = candidate.album }
+        if track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+           !candidate.albumArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.albumArtist = candidate.albumArtist
+        }
+        if track.year == nil { updated.year = candidate.year }
+        if track.genre == nil { updated.genre = candidate.genre }
         updated.musicBrainzReleaseMBID = candidate.releaseMBID
         updated.musicBrainzRecordingMBID = candidate.recordingMBID
         return updated

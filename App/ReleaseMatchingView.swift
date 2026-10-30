@@ -6,6 +6,8 @@ struct ReleaseMatchingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var candidates: [ReleaseCandidate] = []
     @State private var selected: ReleaseCandidate?
+    @State private var loadingGenre = false
+    @State private var genreOperation: Task<Void, Never>?
     @State private var working = false
     @State private var searched = false
     @State private var message: String?
@@ -31,7 +33,7 @@ struct ReleaseMatchingView: View {
                 if !candidates.isEmpty && !saved {
                     Section("选择候选（\(candidates.count)）") {
                         ForEach(candidates) { candidate in
-                            Button { selected = candidate } label: {
+                            Button { select(candidate) } label: {
                                 VStack(alignment: .leading, spacing: 5) {
                                     HStack {
                                         Text(candidate.album).font(.headline)
@@ -53,13 +55,25 @@ struct ReleaseMatchingView: View {
                     Section("确认改动（仅此曲目）") {
                         change("标题", track.title, selected.title)
                         change("艺术家", track.artist, selected.artist)
-                        change("专辑", track.album, selected.album)
-                        change("专辑艺术家", track.albumArtist ?? "未填写", selected.albumArtist)
-                        change("年份", track.year.map(String.init) ?? "未填写", (selected.year ?? track.year).map(String.init) ?? "未填写")
+                        if ReleaseMatching.known(track.album) {
+                            Text("保留现有专辑：\(track.album)")
+                        } else {
+                            change("专辑", "未知专辑", selected.album)
+                        }
+                        fillChange("专辑艺术家", track.albumArtist, selected.albumArtist, emptyIsMissing: true)
+                        fillChange("年份", track.year.map(String.init), selected.year.map(String.init))
+                        if loadingGenre {
+                            ProgressView("风格：取数中…")
+                        } else {
+                            fillChange("风格", track.genre, selected.genre)
+                            if track.genre == nil && selected.genre == nil {
+                                Text("无可用风格，保持未填写。").font(.footnote)
+                            }
+                        }
                         Text(track.artworkFilename == nil ? "若有 front 封面则补充；无封面时保持原状。" : "保留已有封面。")
                             .font(.footnote)
                         Button("确认并应用到资料库") { apply(selected) }
-                            .disabled(working || library.importing)
+                            .disabled(working || loadingGenre || library.importing)
                     }
                 }
                 if saved {
@@ -76,13 +90,45 @@ struct ReleaseMatchingView: View {
             } }
             .interactiveDismissDisabled(working)
         }
-        .onDisappear { operation?.cancel() }
+        .onDisappear { operation?.cancel(); genreOperation?.cancel() }
     }
 
     private func change(_ name: String, _ old: String, _ new: String) -> some View {
         VStack(alignment: .leading) {
             Text(name).font(.caption).foregroundStyle(.secondary)
             Text("\(old) → \(new)")
+        }
+    }
+
+    private func fillChange(_ name: String, _ old: String?, _ new: String?, emptyIsMissing: Bool = false) -> some View {
+        VStack(alignment: .leading) {
+            Text(name).font(.caption).foregroundStyle(.secondary)
+            if let old, !(emptyIsMissing && old.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                Text("保留现有：\(old)")
+            } else if let new, !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("未填写 → \(new)")
+            } else {
+                Text("保持未填写")
+            }
+        }
+    }
+
+    private func select(_ candidate: ReleaseCandidate) {
+        genreOperation?.cancel()
+        selected = candidate
+        loadingGenre = track.genre == nil
+        guard loadingGenre else { return }
+        genreOperation = Task { @MainActor in
+            do {
+                let reviewed = try await MusicBrainzClient.shared.candidateForReview(candidate, track: track)
+                try Task.checkCancellation()
+                selected = reviewed
+                loadingGenre = false
+            } catch {
+                // A cancelled selection must never replace the newly selected candidate.
+                guard !Task.isCancelled else { return }
+                loadingGenre = false
+            }
         }
     }
 
@@ -99,6 +145,7 @@ struct ReleaseMatchingView: View {
     }
 
     private func apply(_ candidate: ReleaseCandidate) {
+        guard !loadingGenre else { return }
         working = true; message = nil
         operation = Task { @MainActor in
             defer { working = false }
