@@ -17,6 +17,7 @@ final class LibraryStore: ObservableObject {
     private var job: Task<Void, Never>?
     private var attemptedCatalogMigration = false
     private var catalogMigrationJob: Task<Void, Never>?
+    private var albumLookupJob: Task<Void, Never>?
     private var indexURL: URL { root.appendingPathComponent("library.json") }
     private var backupURL: URL { root.appendingPathComponent("library.backup.json") }
     private var playbackURL: URL { root.appendingPathComponent("playback.json") }
@@ -232,7 +233,7 @@ final class LibraryStore: ObservableObject {
         var coverNotice: String?
         if track.artworkFilename == nil {
             do {
-                if let data = try await client.frontCover(releaseMBID: candidate.releaseMBID) {
+                if let data = try await client.frontCover(for: candidate) {
                     try Task.checkCancellation()
                     artwork = await scanner.storeThumbnail(data: data)
                     if artwork == nil { coverNotice = "信息已保存；封面无法读取，保持无封面。" }
@@ -256,6 +257,81 @@ final class LibraryStore: ObservableObject {
         }
         musicBrainzNotice = coverNotice
         return true
+    }
+
+    /// The 自动补全专辑与封面 switch in 音乐文件夹. On unless the user turned it off.
+    static let albumLookupKey = "autoAlbumLookup"
+    private var albumLookupEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.albumLookupKey) as? Bool ?? true
+    }
+
+    /// Starts the background lookup unless one is already running; a running
+    /// one picks up songs added since, as it re-reads the library each step.
+    func startAlbumLookup(client: MusicBrainzClient = .shared) {
+        guard !ScreenshotFixture.enabled, albumLookupEnabled, albumLookupJob == nil else { return }
+        albumLookupJob = Task {
+            await lookUpAlbums(client: client)
+            albumLookupJob = nil
+        }
+    }
+
+    /// The next song to ask MusicBrainz about: one with no album tag, or one
+    /// whose album has no artwork on any of its songs. Each is asked once.
+    private func nextAlbumLookup() -> Track? {
+        let covered = Set(tracks.filter { $0.artworkFilename != nil }.map(\.albumID))
+        return tracks.first {
+            $0.available && $0.albumLookedUp != true && ReleaseMatching.known($0.title)
+                && ReleaseMatching.known($0.artist) && (!$0.hasAlbum || !covered.contains($0.albumID))
+        }
+    }
+
+    /// Fills what tags left blank, one song per MusicBrainz request: an
+    /// untagged song gets the album `ReleaseMatching.automaticAlbum` picks, and
+    /// an album with no artwork gets its Cover Art Archive front. Nothing found
+    /// leaves the song a single named after itself, with the placeholder
+    /// cover. Network failures stop without marking, so the next launch
+    /// retries. Turning the switch off stops it after the current song.
+    /// Only the app catalog and thumbnail cache are written.
+    func lookUpAlbums(client: MusicBrainzClient = .shared) async {
+        while !Task.isCancelled, albumLookupEnabled {
+            while importing {
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            }
+            guard let track = nextAlbumLookup() else { return }
+            let fillsAlbum = !track.hasAlbum
+            let release: ReleaseCandidate?
+            do {
+                let candidates = try await client.candidates(for: track)
+                release = fillsAlbum ? ReleaseMatching.automaticAlbum(candidates) : ReleaseMatching.automaticCover(candidates)
+            } catch { return }
+            let updated = release.map { fillsAlbum ? ReleaseMatching.fillingAlbum($0, to: track) : track } ?? track
+            var artwork: String?
+            if let release, track.artworkFilename == nil,
+               !tracks.contains(where: { $0.albumID == updated.albumID && $0.artworkFilename != nil }) {
+                do {
+                    if let data = try await client.frontCover(for: release) {
+                        artwork = await scanner.storeThumbnail(data: data)
+                    }
+                } catch { return }
+            }
+            // A scan or edit during the requests wins; the song is asked again from its new state.
+            guard !Task.isCancelled, !importing, trackByID[track.id] == track else {
+                if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
+                continue
+            }
+            var s = snapshot
+            for i in s.tracks.indices where s.tracks[i].id == track.id
+                || (!fillsAlbum && s.tracks[i].albumID == track.albumID) {
+                if s.tracks[i].id == track.id { s.tracks[i] = updated }
+                if s.tracks[i].artworkFilename == nil, let artwork { s.tracks[i].artworkFilename = artwork }
+                s.tracks[i].albumLookedUp = true
+            }
+            if !persist(s) {
+                if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
+                return
+            }
+            if artwork != nil { ArtworkCache.shared.removeAll() }
+        }
     }
 
     func toggleFavorite(_ track: Track) {
@@ -549,11 +625,11 @@ final class LibraryStore: ObservableObject {
         if !failures.isEmpty { errorMessage = failures.prefix(8).joined(separator: "\n") }
     }
 
-    func startScan(_ id: UUID) { guard !importing else { return }; job = Task { await scanFolder(id) } }
-    func startImport(_ urls: [URL]) { guard !importing else { return }; job = Task { await importFiles(urls) } }
+    func startScan(_ id: UUID) { guard !importing else { return }; job = Task { await scanFolder(id); startAlbumLookup() } }
+    func startImport(_ urls: [URL]) { guard !importing else { return }; job = Task { await importFiles(urls); startAlbumLookup() } }
     func startAddFolders(_ urls: [URL]) {
         guard !importing else { return }
-        job = Task { for url in urls { if Task.isCancelled { break }; await addFolder(url) } }
+        job = Task { for url in urls { if Task.isCancelled { break }; await addFolder(url) }; startAlbumLookup() }
     }
     func cancelScan() { job?.cancel(); catalogMigrationJob?.cancel() }
 

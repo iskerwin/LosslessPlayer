@@ -448,7 +448,7 @@ final class PlayerStore: NSObject, ObservableObject {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: current.title,
             MPMediaItemPropertyArtist: current.artist,
-            MPMediaItemPropertyAlbumTitle: current.album,
+            MPMediaItemPropertyAlbumTitle: current.albumTitle,
             MPMediaItemPropertyPlaybackDuration: current.duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0

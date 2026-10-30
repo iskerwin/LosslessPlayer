@@ -1,0 +1,41 @@
+name: Lossless Preview
+run-name: 'Preview · ${{ github.ref_name }}'
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+# Shares the publication lock with Dev: both update apps.json on main.
+concurrency:
+  group: lossless-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: macos-26
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure bot identity for apps.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Static checks and tool tests
+        run: python3 tools/ci.py check
+      - name: Build and publish preview (no simulator tests)
+        run: python3 tools/ci.py preview
+      - name: Keep logs and package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lossless-preview-${{ github.run_id }}
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            *.log
+            dist/

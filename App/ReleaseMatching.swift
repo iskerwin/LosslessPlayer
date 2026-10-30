@@ -18,9 +18,22 @@ struct MusicBrainzRelease: Decodable, Sendable {
     var country: String?
     var disambiguation: String?
     var artistCredit: [MusicBrainzCredit]?
+    var status: String?
+    var releaseGroup: Group?
+    struct Group: Decodable, Sendable {
+        var id: String?
+        var primaryType: String?
+        var secondaryTypes: [String]?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case primaryType = "primary-type"
+            case secondaryTypes = "secondary-types"
+        }
+    }
     enum CodingKeys: String, CodingKey {
-        case id, title, date, country, disambiguation
+        case id, title, date, country, disambiguation, status
         case artistCredit = "artist-credit"
+        case releaseGroup = "release-group"
     }
 }
 
@@ -53,6 +66,10 @@ struct ReleaseCandidate: Identifiable, Equatable, Sendable {
     var artistScore: Int
     var albumScore: Int
     var durationScore: Int
+    var status: String? = nil
+    var primaryType: String? = nil
+    var secondaryTypes: [String] = []
+    var releaseGroupMBID: String? = nil
     var score: Int { titleScore + artistScore + albumScore + durationScore }
     var id: String { releaseMBID + "/" + recordingMBID }
 }
@@ -100,12 +117,62 @@ enum ReleaseMatching {
                     titleScore: similarity(track.title, recording.title, weight: 40),
                     artistScore: similarity(track.artist, artist, weight: 30),
                     albumScore: similarity(track.album, release.title, weight: 20),
-                    durationScore: durationScore(local: track.duration, remote: recording.length.map { $0 / 1000 }))
+                    durationScore: durationScore(local: track.duration, remote: recording.length.map { $0 / 1000 }),
+                    status: release.status, primaryType: release.releaseGroup?.primaryType,
+                    secondaryTypes: release.releaseGroup?.secondaryTypes ?? [],
+                    releaseGroupMBID: release.releaseGroup?.id)
                 guard candidate.score >= 75, candidate.titleScore >= 24, candidate.artistScore >= 18 else { continue }
                 if unique[candidate.id].map({ $0.score < candidate.score }) ?? true { unique[candidate.id] = candidate }
             }
         }
         return unique.values.sorted { $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score }
+    }
+
+    /// The release the background lookup may name an untagged song after,
+    /// without review: title and artist match exactly, and it is an official
+    /// studio album, EP or single (no compilation, live, soundtrack or remix).
+    /// Nil leaves the song presented as its own single.
+    static func automaticAlbum(_ candidates: [ReleaseCandidate]) -> ReleaseCandidate? {
+        preferred(candidates.filter {
+            $0.titleScore == 40 && $0.artistScore == 30 && $0.secondaryTypes.isEmpty
+                && releaseRank($0) < 3 && known($0.album)
+        })
+    }
+
+    /// The release whose cover the lookup may borrow for a tagged album with
+    /// no artwork: title, artist and album all match exactly.
+    static func automaticCover(_ candidates: [ReleaseCandidate]) -> ReleaseCandidate? {
+        preferred(candidates.filter { $0.titleScore == 40 && $0.artistScore == 30 && $0.albumScore == 20 })
+    }
+
+    /// Official releases only. Albums before EPs before singles before other
+    /// types, plain releases before compilations and the like, then the
+    /// earliest date (ISO dates sort as text; a missing one goes last).
+    private static func preferred(_ candidates: [ReleaseCandidate]) -> ReleaseCandidate? {
+        func key(_ c: ReleaseCandidate) -> (Int, Int, String, String) {
+            let date = c.date.flatMap { $0.isEmpty ? nil : $0 } ?? "~"
+            return (releaseRank(c), c.secondaryTypes.isEmpty ? 0 : 1, date, c.id)
+        }
+        return candidates.filter { $0.status?.lowercased() == "official" }.min { key($0) < key($1) }
+    }
+
+    private static func releaseRank(_ candidate: ReleaseCandidate) -> Int {
+        ["album": 0, "ep": 1, "single": 2][candidate.primaryType?.lowercased() ?? ""] ?? 3
+    }
+
+    /// Unreviewed, so only blanks are filled: the album and, when missing,
+    /// album artist and year. Title and artist stay as tagged.
+    static func fillingAlbum(_ candidate: ReleaseCandidate, to track: Track) -> Track {
+        var updated = track
+        updated.album = candidate.album
+        if track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+           !candidate.albumArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.albumArtist = candidate.albumArtist
+        }
+        if track.year == nil { updated.year = candidate.year }
+        updated.musicBrainzReleaseMBID = candidate.releaseMBID
+        updated.musicBrainzRecordingMBID = candidate.recordingMBID
+        return updated
     }
 
     /// Called only after the user has reviewed and confirmed this candidate.
