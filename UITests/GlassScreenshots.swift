@@ -265,7 +265,7 @@ final class GlassScreenshots: XCTestCase {
             // Assert hittability on a freshly stabilized element, not on the
             // test-start snapshot: the collapse transition can leave the
             // stale resolution facing a transiently invalid frame.
-            let freshMini = try readyMini(in: app)
+            let freshMini = try readySettledMini(in: app)
             assertMiniIsHittable(freshMini, "Tap on \(region) must collapse to the mini player")
         }
     }
@@ -381,7 +381,7 @@ final class GlassScreenshots: XCTestCase {
             // large black gap above the mini player despite passing navigation.
             // mini.frame is the recorded ready frame, not a fresh AX read.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
-            let freshMini = try readyMini(in: app)
+            let freshMini = try readySettledMini(in: app)
             assertMiniIsHittable(freshMini)
             back.tap()
             let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
@@ -434,7 +434,7 @@ final class GlassScreenshots: XCTestCase {
         for (tab, name) in [("收藏", "favorites-glass"), ("搜索", "search-glass")] {
             app.tabBars.buttons[tab].tap()
             let mini = try readyMini(in: app)
-            let freshMini = try readyMini(in: app)
+            let freshMini = try readySettledMini(in: app)
             assertMiniIsHittable(freshMini)
             save(name)
         }
@@ -536,9 +536,10 @@ final class GlassScreenshots: XCTestCase {
                        message, file: file, line: line)
     }
 
-    /// A stable frame and hittability use separate AX snapshots. Predicate
-    /// evaluation treats a transiently invalid frame during accessory re-hosting
-    /// as not yet fulfilled; a raw isHittable query would record a fatal failure.
+    /// A stable frame and hittability use separate AX snapshots. Pass a
+    /// settled mini: even inside this predicate wait, a transiently invalid
+    /// frame during accessory re-hosting records "Failed to determine
+    /// hittability" (run 41093669072, after a detail card's back navigation).
     private func assertMiniIsHittable(_ mini: XCUIElement, _ message: String = "",
                                       file: StaticString = #filePath, line: UInt = #line) {
         let hittable = XCTNSPredicateExpectation(
