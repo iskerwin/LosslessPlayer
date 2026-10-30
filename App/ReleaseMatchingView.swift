@@ -58,7 +58,7 @@ struct ReleaseMatchingView: View {
                         if ReleaseMatching.known(track.album) {
                             Text("保留现有专辑：\(track.album)")
                         } else {
-                            change("专辑", "未知专辑", selected.album)
+                            change("专辑", track.albumTitle, selected.album)
                         }
                         fillChange("专辑艺术家", track.albumArtist, selected.albumArtist, emptyIsMissing: true)
                         fillChange("年份", track.year.map(String.init), selected.year.map(String.init))
