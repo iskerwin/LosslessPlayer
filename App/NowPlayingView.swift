@@ -371,6 +371,15 @@ struct NowPlayingView: View {
                         queuePanel
                     }
                     .scrollIndicators(.hidden)
+                    // Fade the cut-off row into the scrubber gap instead of a hard
+                    // clip. A mask changes only drawing, not hit testing or AX.
+                    .mask {
+                        VStack(spacing: 0) {
+                            Color.black
+                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                .frame(height: 24)
+                        }
+                    }
                     .allowsHitTesting(queueVisible)
                     .accessibilityHidden(!queueVisible)
                     .accessibilityIdentifier("now-playing-queue-scroll")
