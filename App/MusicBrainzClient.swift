@@ -55,6 +55,26 @@ actor MusicBrainzClient {
         return ReleaseMatching.candidates(for: track, recordings: results.recordings)
     }
 
+    /// Enrich only the selected candidate before review; lookup failure never blocks metadata confirmation.
+    func candidateForReview(_ candidate: ReleaseCandidate, track: Track) async throws -> ReleaseCandidate {
+        var reviewed = candidate
+        reviewed.genre = nil
+        guard track.genre == nil else { return reviewed }
+        do {
+            guard UUID(uuidString: candidate.releaseMBID) != nil else { throw MusicBrainzError.invalidResponse }
+            struct Tag: Decodable { var name: String }
+            struct ReleaseTags: Decodable { var tags: [Tag]? }
+            let url = URL(string: "https://musicbrainz.org/ws/2/release/\(candidate.releaseMBID)?fmt=json&inc=tags")!
+            let data = try await request(url)
+            let tags = try JSONDecoder().decode(ReleaseTags.self, from: data)
+            reviewed.genre = tags.tags?.lazy.compactMap { AudioTags.genre(from: $0.name) }.first
+        } catch is CancellationError { throw CancellationError() }
+        catch let error as URLError where error.code == .cancelled { throw error }
+        catch { /* Missing or unavailable tags leave genre nil for the review. */ }
+        try Task.checkCancellation()
+        return reviewed
+    }
+
     func frontCover(releaseMBID: String) async throws -> Data? {
         guard UUID(uuidString: releaseMBID) != nil else { throw MusicBrainzError.invalidResponse }
         // CAA returns 404 if there is no front image; never synthesize artwork.

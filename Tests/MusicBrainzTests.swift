@@ -210,7 +210,7 @@ final class MusicBrainzTests: XCTestCase {
     func testConfirmedMetadataAndMissingCoverNeverWriteAudioBytesOrModificationDate() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let track = localTrack()
+        var track = localTrack(); track.album = "未知专辑"
         let library = try makeLibrary(track: track, root: root)
         let audio = root.appendingPathComponent(track.filename)
         let bytes = Data("Audio must remain byte-for-byte identical".utf8)
@@ -218,13 +218,18 @@ final class MusicBrainzTests: XCTestCase {
         let modified = try audio.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         let results = try await client.candidates(for: track)
         XCTAssertEqual(library.tracks.first, track, "Searching never applies even one high-score result")
-        var candidate = try XCTUnwrap(results.first)
+        XCTAssertEqual(results.count, 1)
+        MusicBrainzProtocol.configure { _ in .init(data: Data(#"{"tags":[{"name":" pop "}]}"#.utf8)) }
+        var candidate = try await client.candidateForReview(XCTUnwrap(results.first), track: track)
+        XCTAssertEqual(library.tracks.first, track, "Review must not save before confirmation")
         candidate.title = "Corrected Song"; candidate.artist = "Ada & Bea"
         candidate.albumArtist = "Various Artists"
         MusicBrainzProtocol.configure { _ in .init(status: 404) }
         let applied = try await library.applyMusicBrainz(candidate, reviewed: track, client: client)
         XCTAssertTrue(applied)
         XCTAssertNil(library.tracks.first?.artworkFilename)
+        XCTAssertEqual(library.tracks.first?.album, "Record")
+        XCTAssertEqual(library.tracks.first?.genre, "pop")
         XCTAssertEqual(library.tracks.first?.title, "Corrected Song")
         XCTAssertEqual(library.tracks.first?.artistNames, ["Ada & Bea"])
         XCTAssertEqual(library.tracks.first?.albumArtist, "Various Artists")
@@ -234,6 +239,131 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: audio)), SHA256.hash(data: bytes))
         XCTAssertEqual(try audio.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified)
         XCTAssertEqual(library.url(for: track), audio)
+    }
+
+    @MainActor
+    func testMissingFieldsAreReviewedThenFilledWithoutChangingFavoritesOrPlayback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = localTrack()
+        track.album = "未知专辑"; track.albumArtist = "  "
+        track.favorite = true; track.playCount = 7; track.lastPlayed = Date(timeIntervalSince1970: 1234)
+        track.artworkFilename = "existing.artwork"
+        let library = try makeLibrary(track: track, root: root)
+        library.remember(id: track.id, position: 42)
+        library.rememberQueue([track.id], contextOrder: [track.id], shuffle: true)
+        let playback = library.playback
+        let playbackBytes = try Data(contentsOf: root.appendingPathComponent("playback.json"))
+        let catalogBytes = try Data(contentsOf: root.appendingPathComponent("library.json"))
+        let results = try await client.candidates(for: track)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.albumScore, 0)
+        MusicBrainzProtocol.configure { _ in
+            .init(data: Data(#"{"tags":[{"name":"  "},{"name":" (17) "},{"name":"pop"}]}"#.utf8))
+        }
+        let reviewed = try await client.candidateForReview(XCTUnwrap(results.first), track: track)
+        XCTAssertEqual(reviewed.genre, "Rock")
+        let requests = MusicBrainzProtocol.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.0.url?.path, "/ws/2/release/\(releaseID)")
+        let query = URLComponents(url: try XCTUnwrap(requests.first?.0.url), resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertTrue(query?.contains(URLQueryItem(name: "inc", value: "tags")) == true)
+        XCTAssertTrue(query?.contains(URLQueryItem(name: "fmt", value: "json")) == true)
+        XCTAssertEqual(requests.first?.0.value(forHTTPHeaderField: "User-Agent"), MusicBrainzClient.userAgent)
+        // Searching, selecting, then skipping/closing never invokes apply or changes catalog bytes.
+        XCTAssertEqual(library.tracks, [track])
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("library.json")), catalogBytes)
+        let applied = try await library.applyMusicBrainz(reviewed, reviewed: track, client: client)
+        XCTAssertTrue(applied)
+        let updated = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(updated.album, "Record")
+        XCTAssertEqual(updated.albumArtist, "Ada")
+        XCTAssertEqual(updated.year, 2021)
+        XCTAssertEqual(updated.genre, "Rock")
+        XCTAssertEqual(updated.favorite, track.favorite)
+        XCTAssertEqual(updated.playCount, track.playCount)
+        XCTAssertEqual(updated.lastPlayed, track.lastPlayed)
+        XCTAssertEqual(library.playback, playback)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("playback.json")), playbackBytes)
+        XCTAssertEqual(LibraryStore(root: root).tracks.first, updated)
+    }
+
+    func testFillConditionsPreserveExistingValuesIncludingEmptyGenre() async throws {
+        let results = try await client.candidates(for: localTrack())
+        var candidate = try XCTUnwrap(results.first)
+        candidate.album = "Remote Album"; candidate.albumArtist = "Remote Artist"; candidate.genre = "Rock"
+        var track = localTrack()
+        track.albumArtist = "Local Artist"; track.year = 1998; track.genre = "Local Genre"
+        let updated = ReleaseMatching.applying(candidate, to: track)
+        XCTAssertEqual(updated.album, "Record")
+        XCTAssertEqual(updated.albumArtist, "Local Artist")
+        XCTAssertEqual(updated.year, 1998)
+        XCTAssertEqual(updated.genre, "Local Genre")
+        MusicBrainzProtocol.configure { _ in .init(status: 599) }
+        let reviewed = try await client.candidateForReview(candidate, track: track)
+        XCTAssertNil(reviewed.genre)
+        XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty, "Existing genre must not trigger tag lookup")
+        track.genre = ""
+        XCTAssertEqual(ReleaseMatching.applying(candidate, to: track).genre, "")
+        for album in ["", "未知专辑", "unknown album", " Unknown Album "] {
+            track.album = album; track.albumArtist = nil; track.year = nil; track.genre = nil
+            let filled = ReleaseMatching.applying(candidate, to: track)
+            XCTAssertEqual(filled.album, "Remote Album")
+            XCTAssertEqual(filled.albumArtist, "Remote Artist")
+            XCTAssertEqual(filled.year, 2021)
+            XCTAssertEqual(filled.genre, "Rock")
+        }
+        candidate.year = nil; candidate.genre = nil; candidate.albumArtist = ""
+        let missing = ReleaseMatching.applying(candidate, to: track)
+        XCTAssertNil(missing.year)
+        XCTAssertNil(missing.genre)
+        XCTAssertNil(missing.albumArtist)
+    }
+
+    @MainActor
+    func testUnavailableTagsStillAllowConfirmationAndNeverInventGenre() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = localTrack(); track.album = "unknown album"; track.artworkFilename = "existing.artwork"
+        let library = try makeLibrary(track: track, root: root)
+        let results = try await client.candidates(for: track)
+        let candidate = try XCTUnwrap(results.first)
+        for reply in [MusicBrainzProtocol.Reply(status: 400),
+                      .init(error: URLError(.notConnectedToInternet)),
+                      .init(data: Data("invalid JSON".utf8)),
+                      .init(data: Data(#"{"tags":[{"name":" "}]}"#.utf8)),
+                      .init(data: Data(#"{}"#.utf8))] {
+            MusicBrainzProtocol.configure { _ in reply }
+            let reviewed = try await client.candidateForReview(candidate, track: track)
+            XCTAssertNil(reviewed.genre)
+            XCTAssertEqual(MusicBrainzProtocol.requests.count, 1)
+            XCTAssertEqual(library.tracks, [track], "Review alone must not save")
+        }
+        let reviewed = try await client.candidateForReview(candidate, track: track)
+        let applied = try await library.applyMusicBrainz(reviewed, reviewed: track, client: client)
+        XCTAssertTrue(applied)
+        XCTAssertEqual(library.tracks.first?.album, "Record")
+        XCTAssertEqual(library.tracks.first?.year, 2021)
+        XCTAssertNil(library.tracks.first?.genre)
+    }
+
+    func testTagLookupSharesSearchPacingAndCancellationDoesNotReturnReview() async throws {
+        let results = try await client.candidates(for: localTrack())
+        let candidate = try XCTUnwrap(results.first)
+        let started = try XCTUnwrap(MusicBrainzProtocol.requests.last).1
+        MusicBrainzProtocol.configure { _ in .init(data: Data(#"{"tags":[{"name":"pop"}]}"#.utf8)) }
+        let reviewed = try await client.candidateForReview(candidate, track: localTrack())
+        XCTAssertEqual(reviewed.genre, "pop")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(MusicBrainzProtocol.requests.first).1 - started, 1.0)
+        let cancelled = Task {
+            try await client.candidateForReview(candidate, track: localTrack())
+        }
+        cancelled.cancel()
+        do {
+            _ = try await cancelled.value
+            XCTFail("Cancelled review must not be returned for application")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 1)
     }
 
     @MainActor
