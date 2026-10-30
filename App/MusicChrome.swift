@@ -341,6 +341,7 @@ struct SongRow: View, Equatable {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if current && playing {
                 Image(systemName: "waveform")
@@ -352,7 +353,9 @@ struct SongRow: View, Equatable {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: current && playing)
-        .padding(.vertical, 8)
+        // 48 pt artwork + 4 pt on each side = 56 pt at the default text size.
+        // Keep height intrinsic so larger Dynamic Type can grow the row.
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .opacity(track.available ? 1 : 0.5)
@@ -435,8 +438,6 @@ struct SongContextRow: View, Equatable {
         .alignmentGuide(.listRowSeparatorLeading) { dimensions in
             dimensions[.leading] + RowMetrics.leadingInset + SongRow.separatorInset(showsIndex: indexLabel != nil)
         }
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
         .sensoryFeedback(.selection, trigger: track.favorite)
     }
 

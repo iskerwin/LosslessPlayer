@@ -41,14 +41,11 @@ final class GlassScreenshots: XCTestCase {
         let mini = try readyMini(in: app)
         let player = app.descendants(matching: .any)["now-playing"]
         XCTAssertTrue(mini.staticTexts["Apologize"].exists)
-        mini.buttons["播放"].tap()
-        XCTAssertTrue(mini.buttons["暂停"].waitForExistence(timeout: 5))
+        try tapMiniControl("播放", in: app, until: mini.buttons["暂停"], timeout: 5)
         XCTAssertFalse(player.exists, "Mini play must not expand the player")
-        mini.buttons["暂停"].tap()
-        XCTAssertTrue(mini.buttons["播放"].waitForExistence(timeout: 5))
+        try tapMiniControl("暂停", in: app, until: mini.buttons["播放"], timeout: 5)
         XCTAssertFalse(player.exists, "Mini pause must not expand the player")
-        mini.buttons["下一首"].tap()
-        XCTAssertTrue(mini.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
+        try tapMiniControl("下一首", in: app, until: mini.staticTexts["Stop and Stare"], timeout: 8)
         XCTAssertFalse(player.exists, "Mini skip must not expand the player")
         try tapMini(in: app)
         XCTAssertTrue(player.waitForExistence(timeout: 8))
@@ -82,9 +79,14 @@ final class GlassScreenshots: XCTestCase {
     }
 
     private func swipeMiniOpen(in app: XCUIApplication) throws {
-        let mini = try readyMini(in: app)
+        // The drag re-resolves the mini when it synthesizes the event. After
+        // a scroll the accessory can still be reattaching, and run
+        // 41059485740 read an infinite frame there one second after two
+        // equal reads. Require the settled frame, as the post-scroll
+        // hittability checks do, and drag from that frame's screen point.
+        let mini = try readyMiniFrame(in: app, settled: true)
         // Begin on the title, away from both transport buttons and screen edges.
-        let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+        let start = screenPoint(in: app, mini.frame, dx: 0.35, dy: 0.5)
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
         let player = app.descendants(matching: .any)["now-playing"]
         if !player.waitForExistence(timeout: 8) {
@@ -92,11 +94,11 @@ final class GlassScreenshots: XCTestCase {
             // lost scroll gesture already retried once in
             // checkNativeBottomAccessory. Only retry after the full
             // appearance budget expires, so a merely slow expansion is never
-            // double-dragged; re-resolve a stable mini first, then deliver
+            // double-dragged; re-resolve a settled mini first, then deliver
             // the drag once more with the same full 8 s budget. The final
             // gate below is unchanged.
-            let freshMini = try readyMini(in: app)
-            let retryStart = freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+            let freshMini = try readyMiniFrame(in: app, settled: true)
+            let retryStart = screenPoint(in: app, freshMini.frame, dx: 0.35, dy: 0.5)
             retryStart.press(forDuration: 0.1, thenDragTo: retryStart.withOffset(CGVector(dx: 0, dy: -100)))
         }
         XCTAssertTrue(player.waitForExistence(timeout: 8), "The mini host must deliver the upward drag")
@@ -120,6 +122,7 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(songs.waitForExistence(timeout: 8))
         songs.tap()
         XCTAssertTrue(app.descendants(matching: .any)["songs-list"].waitForExistence(timeout: 8))
+        try assertCompactSongRows(app.descendants(matching: .any)["songs-list"])
         save("songs")
         app.descendants(matching: .any)["songs-list"].swipeUp()
         save("songs-scrolled-glass")
@@ -136,6 +139,7 @@ final class GlassScreenshots: XCTestCase {
             playlist.tap()
         }
         XCTAssertTrue(app.descendants(matching: .any)["playlist-detail"].waitForExistence(timeout: 8))
+        try assertCompactSongRows(app.descendants(matching: .any)["playlist-detail"])
         save("playlist")
         app.descendants(matching: .any)["playlist-detail"].swipeUp()
         save("playlist-scrolled-continuity")
@@ -368,8 +372,8 @@ final class GlassScreenshots: XCTestCase {
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
             assertHittable(app.tabBars.buttons["歌单"], "Playlist tab must be hittable after card return")
-            let mini = try readyMini(in: app)
-            XCTAssertTrue(mini.exists)
+            let mini = try readyMiniFrame(in: app)
+            XCTAssertTrue(mini.element.exists)
             // Use the List's existing accessibility node. NavigationStack
             // does not export a decorative SwiftUI clipping wrapper as a node.
             let surface = app.descendants(matching: .any).matching(NSPredicate(
@@ -378,6 +382,7 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertTrue(surface.waitForExistence(timeout: 8))
             // A second subtraction of the tab host's bottom inset leaves a
             // large black gap above the mini player despite passing navigation.
+            // mini.frame is the recorded ready frame, not a fresh AX read.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
             let freshMini = try readyMini(in: app)
             assertMiniIsHittable(freshMini)
@@ -458,8 +463,7 @@ final class GlassScreenshots: XCTestCase {
         let list = app.descendants(matching: .any)["songs-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 8))
         let minis = app.windows.descendants(matching: .any).matching(identifier: "mini-player")
-        let mini = try readyMini(in: app)
-        let wideHeight = mini.frame.height
+        let wideHeight = try readyMiniFrame(in: app).frame.height
         XCTAssertGreaterThanOrEqual(wideHeight, 55)
         for _ in 0..<2 {
             for upward in [true, false] {
@@ -484,7 +488,30 @@ final class GlassScreenshots: XCTestCase {
                 }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
-                let freshMini = try readyMini(in: app)
+                // After a scroll the system accessory can detach/reattach
+                // mid-restore, so a frame that reads equal twice can still
+                // be transient when isHittable is evaluated (run
+                // 41015787137: the wide placement was achieved, then
+                // "Activation point invalid"; run 41021623911: the same
+                // raise after a 0.75 s stable frame). Frame stability
+                // alone cannot observe the placement flip rebuilding the
+                // mini's children (compact drops the skip button and the
+                // artist). Wait for the settled child set, then require
+                // the frame to hold still again, before asserting
+                // hittability; the assertion itself is unchanged, and
+                // these waits are gates only, like the placement waits.
+                _ = try readySettledMini(in: app)
+                let settledMini = app.windows.descendants(matching: .any)
+                    .matching(identifier: "mini-player").firstMatch
+                if upward {
+                    let skipGone = XCTNSPredicateExpectation(
+                        predicate: NSPredicate(format: "exists == false"),
+                        object: settledMini.buttons["下一首"])
+                    _ = wait(for: [skipGone], timeout: 5)
+                } else {
+                    _ = settledMini.buttons["下一首"].waitForExistence(timeout: 5)
+                }
+                let freshMini = try readySettledMini(in: app)
                 assertMiniIsHittable(freshMini)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
@@ -538,6 +565,27 @@ final class GlassScreenshots: XCTestCase {
     /// assert hittability on the returned, settled element.
     private func readyMini(in app: XCUIApplication, file: StaticString = #filePath,
                            line: UInt = #line) throws -> XCUIElement {
+        try readyMiniFrame(in: app, file: file, line: line).element
+    }
+
+    /// Stronger variant of readyMini for post-scroll checks: the accessory
+    /// restore animation can pause mid-travel, so two equal reads can pass
+    /// while the frame is still transient. Require four consecutive equal,
+    /// valid reads (0.75 s span) within the same 20 s budget. Other
+    /// callers keep readyMini's behavior.
+    private func readySettledMini(in app: XCUIApplication, file: StaticString = #filePath,
+                                  line: UInt = #line) throws -> XCUIElement {
+        try readyMiniFrame(in: app, settled: true, file: file, line: line).element
+    }
+
+    /// The ready element plus the frame that passed the stability check.
+    /// Reading mini.frame or mini.coordinate later resolves the accessory
+    /// again, and a reattach in between yields an infinite frame (run
+    /// 41059485740: the swipe-up drag; run 41064019285: the gap check).
+    /// Measure and press with this frame instead.
+    private func readyMiniFrame(in app: XCUIApplication, settled: Bool = false,
+                                file: StaticString = #filePath,
+                                line: UInt = #line) throws -> (element: XCUIElement, frame: CGRect) {
         let mini = app.windows.descendants(matching: .any)
             .matching(identifier: "mini-player").firstMatch
         let deadline = ProcessInfo.processInfo.systemUptime + 20
@@ -545,18 +593,27 @@ final class GlassScreenshots: XCTestCase {
             if mini.exists {
                 let first = mini.frame
                 if isValidMiniFrame(first) {
-                    Thread.sleep(forTimeInterval: 0.25)
-                    let second = mini.frame
-                    if second == first {
-                        return mini
+                    var stable = true
+                    for _ in 0..<(settled ? 3 : 1) {
+                        Thread.sleep(forTimeInterval: 0.25)
+                        if mini.frame != first { stable = false; break }
                     }
+                    if stable { return (mini, first) }
                 }
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
-        return try XCTUnwrap(nil as XCUIElement?,
-                            "Mini accessory must have a finite, nonempty, stable frame",
-                            file: file, line: line)
+        let frame = try XCTUnwrap(nil as CGRect?,
+                                  "Mini accessory must have a finite, nonempty, \(settled ? "settled" : "stable") frame",
+                                  file: file, line: line)
+        return (mini, frame)
+    }
+
+    /// A screen point inside a recorded frame, without resolving any element.
+    private func screenPoint(in app: XCUIApplication, _ frame: CGRect,
+                             dx: CGFloat, dy: CGFloat) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.minX + frame.width * dx, dy: frame.minY + frame.height * dy))
     }
 
     private func isValidMiniFrame(_ frame: CGRect) -> Bool {
@@ -567,13 +624,13 @@ final class GlassScreenshots: XCTestCase {
 
     private func tapMini(in app: XCUIApplication, file: StaticString = #filePath,
                          line: UInt = #line) throws {
-        let mini = try readyMini(in: app, file: file, line: line)
+        let mini = try readyMiniFrame(in: app, file: file, line: line)
         // Use the ready frame's center instead of the accessory's AX activation point.
-        mini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        screenPoint(in: app, mini.frame, dx: 0.5, dy: 0.5).tap()
         let player = app.descendants(matching: .any)["now-playing"]
         if !player.waitForExistence(timeout: 2) {
-            let freshMini = try readyMini(in: app, file: file, line: line)
-            freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let freshMini = try readyMiniFrame(in: app, file: file, line: line)
+            screenPoint(in: app, freshMini.frame, dx: 0.5, dy: 0.5).tap()
             // Each attempt gets the full appearance budget. Sharing the
             // original 8 s across first tap and retry left no expand time
             // after a lost first tap (run 41019339693: retry at 17.55 s,
@@ -581,6 +638,36 @@ final class GlassScreenshots: XCTestCase {
             // unchanged: the player appears after tapping the mini.
             XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
         }
+    }
+
+    /// Taps a mini control and asserts its effect. The simulator accessory
+    /// can drop a touch outright (run 41071297827: a tap on 播放 left the
+    /// screen unchanged for 22 s), so retry once — but only after the full
+    /// budget expires: these controls toggle or skip, and a second tap on a
+    /// merely slow first one would undo or overshoot it, failing honestly
+    /// below rather than passing. The final assertion and budget are the
+    /// ones the test used before.
+    private func tapMiniControl(_ label: String, in app: XCUIApplication, until effect: XCUIElement,
+                                timeout: TimeInterval, file: StaticString = #filePath,
+                                line: UInt = #line) throws {
+        try readyMini(in: app, file: file, line: line).buttons[label].tap()
+        if !effect.waitForExistence(timeout: timeout) {
+            try readyMini(in: app, file: file, line: line).buttons[label].tap()
+            XCTAssertTrue(effect.waitForExistence(timeout: timeout), file: file, line: line)
+        }
+    }
+
+    /// Measure actual List cells, including any system insets outside SongRow.
+    private func assertCompactSongRows(_ list: XCUIElement) throws {
+        let rows = list.cells.allElementsBoundByIndex
+            .filter { $0.buttons["更多操作"].exists }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 2)
+        let first = try XCTUnwrap(rows.first)
+        let second = try XCTUnwrap(rows.dropFirst().first)
+        XCTAssertEqual(first.frame.height, 56, accuracy: 0.5)
+        XCTAssertEqual(second.frame.minY - first.frame.minY, 56, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(first.frame.height, 44)
     }
 
     /// Sample empty row margins: the blue cover wash must remain visible.
