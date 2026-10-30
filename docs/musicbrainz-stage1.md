@@ -80,7 +80,7 @@ Batch automatic filling is a possible follow-up only; it is not implemented here
 
 The UI never shows 未知专辑. A song with no album tag is presented as its own single, named after the song (`Track.albumTitle`), with one album page per song (per folder, as before). The stored tag stays 未知专辑 so matching still treats it as unknown.
 
-After launch and after each scan or import, `LibraryStore.lookUpAlbums` asks MusicBrainz about each song that has a known title and artist and either has no album tag, or belongs to an album none of whose songs has artwork. It runs one request at a time through the shared, paced client and asks each song once (`albumLookedUp`). An offline or failed request stops the pass without marking, so the next launch retries. A rescan that re-reads a file clears the mark.
+The **自动补全专辑与封面** switch in 音乐文件夹 (on by default, `autoAlbumLookup`) controls it; off sends nothing, and the 未知专辑 fallback display still applies. While on, after launch, after each scan or import, and when the switch is turned on, `LibraryStore.lookUpAlbums` asks MusicBrainz about each song that has a known title and artist and either has no album tag, or belongs to an album none of whose songs has artwork. It runs one request at a time through the shared, paced client and asks each song once (`albumLookedUp`). An offline or failed request stops the pass without marking, so the next launch retries. A rescan that re-reads a file clears the mark.
 
 Without review, it only fills blanks; title and artist are never changed:
 

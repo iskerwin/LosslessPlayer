@@ -543,6 +543,22 @@ final class MusicBrainzTests: XCTestCase {
     }
 
     @MainActor
+    func testSwitchedOffLookupSendsNothing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            UserDefaults.standard.removeObject(forKey: LibraryStore.albumLookupKey)
+        }
+        var track = localTrack(); track.album = "未知专辑"
+        let library = try makeLibrary(tracks: [track], root: root)
+        UserDefaults.standard.set(false, forKey: LibraryStore.albumLookupKey)
+        await library.lookUpAlbums(client: client)
+        XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty)
+        XCTAssertNil(library.tracks.first?.albumLookedUp, "Turning it back on still looks the song up")
+        XCTAssertEqual(library.tracks.first?.albumTitle, "Song")
+    }
+
+    @MainActor
     func testLookupBorrowsCoverForEveryTrackOfTaggedAlbumWithoutArtwork() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -259,10 +259,16 @@ final class LibraryStore: ObservableObject {
         return true
     }
 
+    /// The 自动补全专辑与封面 switch in 音乐文件夹. On unless the user turned it off.
+    static let albumLookupKey = "autoAlbumLookup"
+    private var albumLookupEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.albumLookupKey) as? Bool ?? true
+    }
+
     /// Starts the background lookup unless one is already running; a running
     /// one picks up songs added since, as it re-reads the library each step.
     func startAlbumLookup(client: MusicBrainzClient = .shared) {
-        guard !ScreenshotFixture.enabled, albumLookupJob == nil else { return }
+        guard !ScreenshotFixture.enabled, albumLookupEnabled, albumLookupJob == nil else { return }
         albumLookupJob = Task {
             await lookUpAlbums(client: client)
             albumLookupJob = nil
@@ -284,9 +290,10 @@ final class LibraryStore: ObservableObject {
     /// an album with no artwork gets its Cover Art Archive front. Nothing found
     /// leaves the song a single named after itself, with the placeholder
     /// cover. Network failures stop without marking, so the next launch
-    /// retries. Only the app catalog and thumbnail cache are written.
+    /// retries. Turning the switch off stops it after the current song.
+    /// Only the app catalog and thumbnail cache are written.
     func lookUpAlbums(client: MusicBrainzClient = .shared) async {
-        while !Task.isCancelled {
+        while !Task.isCancelled, albumLookupEnabled {
             while importing {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             }
