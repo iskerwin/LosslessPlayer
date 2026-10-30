@@ -316,6 +316,9 @@ struct LibraryView: View {
                                         }
                                         .tint(MusicTheme.accent)
                                     }
+                                    // Apply List traits outside EquatableView and swipe actions.
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
                             }
                         }
                     }

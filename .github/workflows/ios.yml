@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,7 +127,9 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
       - name: Capture iOS 26 screenshots
         if: success() && steps.selection.outputs.screenshots != 'false'
-        timeout-minutes: 12
+        # The 15 UI tests take 8.5–10.5 min on hosted runners (runs
+        # 41034873573–41067503701); 12 min cut off the last tests.
+        timeout-minutes: 20
         env:
           TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/build/screenshots
         run: |
