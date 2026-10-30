@@ -110,6 +110,9 @@ final class GlassScreenshots: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["library-home"].waitForExistence(timeout: 20))
+        // The fixture is six songs on one album: the Recently Added count
+        // describes the album grid beneath it, not the whole library.
+        XCTAssertTrue(app.staticTexts["1 张专辑"].exists)
         _ = try readyMini(in: app)
         save("library")
 
