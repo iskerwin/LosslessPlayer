@@ -3,6 +3,19 @@ import SwiftUI
 import UIKit
 @testable import LosslessPlayer
 
+/// Recreates the old inner List traits and 8 pt vertical padding without
+/// changing production geometry or adding a diagnostic app launch mode.
+private struct LegacySongInsetsProbe: View, Equatable {
+    let track: Track
+
+    var body: some View {
+        SongContextRow(track: track, root: FileManager.default.temporaryDirectory, handlers: .ignore)
+            .padding(.vertical, 4)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+    }
+}
+
 @MainActor
 final class PlayerCardRenderingTests: XCTestCase {
     func testSongRowHeightIs56PointsAndGrowsWithDynamicType() throws {
@@ -20,6 +33,53 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
         XCTAssertEqual(try height(at: .large), 56)
         XCTAssertGreaterThan(try height(at: .accessibility5), 56)
+    }
+
+    func testSongListBoundaryInsetsRemoveSystemVerticalPadding() async throws {
+        let track = Track(id: UUID(), filename: "row.wav", title: "Song", artist: "Artist",
+                          album: "Album", duration: 1, sampleRate: 44100, bitDepth: 16)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let originalKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKey?.makeKeyAndVisible()
+        }
+        func collection(in view: UIView) -> UICollectionView? {
+            if let collection = view as? UICollectionView { return collection }
+            return view.subviews.lazy.compactMap { collection(in: $0) }.first
+        }
+        var heights: [CGFloat] = []
+        for boundaryInsets in [false, true] {
+            let host = UIHostingController(rootView:
+                List {
+                    LegacySongInsetsProbe(track: track)
+                        .equatable()
+                        .swipeActions(edge: .trailing) { Button("Delete") {} }
+                        .swipeActions(edge: .leading) { Button("Favorite") {} }
+                        .listRowInsets(boundaryInsets ? EdgeInsets() : nil)
+                        .listRowBackground(Color.clear)
+                }
+                .listStyle(.plain)
+                .environment(\.dynamicTypeSize, .large)
+            )
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.layoutIfNeeded()
+            // Allow the real List collection view to create and size its cell.
+            try await Task.sleep(for: .milliseconds(250))
+            host.view.layoutIfNeeded()
+            let cell = try XCTUnwrap(collection(in: host.view)?.visibleCells.first)
+            heights.append(cell.frame.height)
+        }
+        let attachment = XCTAttachment(string: "Legacy nested insets: \(heights[0])pt; boundary insets: \(heights[1])pt")
+        attachment.name = "song-list-inset-layer-measurements"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        // The probe restores the old 8 pt padding: its content is exactly 64 pt.
+        XCTAssertEqual(heights[1], 64, accuracy: 0.5)
+        XCTAssertGreaterThan(heights[0], heights[1], "Nested traits must reproduce the extra List padding")
     }
 
     // Draw into the full-size bitmap before indexing top-left image rows.
