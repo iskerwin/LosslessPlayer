@@ -456,7 +456,7 @@ struct LibraryView: View {
             page(library.tracks(forArtist: artist), title: artist, kind: .artist, showsBack: true)
         case .albums: albumIndex
         case .album(let id):
-            page(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.album ?? "专辑", kind: .album, showsBack: true)
+            page(library.tracks.filter { $0.albumID == id }, title: library.tracks.first { $0.albumID == id }?.albumTitle ?? "专辑", kind: .album, showsBack: true)
         case .recent: page(library.recentlyPlayed, title: "最近播放", kind: .recent, showsBack: true)
         case .playlist(let id):
             let playlist = library.snapshot.playlists.first { $0.id == id }
@@ -777,7 +777,7 @@ struct SearchResults {
         func rank(_ track: Track) -> Int {
             if track.title.localizedCaseInsensitiveContains(query) { return 0 }
             if track.artistNames.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return 1 }
-            if track.album.localizedCaseInsensitiveContains(query) { return 2 }
+            if track.albumTitle.localizedCaseInsensitiveContains(query) { return 2 }
             return 3
         }
         let songs = matched.sorted {
@@ -813,7 +813,7 @@ struct AlbumGroup: Identifiable {
     var latest: Date
     static func groups(_ tracks: [Track]) -> [Self] {
         Dictionary(grouping: tracks, by: \.albumID).map { id, tracks in
-            Self(id: id, name: tracks[0].album, artist: tracks[0].albumArtistName, tracks: tracks,
+            Self(id: id, name: tracks[0].albumTitle, artist: tracks[0].albumArtistName, tracks: tracks,
                  latest: tracks.compactMap(\.addedAt).max() ?? .distantPast)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

@@ -7,6 +7,7 @@ struct SourcesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var choosing = false
     @State private var removing: MusicFolder?
+    @AppStorage(LibraryStore.albumLookupKey) private var albumLookup = true
     var body: some View {
         NavigationStack {
             List {
@@ -33,6 +34,12 @@ struct SourcesView: View {
                     }
                 }
                 if let summary = library.scanSummary { Section { Text(summary).font(.caption).foregroundStyle(.secondary) } }
+                Section {
+                    Toggle("自动补全专辑与封面", isOn: $albumLookup)
+                        .onChange(of: albumLookup) { _, on in if on { library.startAlbumLookup() } }
+                } footer: {
+                    Text("缺少专辑名或封面时，将标题、艺术家、专辑和时长发送至 musicbrainz.org 查询，封面来自 coverartarchive.org。只补空白，不改标题、艺术家和音频文件；查不到时以歌名作专辑名。")
+                }
                 Section {
                     Text("离线文件夹需保留在原位置。iCloud 或其他文件提供器可能先下载文件，授权失效时请移除后重新添加。扫描只在 App 内执行，不会后台持续监视文件变化。")
                         .font(.caption).foregroundStyle(.secondary)

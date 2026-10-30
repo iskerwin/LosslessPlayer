@@ -33,6 +33,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var catalogVersion: Int?
     var missing: Bool?
     var lyrics: String?
+    /// Set once the background MusicBrainz album lookup has run for this file, found or not.
+    var albumLookedUp: Bool?
     var available: Bool { missing != true }
     var hasLyrics: Bool {
         let text = lyrics?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -50,12 +52,17 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
         if compilation == true { return "合辑" }
         return artist
     }
+    var hasAlbum: Bool { ReleaseMatching.known(album) }
+    /// What the UI shows as the album. A song with no album tag is presented
+    /// as its own single, named after the song, never as "未知专辑".
+    var albumTitle: String { hasAlbum ? album : title }
     var albumID: String {
         let title = AudioTags.normalized(album)
-        // Untagged files in different folders are not one giant "Unknown Album".
-        if title.isEmpty || title == AudioTags.normalized("未知专辑") {
+        // Each untagged song is its own single, kept apart per folder.
+        if !hasAlbum {
             let directory = relativePath.map { ($0 as NSString).deletingLastPathComponent } ?? id.uuidString
             return "unknown\u{1f}" + (folderID?.uuidString ?? "copy") + "\u{1f}" + directory
+                + "\u{1f}" + AudioTags.normalized(self.title)
         }
         let named = albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if compilation == true, named.isEmpty { return "\u{1f}c\u{1f}" + title }
@@ -64,7 +71,7 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     func matchesSearch(_ query: String) -> Bool {
         if query.isEmpty { return true }
         let yearText = year.map(String.init) ?? ""
-        let blob = [title, artist, artistNames.joined(separator: " "), album, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
+        let blob = [title, artist, artistNames.joined(separator: " "), albumTitle, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
         return blob.localizedCaseInsensitiveContains(query)
     }
     var specification: String {
