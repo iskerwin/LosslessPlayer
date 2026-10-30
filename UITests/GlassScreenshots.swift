@@ -52,6 +52,18 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(player.exists, "Mini skip must not expand the player")
         try tapMini(in: app)
         XCTAssertTrue(player.waitForExistence(timeout: 8))
+        // The player exists in AX as soon as expansion starts, but its
+        // title only settles once the morph spring lands (run 41015787137:
+        // the player existed yet the title never appeared within its
+        // 5 s budget on a slow simulator). Gate the title check on the
+        // close button becoming hittable: the card clips its content to
+        // its bounds, so the top close button is only hittable once the
+        // card has grown to full screen. This is a readiness gate, not a
+        // longer budget: the title assertion and its 5 s budget below are
+        // unchanged, so a genuinely missing title still fails there.
+        let closeHittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in player.buttons["收起播放器"].isHittable }, object: nil)
+        _ = wait(for: [closeHittable], timeout: 5)
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
     }
 
@@ -483,7 +495,9 @@ final class GlassScreenshots: XCTestCase {
                 }
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
-                let freshMini = try readyMini(in: app)
+                // Settled frame (#45) plus non-recording predicate wait (#46):
+                // the frame must hold still before hittability is evaluated.
+                let freshMini = try readySettledMini(in: app)
                 assertMiniIsHittable(freshMini)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
@@ -555,6 +569,35 @@ final class GlassScreenshots: XCTestCase {
         }
         return try XCTUnwrap(nil as XCUIElement?,
                             "Mini accessory must have a finite, nonempty, stable frame",
+                            file: file, line: line)
+    }
+
+    /// Stronger variant of readyMini for post-scroll checks: the accessory
+    /// restore animation can pause mid-travel, so two equal reads can pass
+    /// while the frame is still transient. Require four consecutive equal,
+    /// valid reads (0.75 s span) within the same 20 s budget. Other
+    /// callers keep readyMini's behavior.
+    private func readySettledMini(in app: XCUIApplication, file: StaticString = #filePath,
+                                  line: UInt = #line) throws -> XCUIElement {
+        let mini = app.windows.descendants(matching: .any)
+            .matching(identifier: "mini-player").firstMatch
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if mini.exists {
+                let first = mini.frame
+                if isValidMiniFrame(first) {
+                    var settled = true
+                    for _ in 0..<3 {
+                        Thread.sleep(forTimeInterval: 0.25)
+                        if mini.frame != first { settled = false; break }
+                    }
+                    if settled { return mini }
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return try XCTUnwrap(nil as XCUIElement?,
+                            "Mini accessory must have a finite, nonempty, settled frame",
                             file: file, line: line)
     }
 
