@@ -82,7 +82,12 @@ final class GlassScreenshots: XCTestCase {
     }
 
     private func swipeMiniOpen(in app: XCUIApplication) throws {
-        let mini = try readyMini(in: app)
+        // The drag re-resolves the mini when it synthesizes the event. After
+        // a scroll the accessory can still be reattaching, and run
+        // 41059485740 read an infinite frame there one second after two
+        // equal reads. Require the settled frame, as the post-scroll
+        // hittability checks do.
+        let mini = try readySettledMini(in: app)
         // Begin on the title, away from both transport buttons and screen edges.
         let start = mini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
@@ -92,10 +97,10 @@ final class GlassScreenshots: XCTestCase {
             // lost scroll gesture already retried once in
             // checkNativeBottomAccessory. Only retry after the full
             // appearance budget expires, so a merely slow expansion is never
-            // double-dragged; re-resolve a stable mini first, then deliver
+            // double-dragged; re-resolve a settled mini first, then deliver
             // the drag once more with the same full 8 s budget. The final
             // gate below is unchanged.
-            let freshMini = try readyMini(in: app)
+            let freshMini = try readySettledMini(in: app)
             let retryStart = freshMini.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
             retryStart.press(forDuration: 0.1, thenDragTo: retryStart.withOffset(CGVector(dx: 0, dy: -100)))
         }
