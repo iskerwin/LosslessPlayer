@@ -431,4 +431,148 @@ final class MusicBrainzTests: XCTestCase {
         } catch { XCTAssertTrue(error is MusicBrainzApplyError) }
         XCTAssertTrue(library.tracks[0].favorite)
     }
+
+    // MARK: Background album and cover lookup
+
+    private static let groupID = "44444444-4444-4444-8444-444444444444"
+    private static let compilationID = "55555555-5555-4555-8555-555555555555"
+    private static let singleID = "66666666-6666-4666-8666-666666666666"
+
+    private func release(_ id: String, _ title: String, date: String, status: String = "Official", type: String = "Album",
+                         secondary: [String] = [], group: String? = nil) -> [String: Any] {
+        var releaseGroup: [String: Any] = ["primary-type": type, "secondary-types": secondary]
+        if let group { releaseGroup["id"] = group }
+        return ["id": id, "title": title, "date": date, "status": status, "release-group": releaseGroup,
+                "artist-credit": [["artist": ["name": "Ada"], "name": "Ada"]]]
+    }
+
+    private func search(_ releases: [[String: Any]], title: String = "Song") -> Data {
+        try! JSONSerialization.data(withJSONObject: ["recordings": [
+            ["id": recordingID, "title": title, "length": 180000,
+             "artist-credit": [["artist": ["name": "Ada"]]], "releases": releases]
+        ]])
+    }
+
+    private func coverPNG() -> Data {
+        UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).pngData { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
+        }
+    }
+
+    @MainActor
+    private func makeLibrary(tracks: [Track], root: URL) throws -> LibraryStore {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var snapshot = LibrarySnapshot(); snapshot.tracks = tracks
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        return LibraryStore(root: root)
+    }
+
+    func testAutomaticAlbumPrefersOfficialStudioAlbumAndNeverGuesses() throws {
+        struct Results: Decodable { var recordings: [MusicBrainzRecording] }
+        func candidates(_ releases: [[String: Any]], album: String = "未知专辑", title: String = "Song") throws -> [ReleaseCandidate] {
+            var track = localTrack(); track.album = album
+            let results = try JSONDecoder().decode(Results.self, from: search(releases, title: title))
+            return ReleaseMatching.candidates(for: track, recordings: results.recordings)
+        }
+        let mixed = [
+            release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"]),
+            release(otherReleaseID, "Bootleg", date: "2000", status: "Bootleg"),
+            release(Self.singleID, "Song", date: "2004", type: "Single"),
+            release(releaseID, "Record", date: "2005-06-07", group: Self.groupID)
+        ]
+        let picked = try XCTUnwrap(ReleaseMatching.automaticAlbum(candidates(mixed)))
+        XCTAssertEqual(picked.album, "Record")
+        XCTAssertEqual(picked.releaseGroupMBID, Self.groupID)
+        XCTAssertEqual(ReleaseMatching.automaticAlbum(candidates(Array(mixed.prefix(3))))?.album, "Song",
+                       "A single beats a compilation or bootleg")
+        XCTAssertNil(ReleaseMatching.automaticAlbum(candidates(Array(mixed.prefix(2)))))
+        XCTAssertNil(ReleaseMatching.automaticAlbum(candidates(mixed, title: "Song (Live)")),
+                     "Title must match exactly")
+        XCTAssertEqual(ReleaseMatching.automaticCover(candidates(mixed, album: "Record"))?.releaseMBID, releaseID)
+        XCTAssertNil(ReleaseMatching.automaticCover(candidates(mixed, album: "Other Record")))
+    }
+
+    @MainActor
+    func testLookupNamesUntaggedSongAndFallsBackToReleaseGroupCover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = localTrack(); track.album = "未知专辑"; track.favorite = true
+        let library = try makeLibrary(tracks: [track], root: root)
+        let png = coverPNG()
+        let search = search([release(releaseID, "Record", date: "2005-06-07", group: Self.groupID)])
+        MusicBrainzProtocol.configure { request in
+            let url = request.url!.absoluteString
+            if url.contains("/release-group/") { return .init(data: png) }
+            if url.contains("coverartarchive.org") { return .init(status: 404) }
+            return .init(data: search)
+        }
+        await library.lookUpAlbums(client: client)
+        let found = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(found.album, "Record")
+        XCTAssertEqual(found.year, 2005)
+        XCTAssertEqual(found.title, "Song")
+        XCTAssertTrue(found.favorite)
+        XCTAssertEqual(found.albumLookedUp, true)
+        let name = try XCTUnwrap(found.artworkFilename)
+        XCTAssertNotNil(UIImage(contentsOfFile: root.appendingPathComponent(name).path))
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 3)
+        XCTAssertEqual(LibraryStore(root: root).tracks.first?.album, "Record")
+        await library.lookUpAlbums(client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 3, "Each song is asked once")
+    }
+
+    @MainActor
+    func testLookupWithoutConfidentMatchKeepsSongAsItsOwnSingle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = localTrack(); track.album = "未知专辑"
+        let library = try makeLibrary(tracks: [track], root: root)
+        MusicBrainzProtocol.configure { _ in .init(error: URLError(.notConnectedToInternet)) }
+        await library.lookUpAlbums(client: client)
+        XCTAssertNil(library.tracks.first?.albumLookedUp, "Offline leaves the song for the next launch")
+        let search = search([release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"])])
+        MusicBrainzProtocol.configure { _ in .init(data: search) }
+        await library.lookUpAlbums(client: client)
+        let kept = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(kept.albumLookedUp, true)
+        XCTAssertEqual(kept.album, "未知专辑")
+        XCTAssertEqual(kept.albumTitle, "Song")
+        XCTAssertNil(kept.artworkFilename)
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 1, "No cover is fetched for a release that was not chosen")
+        XCTAssertEqual(library.albumGroups.map(\.name), ["Song"])
+    }
+
+    @MainActor
+    func testLookupBorrowsCoverForEveryTrackOfTaggedAlbumWithoutArtwork() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = localTrack()
+        var second = localTrack(); second.id = UUID(); second.title = "Second"; second.filename = "second.flac"
+        var covered = localTrack(); covered.id = UUID(); covered.album = "Covered"; covered.filename = "c.flac"
+        covered.artworkFilename = "c.artwork"
+        let library = try makeLibrary(tracks: [first, second, covered], root: root)
+        let png = coverPNG()
+        let search = search([release(releaseID, "Record", date: "2005")])
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "coverartarchive.org" ? .init(data: png) : .init(data: search)
+        }
+        await library.lookUpAlbums(client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 2, "One search and one cover for the whole album")
+        let names = library.tracks.prefix(2).map(\.artworkFilename)
+        XCTAssertNotNil(names[0])
+        XCTAssertEqual(names[0], names[1])
+        XCTAssertEqual(library.tracks.map(\.album), ["Record", "Record", "Covered"], "Tagged albums are never renamed")
+        XCTAssertNil(library.tracks[2].albumLookedUp, "An album with artwork needs no lookup")
+    }
+
+    func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {
+        var a = localTrack(); a.album = "未知专辑"; a.folderID = UUID(); a.relativePath = "Mixed/a.flac"
+        var b = a; b.id = UUID(); b.title = "Other"; b.relativePath = "Mixed/b.flac"
+        XCTAssertEqual(a.albumTitle, "Song")
+        XCTAssertNotEqual(a.albumID, b.albumID)
+        XCTAssertEqual(AlbumGroup.groups([a, b]).map(\.name), ["Other", "Song"])
+        XCTAssertFalse(a.matchesSearch("未知"))
+        var tagged = a; tagged.album = "Record"
+        XCTAssertEqual(tagged.albumTitle, "Record")
+    }
 }

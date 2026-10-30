@@ -17,7 +17,7 @@ struct LosslessPlayerApp: App {
         WindowGroup {
             LibraryView(library: library, player: player)
                 .tint(MusicTheme.accent)
-                .onAppear { library.startCatalogMigration() }
+                .onAppear { library.startCatalogMigration(); library.startAlbumLookup() }
                 .onChange(of: library.tracks) { _, _ in player.reconcileLibrary() }
                 .onChange(of: scenePhase) { _, phase in
                     if phase != .active { library.remember(id: player.current?.id, position: player.position) }

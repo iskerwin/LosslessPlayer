@@ -2,7 +2,7 @@
 
 Use a track row's **识别专辑信息** menu item in the library, collections, or search. Tap **开始识别**, select a release, review the before/after values, then explicitly confirm. Even a single candidate requires confirmation. This applies only to that track, never its album siblings or the entire library. Skip/close preserves the catalog.
 
-The sheet states: “识别会将艺术家、标题、专辑和时长发送至 musicbrainz.org；补封面时向 coverartarchive.org 请求所选专辑封面。仅更新资料库，不改动音频文件。” Nothing is sent until the user starts identification. CAA receives the selected release MBID when artwork is missing; it redirects artwork delivery to Internet Archive. Offline request errors are confined to the matching sheet; the scanner and player have no dependency on this client.
+The sheet states: “识别会将艺术家、标题、专辑和时长发送至 musicbrainz.org；补封面时向 coverartarchive.org 请求所选专辑封面。仅更新资料库，不改动音频文件。” Nothing is sent from this sheet until the user starts identification; the background lookup below is the only automatic request. CAA receives the selected release MBID when artwork is missing; it redirects artwork delivery to Internet Archive. Offline request errors are confined to the matching sheet; the scanner and player have no dependency on this client.
 
 Search uses MusicBrainz WS2 recording search, with escaped title and artist phrases and optional album/duration boosts. Duration is sent in milliseconds with a ±3 second boost; it is never a required filter. Search returns at most 25 recordings and their associated releases. This is deliberately a bounded first-stage search, not an exhaustive discography lookup or fingerprint search.
 
@@ -75,3 +75,18 @@ The stub-only MusicBrainz tests additionally cover unknown-album filling, known-
 - [ ] With existing album/album artist/year/genre and artwork, confirm those values remain unchanged and no unnecessary genre/CAA lookup occurs.
 
 Batch automatic filling is a possible follow-up only; it is not implemented here. Device verification remains pending; Linux cannot perform Xcode builds or physical-device checks.
+
+## Automatic album and cover lookup
+
+The UI never shows 未知专辑. A song with no album tag is presented as its own single, named after the song (`Track.albumTitle`), with one album page per song (per folder, as before). The stored tag stays 未知专辑 so matching still treats it as unknown.
+
+After launch and after each scan or import, `LibraryStore.lookUpAlbums` asks MusicBrainz about each song that has a known title and artist and either has no album tag, or belongs to an album none of whose songs has artwork. It runs one request at a time through the shared, paced client and asks each song once (`albumLookedUp`). An offline or failed request stops the pass without marking, so the next launch retries. A rescan that re-reads a file clears the mark.
+
+Without review, it only fills blanks; title and artist are never changed:
+
+| Case | Release it accepts | What it writes |
+| --- | --- | --- |
+| No album tag | `automaticAlbum`: exact title and artist (40/30); Official; album, EP or single with no secondary type (compilation, live, soundtrack, remix…) | Album, plus album artist and year when empty, MBIDs, and the cover if the song has none |
+| Tagged album, no artwork on any of its songs | `automaticCover`: exact title, artist and album (40/30/20); Official | The cover on every song of that album that lacks one; tags untouched |
+
+Albums beat EPs beat singles, then the earliest date. The cover is the release's CAA front, else the CAA front for its release group (another edition of the same album). No acceptable release or no CAA image leaves the song a single named after itself with the placeholder cover. Local artwork (embedded, then cover/folder/front images beside the file, shared across an album's songs) always wins and is never replaced. The manual sheet above also falls back to the release-group cover.

@@ -164,7 +164,7 @@ struct CollectionPage: View {
                     .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
                     .compositingGroup()
                     .padding(.top, 8)
-                Text(first.album).font(.title.bold()).multilineTextAlignment(.center)
+                Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
                     Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
                 }
