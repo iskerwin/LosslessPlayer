@@ -369,13 +369,18 @@ def push_source(entry, tag):
 
 
 def notes(kind, plan, proof, sha):
-    scope = (f'测试由 PR 检查完成并复用：{proof["url"]}' if proof.get('url')
-             else f'本次运行：单元测试通过 {proof["unit_passed"]} 项，界面测试通过 {proof["ui_passed"]} 项')
+    # Previews pass no proof: they only build.
+    if not proof:
+        scope = '预览包只编译，不跑模拟器测试（测试由 PR 检查负责）。'
+    elif proof.get('url'):
+        scope = f'测试由 PR 检查完成并复用：{proof["url"]}'
+    else:
+        scope = f'本次运行：单元测试通过 {proof["unit_passed"]} 项，界面测试通过 {proof["ui_passed"]} 项'
     head = ('Lossless 预览包，合并前上手机确认用；下一个开发版会覆盖它。'
             if kind == 'preview' else 'Lossless 开发版（iOS 17+，arm64，Debug）。')
     return '\n\n'.join([
         head,
-        f'源码：{sha}。{scope}' if proof else f'源码：{sha}。预览包只编译，不跑模拟器测试（测试由 PR 检查负责）。',
+        f'源码：{sha}。{scope}',
         f'测试范围：{plan["reason"]}；基线 {plan["base_tag"] or "无"}。' if plan else '',
         '本 IPA 未经过 Apple 开发者证书签名，请用 AltStore 等工具以自己的 Apple ID 重新签名后安装。'
         '可用 SHA256SUMS.txt 校验下载文件。',
