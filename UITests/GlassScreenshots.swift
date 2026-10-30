@@ -241,7 +241,7 @@ final class GlassScreenshots: XCTestCase {
             // test-start snapshot: the collapse transition can leave the
             // stale resolution facing a transiently invalid frame.
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable, "Tap on \(region) must collapse to the mini player")
+            assertMiniIsHittable(freshMini, "Tap on \(region) must collapse to the mini player")
         }
     }
 
@@ -356,7 +356,7 @@ final class GlassScreenshots: XCTestCase {
             // large black gap above the mini player despite passing navigation.
             XCTAssertGreaterThanOrEqual(surface.frame.maxY, mini.frame.minY - 8)
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable)
+            assertMiniIsHittable(freshMini)
             back.tap()
             let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.isHittable }, object: nil)
             wait(for: [returned], timeout: 8)
@@ -409,7 +409,7 @@ final class GlassScreenshots: XCTestCase {
             app.tabBars.buttons[tab].tap()
             let mini = try readyMini(in: app)
             let freshMini = try readyMini(in: app)
-            XCTAssertTrue(freshMini.isHittable)
+            assertMiniIsHittable(freshMini)
             save(name)
         }
     }
@@ -461,7 +461,7 @@ final class GlassScreenshots: XCTestCase {
                 let placement = XCTNSPredicateExpectation(predicate: upward ? compact : wide, object: nil)
                 wait(for: [placement], timeout: 5)
                 let freshMini = try readyMini(in: app)
-                XCTAssertTrue(freshMini.isHittable)
+                assertMiniIsHittable(freshMini)
                 save("\(appearance.lowercased())-" + (upward ? "bottom-inline-single-owner" : "bottom-expanded-single-owner"))
             }
         }
@@ -474,6 +474,17 @@ final class GlassScreenshots: XCTestCase {
         save("\(appearance.lowercased())-bottom-return")
         // These captures prove placement and ownership only. A uniform backing
         // cannot reveal material transmission; device checks use varied content.
+    }
+
+    /// A stable frame and hittability use separate AX snapshots. Predicate
+    /// evaluation treats a transiently invalid frame during accessory re-hosting
+    /// as not yet fulfilled; a raw isHittable query would record a fatal failure.
+    private func assertMiniIsHittable(_ mini: XCUIElement, _ message: String = "",
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: mini)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 8), .completed,
+                       message, file: file, line: line)
     }
 
     /// The native accessory can exist before XCTest exports its screen frame.
