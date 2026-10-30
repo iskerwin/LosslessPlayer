@@ -46,7 +46,7 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 }
 
 enum AudioTags {
-    static let catalogVersion = 4
+    static let catalogVersion = 5
 
     enum Role: Equatable { case track, disc, artist, artists, album, albumArtist, genre, year, compilation }
 
