@@ -52,14 +52,17 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
         var heights: [CGFloat] = []
         for boundaryInsets in [false, true] {
+            let row = LegacySongInsetsProbe(track: track)
+                .equatable()
+                .swipeActions(edge: .trailing) { Button("Delete") {} }
+                .swipeActions(edge: .leading) { Button("Favorite") {} }
             let host = UIHostingController(rootView:
                 List {
-                    LegacySongInsetsProbe(track: track)
-                        .equatable()
-                        .swipeActions(edge: .trailing) { Button("Delete") {} }
-                        .swipeActions(edge: .leading) { Button("Favorite") {} }
-                        .listRowInsets(boundaryInsets ? EdgeInsets() : nil)
-                        .listRowBackground(Color.clear)
+                    if boundaryInsets {
+                        row.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                    } else {
+                        row.listRowBackground(Color.clear)
+                    }
                 }
                 .listStyle(.plain)
                 .environment(\.dynamicTypeSize, .large)
@@ -73,7 +76,9 @@ final class PlayerCardRenderingTests: XCTestCase {
             let cell = try XCTUnwrap(collection(in: host.view)?.visibleCells.first)
             heights.append(cell.frame.height)
         }
-        let attachment = XCTAttachment(string: "Legacy nested insets: \(heights[0])pt; boundary insets: \(heights[1])pt")
+        let measurements = "Legacy nested insets: \(heights[0])pt; boundary insets: \(heights[1])pt"
+        print(measurements)
+        let attachment = XCTAttachment(string: measurements)
         attachment.name = "song-list-inset-layer-measurements"
         attachment.lifetime = .keepAlways
         add(attachment)
