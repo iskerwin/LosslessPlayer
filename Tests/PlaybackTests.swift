@@ -2,6 +2,7 @@ import XCTest
 import UIKit
 import CoreGraphics
 import AVFoundation
+import SwiftUI
 @testable import LosslessPlayer
 
 final class PlaybackQueueTests: XCTestCase {
