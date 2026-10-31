@@ -182,9 +182,12 @@ struct FileArtwork: View {
         return ArtworkCache.shared.bestCachedImage(at: url, maxPixel: tier)
     }
 
+    /// The placeholder sizes the square; the cover fills it as an overlay, so
+    /// a cover that is not square is cropped instead of widening the tile
+    /// over its neighbour in a grid.
     var body: some View {
-        ZStack {
-            placeholderView.opacity(displayed == nil ? 1 : 0)
+        placeholderView.opacity(displayed == nil ? 1 : 0)
+        .overlay {
             if let displayed {
                 Image(uiImage: displayed)
                     .resizable()
