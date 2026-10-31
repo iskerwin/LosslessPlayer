@@ -12,11 +12,11 @@
       "versions": [
         {
           "version": "0.2.0",
-          "buildVersion": "178.2",
+          "buildVersion": "179",
           "date": "2026-10-31",
-          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/preview-178.2/LosslessPlayer-dev-unsigned.ipa",
-          "size": 6171428,
-          "localizedDescription": "preview-178.2：预览包（合并前确认用）。"
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-179/LosslessPlayer-dev-unsigned.ipa",
+          "size": 6171425,
+          "localizedDescription": "dev-179：最新开发版。"
         },
         {
           "version": "0.2.0",
