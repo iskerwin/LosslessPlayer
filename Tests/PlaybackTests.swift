@@ -1074,6 +1074,25 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertTrue(loaded === cached)
     }
 
+    /// Cover Art Archive has covers that are not square. A grid tile filled
+    /// with one used to grow to the image's shape and cover its neighbour.
+    @MainActor
+    func testWideCoverStaysInsideItsSquareTile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let wide = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 80)).image { context in
+            UIColor.systemRed.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 160, height: 80))
+        }
+        try XCTUnwrap(wide.jpegData(compressionQuality: 0.8)).write(to: url)
+        ArtworkCache.shared.removeAll()
+        XCTAssertNotNil(ArtworkCache.shared.image(at: url, maxPixel: 240))
+        let host = UIHostingController(rootView: FileArtwork(url: url, pointSize: nil).aspectRatio(1, contentMode: .fit))
+        let size = host.sizeThatFits(in: CGSize(width: 100, height: 1000))
+        XCTAssertEqual(size.width, 100, accuracy: 0.5)
+        XCTAssertEqual(size.height, 100, accuracy: 0.5)
+    }
+
     /// The mini player reuses one artwork view across tracks. Once a cover is
     /// cached, the old view used to keep its stored bitmap and skip the new
     /// file. The displayed image must follow the current file instead.
