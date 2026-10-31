@@ -49,6 +49,13 @@ struct MusicBrainzRecording: Decodable, Sendable {
     }
 }
 
+/// One album from Apple's catalog search.
+struct AppleAlbum: Decodable, Sendable {
+    var artistName: String
+    var collectionName: String
+    var artworkUrl100: String?
+}
+
 struct ReleaseCandidate: Identifiable, Equatable, Sendable {
     var recordingMBID: String
     var releaseMBID: String
@@ -146,6 +153,16 @@ enum ReleaseMatching {
     /// no artwork: title, artist and album all match exactly.
     static func automaticCover(_ candidates: [ReleaseCandidate]) -> ReleaseCandidate? {
         preferred(candidates.filter { $0.titleScore == 40 && $0.artistScore == 30 && $0.albumScore == 20 })
+    }
+
+    /// The Apple album whose cover may stand in: the artist matches exactly,
+    /// and the title matches exactly or ends with the album after a series
+    /// name, as in 經典系列: 無伴的舞.
+    static func appleAlbum(_ albums: [AppleAlbum], artist: String, album: String) -> AppleAlbum? {
+        let artist = normalized(artist), album = normalized(album)
+        let candidates = albums.filter { normalized($0.artistName) == artist && $0.artworkUrl100 != nil }
+        return candidates.first { normalized($0.collectionName) == album }
+            ?? candidates.first { normalized($0.collectionName).hasSuffix(" " + album) }
     }
 
     /// Official releases only. Albums before EPs before singles before other

@@ -262,8 +262,8 @@ final class LibraryStore: ObservableObject {
     /// The 自动补全专辑与封面 switch in 音乐文件夹. On unless the user turned it off.
     static let albumLookupKey = "autoAlbumLookup"
     /// Bumped when matching improves, so songs looked up under older rules are asked once more.
-    /// 2: traditional and simplified Chinese match.
-    static let albumLookupRules = 2
+    /// 2: traditional and simplified Chinese match. 3: covers from Apple's catalog.
+    static let albumLookupRules = 3
     private var albumLookupEnabled: Bool {
         UserDefaults.standard.object(forKey: Self.albumLookupKey) as? Bool ?? true
     }
@@ -294,7 +294,8 @@ final class LibraryStore: ObservableObject {
 
     /// Fills what tags left blank, one song per MusicBrainz request: an
     /// untagged song gets the album `ReleaseMatching.automaticAlbum` picks, and
-    /// an album with no artwork gets its Cover Art Archive front. Nothing found
+    /// an album with no artwork gets its Cover Art Archive front, else Apple's
+    /// cover for the same artist and album. Nothing found
     /// leaves the song a single named after itself, with the placeholder
     /// cover. A failed search stops without marking, so the next launch
     /// retries. A failed cover download keeps the album found, leaves the song
@@ -317,14 +318,21 @@ final class LibraryStore: ObservableObject {
             let updated = release.map { fillsAlbum ? ReleaseMatching.fillingAlbum($0, to: track) : track } ?? track
             var artwork: String?
             // The album's cover already failed in this pass, or fails now.
-            var coverFailed = release != nil && skipped.contains(updated.albumID)
-            if let release, !coverFailed, track.artworkFilename == nil,
+            var coverFailed = updated.hasAlbum && skipped.contains(updated.albumID)
+            if !coverFailed, updated.hasAlbum, track.artworkFilename == nil,
                !tracks.contains(where: { $0.albumID == updated.albumID && $0.artworkFilename != nil }) {
-                do {
-                    if let data = try await client.frontCover(for: release) {
-                        artwork = await scanner.storeThumbnail(data: data)
-                    }
-                } catch { coverFailed = true }
+                var data: Data?
+                if let release {
+                    do { data = try await client.frontCover(for: release) } catch { coverFailed = true }
+                }
+                if data == nil {
+                    do { data = try await client.appleCover(artist: updated.albumArtistName, album: updated.album) }
+                    catch { coverFailed = true }
+                }
+                if let data {
+                    artwork = await scanner.storeThumbnail(data: data)
+                    coverFailed = false
+                }
             }
             if coverFailed { skipped.formUnion([track.id.uuidString, updated.albumID]) }
             // A scan or edit during the requests wins; the song is asked again from its new state.

@@ -618,7 +618,11 @@ final class MusicBrainzTests: XCTestCase {
         let library = try makeLibrary(tracks: [track], root: root)
         let search = harbourSearch()
         MusicBrainzProtocol.configure { request in
-            request.url!.host == "coverartarchive.org" ? .init(status: 404) : .init(data: search)
+            switch request.url!.host {
+            case "coverartarchive.org": return .init(status: 404)
+            case "itunes.apple.com": return .init(data: Self.noAppleAlbums)
+            default: return .init(data: search)
+            }
         }
         await library.lookUpAlbums(client: client)
         let found = try XCTUnwrap(library.tracks.first)
@@ -639,14 +643,17 @@ final class MusicBrainzTests: XCTestCase {
         let harbour = harbourSearch(), song = search([release(releaseID, "Record", date: "2005")])
         MusicBrainzProtocol.configure { request in
             let url = request.url!
-            if url.host == "coverartarchive.org" { return .init(error: URLError(.timedOut)) }
+            if url.host == "coverartarchive.org" || url.host == "itunes.apple.com" {
+                return .init(error: URLError(.timedOut))
+            }
             return .init(data: url.absoluteString.contains("Ada") ? song : harbour)
         }
         await library.lookUpAlbums(client: client)
         XCTAssertEqual(library.tracks.map(\.album), ["無伴的舞", "Record"], "Both found despite the covers")
         XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil], "Covers are tried again next launch")
         XCTAssertEqual(LibraryStore(root: root).tracks.first?.album, "無伴的舞")
-        XCTAssertEqual(MusicBrainzProtocol.requests.count, 4, "One search and one cover each, no retries within the pass")
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 6,
+                       "One search, one cover and one Apple search each, no retries within the pass")
     }
 
     @MainActor
@@ -670,7 +677,11 @@ final class MusicBrainzTests: XCTestCase {
         try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
         let search = harbourSearch(length: 100)
         MusicBrainzProtocol.configure { request in
-            request.url!.host == "coverartarchive.org" ? .init(status: 404) : .init(data: search)
+            switch request.url!.host {
+            case "coverartarchive.org": return .init(status: 404)
+            case "itunes.apple.com": return .init(data: Self.noAppleAlbums)
+            default: return .init(data: search)
+            }
         }
         let library = LibraryStore(root: root)
         // Launch order: the lookup finds nothing to ask before the migration re-reads the file.
@@ -683,6 +694,53 @@ final class MusicBrainzTests: XCTestCase {
         let track = try XCTUnwrap(library.tracks.first)
         XCTAssertEqual(track.artist, "甄楚倩")
         XCTAssertEqual(track.album, "無伴的舞")
+    }
+
+    private static let noAppleAlbums = Data(#"{"results":[]}"#.utf8)
+
+    private func appleAlbum(_ artist: String, _ title: String) -> AppleAlbum {
+        AppleAlbum(artistName: artist, collectionName: title,
+                   artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/a/100x100bb.jpg")
+    }
+
+    func testAppleAlbumNeedsSameArtistAndAlbumOrSeriesTitle() {
+        let albums = [appleAlbum("Other", "無伴的舞"), appleAlbum("甄楚倩", "Yours Yolinda"),
+                      appleAlbum("甄楚倩", "經典系列: 無伴的舞")]
+        XCTAssertEqual(ReleaseMatching.appleAlbum(albums, artist: "甄楚倩", album: "无伴的舞")?.collectionName,
+                       "經典系列: 無伴的舞")
+        let exact = albums + [appleAlbum("甄楚倩", "無伴的舞")]
+        XCTAssertEqual(ReleaseMatching.appleAlbum(exact, artist: "甄楚倩", album: "無伴的舞")?.collectionName, "無伴的舞")
+        XCTAssertNil(ReleaseMatching.appleAlbum([appleAlbum("Ada", "Love Songs")], artist: "Ada", album: "Love"))
+        XCTAssertNil(ReleaseMatching.appleAlbum([appleAlbum("Ada Band", "Record")], artist: "Ada", album: "Record"))
+    }
+
+    @MainActor
+    func testAppleCoverStandsInWhenCoverArtArchiveFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try makeLibrary(tracks: [harbourTrack()], root: root)
+        let search = harbourSearch(), png = coverPNG()
+        let apple = try JSONSerialization.data(withJSONObject: ["results": [
+            ["artistName": "甄楚倩", "collectionName": "經典系列: 無伴的舞",
+             "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/a/100x100bb.jpg"]
+        ]])
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "coverartarchive.org": return .init(error: URLError(.timedOut))
+            case "itunes.apple.com": return .init(data: apple)
+            case "is1-ssl.mzstatic.com": return .init(data: png)
+            default: return .init(data: search)
+            }
+        }
+        await library.lookUpAlbums(client: client)
+        let found = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(found.album, "無伴的舞")
+        XCTAssertNotNil(found.artworkFilename)
+        XCTAssertEqual(found.albumLookedUp, true, "Covered, so not asked again")
+        XCTAssertEqual(MusicBrainzProtocol.requests.last?.0.url?.lastPathComponent, "600x600bb.jpg")
+        let term = URLComponents(url: try XCTUnwrap(MusicBrainzProtocol.requests.first {
+            $0.0.url?.host == "itunes.apple.com" }?.0.url), resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertEqual(term?.first { $0.name == "country" }?.value, "hk")
     }
 
     func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {
