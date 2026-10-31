@@ -548,6 +548,26 @@ final class FolderScanTests: XCTestCase {
         XCTAssertEqual(library.snapshot.folders.count, 1)
         XCTAssertEqual(library.tracks.filter { $0.folderID != nil }.count, 2)
     }
+    func testUntaggedFilenameGivesTitleThenArtist() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        try wav(folder.appendingPathComponent("深夜港湾-甄楚倩.wav"))
+        try wav(folder.appendingPathComponent("Plain.wav"))
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let scanned = library.tracks.sorted { $0.relativePath ?? "" < $1.relativePath ?? "" }
+        XCTAssertEqual(scanned.map(\.title), ["Plain", "深夜港湾"])
+        XCTAssertEqual(scanned.map(\.artist), ["未知艺术家", "甄楚倩"])
+
+        let source = base.appendingPathComponent("Import/Love-Song - Ada.wav")
+        try wav(source)
+        let imported = LibraryStore(root: base.appendingPathComponent("Copies"))
+        await imported.importFiles([source])
+        let copy = try XCTUnwrap(imported.tracks.first)
+        XCTAssertEqual(copy.title, "Love-Song", "Split at the last hyphen")
+        XCTAssertEqual(copy.artist, "Ada")
+    }
     func testCancelledScanDoesNotCommitPartialLibrary() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

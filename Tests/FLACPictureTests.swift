@@ -189,7 +189,7 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertEqual(track.year, 2026)
         XCTAssertEqual(track.trackNumber, 3)
         XCTAssertEqual(track.discNumber, 2)
-        XCTAssertEqual(track.catalogVersion, 5)
+        XCTAssertEqual(track.catalogVersion, AudioTags.catalogVersion)
         XCTAssertEqual(try Data(contentsOf: file), data)
     }
 
@@ -248,8 +248,8 @@ final class FLACPictureTests: XCTestCase {
         var staleIDs = Set<UUID>()
         for i in snapshot.tracks.indices {
             let name = snapshot.folders.first { $0.id == snapshot.tracks[i].folderID }?.name
-            if name == "Current" { snapshot.tracks[i].catalogVersion = 5; continue }
-            if name == "Future" { snapshot.tracks[i].catalogVersion = 6; continue }
+            if name == "Current" { snapshot.tracks[i].catalogVersion = AudioTags.catalogVersion; continue }
+            if name == "Future" { snapshot.tracks[i].catalogVersion = AudioTags.catalogVersion + 1; continue }
             staleIDs.insert(snapshot.tracks[i].id)
             snapshot.tracks[i].catalogVersion = name == "OldNil" ? nil : 4
             snapshot.tracks[i].album = "未知专辑"
@@ -269,7 +269,7 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertNil(restarted.errorMessage)
         XCTAssertEqual(restarted.tracks.count, 5)
         for track in restarted.tracks where staleIDs.contains(track.id) {
-            XCTAssertEqual(track.catalogVersion, 5)
+            XCTAssertEqual(track.catalogVersion, AudioTags.catalogVersion)
             XCTAssertEqual(track.album, "Record")
             XCTAssertEqual(track.genre, "Jazz")
             XCTAssertEqual(track.year, 2026)
@@ -290,7 +290,7 @@ final class FLACPictureTests: XCTestCase {
         let nextLaunch = LibraryStore(root: root)
         await nextLaunch.migrateCatalogIfNeeded()
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("library.json")), migrated,
-                       "Version five must not trigger another migration")
+                       "The current version must not trigger another migration")
         for folder in snapshot.folders {
             XCTAssertEqual(try Data(contentsOf: restarted.resolve(folder).appendingPathComponent("song.flac")), data)
         }
