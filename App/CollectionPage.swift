@@ -359,11 +359,17 @@ struct CollectionPage: View {
             ]
         }
         if kind == .album {
+            var go = [
+                MenuAction(id: "add", title: "添加到歌单", symbol: "text.badge.plus") { onAddToPlaylist(sorted) },
+                MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { onOpen(.artist(albumArtistRoute)) }
+            ]
+            if let cover = LibraryStore.coverTarget(sorted) {
+                go.append(MenuAction(id: "update-cover", title: "更新封面", symbol: "photo.badge.arrow.down") {
+                    library.startCoverUpdate([cover])
+                })
+            }
             return [
-                MenuGroup(id: "go", entries: [
-                    MenuAction(id: "add", title: "添加到歌单", symbol: "text.badge.plus") { onAddToPlaylist(sorted) },
-                    MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { onOpen(.artist(albumArtistRoute)) }
-                ]),
+                MenuGroup(id: "go", entries: go),
                 MenuGroup(id: "delete", entries: [
                     MenuAction(id: "delete", title: "从资料库中删除", symbol: "trash", role: .destructive) { onDelete(sorted) }
                 ])
@@ -396,7 +402,8 @@ struct CollectionPage: View {
             delete: { onDelete([$0]) },
             removeFromPlaylist: playlist.map { list in { track in library.removeFromPlaylist(track, playlist: list) } },
             setCover: playlist.map { list in { track in library.setCover(track, for: list) } },
-            identify: { matchingTrack = $0 }
+            identify: { matchingTrack = $0 },
+            updateCover: { library.startCoverUpdate([$0]) }
         )
     }
 }

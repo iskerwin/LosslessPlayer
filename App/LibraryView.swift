@@ -151,6 +151,36 @@ struct LibraryView: View {
                 set: { if !$0 { library.errorMessage = nil; player.errorMessage = nil } }
             )) { Button("好") { library.errorMessage = nil; player.errorMessage = nil } }
             message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
+            .overlay(alignment: .top) {
+                ZStack {
+                    if let progress = library.coverProgress {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text(progress.total == 1 ? "正在更新封面…" : "正在更新封面 \(progress.done + 1)/\(progress.total)")
+                                .font(.subheadline).monospacedDigit()
+                            if progress.total > 1 {
+                                Button("停止") { library.stopCoverUpdate() }.font(.subheadline.weight(.semibold))
+                            }
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .transition(.opacity)
+                        .accessibilityIdentifier("cover-updating")
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: library.coverProgress == nil)
+            }
+            .alert("更新封面", isPresented: Binding(
+                get: { !showSources && library.coverReport?.items.count == 1 },
+                set: { if !$0 { library.coverReport = nil } }
+            )) { Button("好") { library.coverReport = nil } }
+            message: { Text(library.coverReport?.items.first?.result.message ?? "") }
+            .sheet(isPresented: Binding(
+                get: { !showSources && (library.coverReport?.items.count ?? 0) > 1 },
+                set: { if !$0 { library.coverReport = nil } }
+            )) {
+                if let report = library.coverReport { CoverReportSheet(report: report) }
+            }
     }
 
     /// At rest the native host owns the visible mini and its scroll animation.
@@ -291,7 +321,7 @@ struct LibraryView: View {
                             ForEach(results.albums) { album in
                                 browseRow(title: album.name, subtitle: album.artist,
                                           artwork: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
-                                          groups: collectionGroups(album.tracks, artist: artistRoute(for: album))) {
+                                          groups: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks))) {
                                     open(.album(album.id))
                                 }
                             }
@@ -340,16 +370,28 @@ struct LibraryView: View {
             artist: { open(.artist($0.primaryArtist)) },
             lyrics: { lyricsTrack = $0 },
             delete: { pendingDelete = [$0] },
-            identify: { matchingTrack = $0 }
+            identify: { matchingTrack = $0 },
+            updateCover: { library.startCoverUpdate([$0]) }
         )
     }
 
     private var libraryMore: some View {
-        SectionsMenu(sections: [importMenuGroup(imports)]) {
+        SectionsMenu(sections: [importMenuGroup(imports)] + coverMenuGroup) {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("更多")
         .modifier(ToolbarChrome())
+    }
+
+    /// 更新缺失封面 while some song still shows the placeholder.
+    private var coverMenuGroup: [MenuGroup] {
+        let missing = library.tracks.filter { $0.available && $0.artworkFilename == nil }.count
+        guard missing > 0 else { return [] }
+        return [MenuGroup(id: "covers", entries: [
+            MenuAction(id: "update-covers", title: "更新缺失封面（\(missing) 首）", symbol: "photo.badge.arrow.down") {
+                library.startCoverUpdate(library.coverTargets)
+            }
+        ])]
     }
 
     private var imports: ImportCommands {
@@ -406,7 +448,7 @@ struct LibraryView: View {
                             .buttonStyle(RowPressStyle())
                             .tint(.primary)
                             .modifier(ActionsContext(
-                                sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
+                                sections: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks)),
                                 preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)
                             ))
                         }
@@ -496,7 +538,7 @@ struct LibraryView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("album-card-\(album.id)")
-                    .modifier(ActionsContext(sections: collectionGroups(album.tracks, artist: artistRoute(for: album)),
+                    .modifier(ActionsContext(sections: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks)),
                         preview: MediaPreview(title: album.name, subtitle: album.artist, artwork: album.tracks.first, root: library.root)))
                 }
             }
@@ -720,13 +762,19 @@ struct LibraryView: View {
         return album.artist
     }
 
-    private func collectionGroups(_ tracks: [Track], artist: String? = nil, order: LibrarySort = .album) -> [MenuGroup] {
+    private func collectionGroups(_ tracks: [Track], artist: String? = nil, cover: Track? = nil,
+                                  order: LibrarySort = .album) -> [MenuGroup] {
         let ordered = order.sorted(tracks)
         var go: [MenuAction] = [
             MenuAction(id: "add", title: "添加到歌单", symbol: "text.badge.plus") { playlistBatch = TrackBatch(tracks: ordered) }
         ]
         if let artist {
             go.append(MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { open(.artist(artist)) })
+        }
+        if let cover {
+            go.append(MenuAction(id: "update-cover", title: "更新封面", symbol: "photo.badge.arrow.down") {
+                library.startCoverUpdate([cover])
+            })
         }
         var groups = [
             MenuGroup(id: "play", entries: [

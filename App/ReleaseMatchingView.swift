@@ -166,3 +166,40 @@ struct ReleaseMatchingView: View {
         return error.localizedDescription
     }
 }
+
+/// 更新缺失封面's report: how many were updated, and why each other one was not.
+struct CoverReportSheet: View {
+    let report: CoverReport
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let missed = report.items.filter { $0.result != .found }
+        NavigationStack {
+            List {
+                Section {
+                    Text("已更新 \(report.items.count - missed.count) 项，未更新 \(missed.count) 项。")
+                }
+                if !missed.isEmpty {
+                    Section("未更新") {
+                        ForEach(missed) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(item.title).font(.headline).lineLimit(1)
+                                    Spacer()
+                                    Text(item.result.title).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text(item.artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                Text(item.result.message).font(.footnote)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("更新封面")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+        .accessibilityIdentifier("cover-report")
+    }
+}

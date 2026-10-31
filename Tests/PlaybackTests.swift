@@ -199,6 +199,19 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(SongMenuModel.baseTitles.last, "从资料库中删除")
     }
 
+    func testUpdateCoverOnlyOffersSongsWithoutArtwork() {
+        var track = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
+        var handlers = SongHandlers.ignore
+        var asked: Track?
+        handlers.updateCover = { asked = $0 }
+        let entry = SongMenuCatalog.groups(for: track, handlers: handlers).flatMap(\.entries).first { $0.title == "更新封面" }
+        XCTAssertNotNil(entry)
+        entry?.action()
+        XCTAssertEqual(asked, track)
+        track.artworkFilename = "a.artwork"
+        XCTAssertFalse(SongMenuCatalog.groups(for: track, handlers: handlers).flatMap(\.entries).map(\.title).contains("更新封面"))
+    }
+
     func testBulkRemovalNoticeMentionsCopiesAndOriginals() {
         var copy = Track(id: UUID(), filename: "a.wav", title: "A", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 16)
         var indexed = copy

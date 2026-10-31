@@ -56,6 +56,52 @@ struct AppleAlbum: Decodable, Sendable {
     var artworkUrl100: String?
 }
 
+/// One song from Apple's catalog search. A compilation of many artists
+/// names its own album artist, such as 群星.
+struct AppleSong: Decodable, Sendable {
+    var artistName: String
+    var trackName: String
+    var collectionArtistName: String?
+    var artworkUrl100: String?
+}
+
+/// NetEase Cloud Music search results. Song results carry no image.
+struct NeteaseResults: Decodable, Sendable {
+    struct Result: Decodable, Sendable {
+        var albums: [NeteaseAlbum]?
+        var songs: [NeteaseSong]?
+    }
+    var code: Int?
+    var result: Result?
+}
+
+struct NeteaseArtist: Decodable, Sendable { var name: String }
+
+struct NeteaseAlbum: Decodable, Sendable {
+    var name: String
+    var artist: NeteaseArtist?
+    var artists: [NeteaseArtist]?
+    var picUrl: String?
+    var artistNames: [String] { (artists ?? []).map(\.name) + [artist?.name].compactMap { $0 } }
+}
+
+struct NeteaseSong: Decodable, Sendable {
+    struct Album: Decodable, Sendable { var name: String }
+    var name: String
+    var artists: [NeteaseArtist]
+    var album: Album?
+}
+
+/// What one catalog said about a cover.
+enum CatalogAnswer: Equatable, Sendable {
+    case cover(Data)
+    /// Listed, but without an image.
+    case noImage
+    /// Nothing by this artist, but the same title by another one.
+    case otherArtist(String)
+    case nothing
+}
+
 struct ReleaseCandidate: Identifiable, Equatable, Sendable {
     var recordingMBID: String
     var releaseMBID: String
@@ -163,6 +209,44 @@ enum ReleaseMatching {
         let candidates = albums.filter { normalized($0.artistName) == artist && $0.artworkUrl100 != nil }
         return candidates.first { normalized($0.collectionName) == album }
             ?? candidates.first { normalized($0.collectionName).hasSuffix(" " + album) }
+    }
+
+    /// The Apple song whose album cover may stand in for a song with no
+    /// album: title and artist match exactly, so live and remixed versions
+    /// are left out. Apple's own order, the artist's albums before
+    /// compilations of many artists; its release dates are mostly placeholders.
+    static func appleSong(_ songs: [AppleSong], title: String, artist: String) -> AppleSong? {
+        let title = normalized(title), artist = normalized(artist)
+        let matches = songs.filter {
+            normalized($0.trackName) == title && normalized($0.artistName) == artist && $0.artworkUrl100 != nil
+        }
+        return matches.first { $0.collectionArtistName == nil } ?? matches.first
+    }
+
+    /// NetEase's album, by the rules of `appleAlbum`; any credited artist counts.
+    static func neteaseAlbum(_ albums: [NeteaseAlbum], artist: String, album: String) -> NeteaseAlbum? {
+        let artist = normalized(artist), album = normalized(album)
+        let candidates = albums.filter { $0.picUrl != nil && $0.artistNames.contains { normalized($0) == artist } }
+        return candidates.first { normalized($0.name) == album }
+            ?? candidates.first { normalized($0.name).hasSuffix(" " + album) }
+    }
+
+    /// NetEase's song with the same title and artist, in its own order.
+    static func neteaseSong(_ songs: [NeteaseSong], title: String, artist: String) -> NeteaseSong? {
+        let title = normalized(title), artist = normalized(artist)
+        return songs.first {
+            normalized($0.name) == title && $0.album != nil && $0.artists.contains { normalized($0.name) == artist }
+        }
+    }
+
+    /// Why results with no usable cover had none: the same title by the same
+    /// artist without an image, else the same title by another artist, which
+    /// suggests the local title or artist is spelled another way.
+    static func missingCover(_ items: [(title: String, artists: [String])], title: String, artist: String) -> CatalogAnswer {
+        let title = normalized(title), artist = normalized(artist)
+        let same = items.filter { normalized($0.title) == title }
+        if same.contains(where: { $0.artists.contains { normalized($0) == artist } }) { return .noImage }
+        return same.lazy.compactMap(\.artists.first).first.map(CatalogAnswer.otherArtist) ?? .nothing
     }
 
     /// Official releases only. Albums before EPs before singles before other
