@@ -46,7 +46,21 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 }
 
 enum AudioTags {
-    static let catalogVersion = 5
+    /// 6: untagged files named 歌名-艺人 take their title and artist from the name.
+    static let catalogVersion = 6
+
+    /// A file with neither title nor artist tag, named 歌名-艺人, takes both
+    /// from its name, split at the last hyphen.
+    static func fillFromFilename(_ track: inout Track, stem: String) {
+        guard track.title == stem, !ReleaseMatching.known(track.artist),
+              let range = stem.rangeOfCharacter(from: CharacterSet(charactersIn: "-－–—"), options: .backwards)
+        else { return }
+        let title = stem[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        let artist = stem[range.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty, !artist.isEmpty else { return }
+        track.title = title
+        track.artist = artist
+    }
 
     enum Role: Equatable { case track, disc, artist, artists, album, albumArtist, genre, year, compilation }
 

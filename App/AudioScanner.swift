@@ -87,6 +87,7 @@ actor AudioScanner {
                     result.tracks.append(track); result.skipped += 1; continue
                 }
                 var track = try await read(file, id: old[relative]?.id ?? UUID(), folderArtwork: artwork(beside: file))
+                AudioTags.fillFromFilename(&track, stem: file.deletingPathExtension().lastPathComponent)
                 if track.artworkFilename == nil, let image = artwork(beside: file) {
                     track.artworkFilename = storeThumbnail(at: image, id: track.id)
                 }
@@ -125,6 +126,7 @@ actor AudioScanner {
         }
         track.lyrics = sidecarLyrics(url)
         track.title = track.title == file.deletingPathExtension().lastPathComponent ? url.deletingPathExtension().lastPathComponent : track.title
+        AudioTags.fillFromFilename(&track, stem: url.deletingPathExtension().lastPathComponent)
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: file) }
         else { try FileManager.default.moveItem(at: file, to: target) }
         track.contentHash = digest
@@ -137,7 +139,11 @@ actor AudioScanner {
     func rereadCopy(_ old: Track) async throws -> Track {
         let file = root.appendingPathComponent(old.filename)
         var track = try await read(file, id: old.id, folderArtwork: nil)
-        if track.title == file.deletingPathExtension().lastPathComponent { track.title = old.title }
+        if track.title == file.deletingPathExtension().lastPathComponent {
+            track.title = old.title
+            if !ReleaseMatching.known(track.artist) { track.artist = old.artist }
+            AudioTags.fillFromFilename(&track, stem: old.title)
+        }
         track.contentHash = old.contentHash
         track.addedAt = old.addedAt
         track.lyrics = track.lyrics ?? old.lyrics
