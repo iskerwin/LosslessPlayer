@@ -440,11 +440,11 @@ final class MusicBrainzTests: XCTestCase {
     private static let singleID = "66666666-6666-4666-8666-666666666666"
 
     private func release(_ id: String, _ title: String, date: String, status: String = "Official", type: String = "Album",
-                         secondary: [String] = [], group: String? = nil) -> [String: Any] {
+                         secondary: [String] = [], group: String? = nil, artist: String = "Ada") -> [String: Any] {
         var releaseGroup: [String: Any] = ["primary-type": type, "secondary-types": secondary]
         if let group { releaseGroup["id"] = group }
         return ["id": id, "title": title, "date": date, "status": status, "release-group": releaseGroup,
-                "artist-credit": [["artist": ["name": "Ada"], "name": "Ada"]]]
+                "artist-credit": [["artist": ["name": artist], "name": artist]]]
     }
 
     private func search(_ releases: [[String: Any]], title: String = "Song") -> Data {
@@ -590,9 +590,10 @@ final class MusicBrainzTests: XCTestCase {
              "artist-credit": [["artist": ["name": "甄楚倩"]]], "releases": releases]
         }
         return try! JSONSerialization.data(withJSONObject: ["recordings": [
-            recording(recordingID, "深夜港灣", [release(releaseID, "無伴的舞", date: "1988")]),
+            recording(recordingID, "深夜港灣", [release(releaseID, "無伴的舞", date: "1988", artist: "甄楚倩")]),
             recording("77777777-7777-4777-8777-777777777777", "深夜港湾",
-                      [release(Self.compilationID, "靚聲王", date: "2015-05-20", secondary: ["Compilation"])])
+                      [release(Self.compilationID, "靚聲王", date: "2015-05-20", secondary: ["Compilation"],
+                               artist: "Various Artists")])
         ]])
     }
 
