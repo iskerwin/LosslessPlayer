@@ -35,6 +35,8 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
     var lyrics: String?
     /// Set once the background MusicBrainz album lookup has run for this file, found or not.
     var albumLookedUp: Bool?
+    /// `LibraryStore.albumLookupRules` when it was looked up; older marks are asked again.
+    var albumLookupRules: Int?
     var available: Bool { missing != true }
     var hasLyrics: Bool {
         let text = lyrics?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

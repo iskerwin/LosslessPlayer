@@ -259,7 +259,7 @@ extension Track {
         case id, filename, title, artist, artists, contentHash, album, duration, sampleRate, bitDepth, favorite
         case folderID, relativePath, fileSize, modifiedAt, addedAt, artworkFilename, trackNumber, missing, lyrics
         case albumArtist, genre, year, discNumber, compilation, playCount, lastPlayed, catalogVersion
-        case musicBrainzReleaseMBID, musicBrainzRecordingMBID, albumLookedUp
+        case musicBrainzReleaseMBID, musicBrainzRecordingMBID, albumLookedUp, albumLookupRules
     }
 
     init(from decoder: Decoder) throws {
@@ -295,6 +295,7 @@ extension Track {
         lastPlayed = try container.decodeIfPresent(Date.self, forKey: .lastPlayed)
         catalogVersion = try container.decodeIfPresent(Int.self, forKey: .catalogVersion)
         albumLookedUp = try container.decodeIfPresent(Bool.self, forKey: .albumLookedUp)
+        albumLookupRules = try container.decodeIfPresent(Int.self, forKey: .albumLookupRules)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -330,5 +331,6 @@ extension Track {
         try container.encodeIfPresent(lastPlayed, forKey: .lastPlayed)
         try container.encodeIfPresent(catalogVersion, forKey: .catalogVersion)
         try container.encodeIfPresent(albumLookedUp, forKey: .albumLookedUp)
+        try container.encodeIfPresent(albumLookupRules, forKey: .albumLookupRules)
     }
 }
