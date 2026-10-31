@@ -320,7 +320,7 @@ final class FLACPictureTests: XCTestCase {
         await nextLaunch.migrateCatalogIfNeeded()
         XCTAssertEqual(nextLaunch.tracks.first?.id, old.id)
         XCTAssertEqual(nextLaunch.tracks.first?.album, "Recovered")
-        XCTAssertEqual(nextLaunch.tracks.first?.catalogVersion, 5)
+        XCTAssertEqual(nextLaunch.tracks.first?.catalogVersion, AudioTags.catalogVersion)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(old.filename)), data)
     }
 
