@@ -12,6 +12,14 @@
       "versions": [
         {
           "version": "0.2.0",
+          "buildVersion": "178.1",
+          "date": "2026-10-31",
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/preview-178.1/LosslessPlayer-dev-unsigned.ipa",
+          "size": 6080803,
+          "localizedDescription": "preview-178.1：预览包（合并前确认用）。"
+        },
+        {
+          "version": "0.2.0",
           "buildVersion": "178",
           "date": "2026-10-31",
           "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-178/LosslessPlayer-dev-unsigned.ipa",
@@ -81,14 +89,6 @@
           "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-140-1/LosslessPlayer-dev-unsigned.ipa",
           "size": 5899740,
           "localizedDescription": "dev-140-1：最新开发版（自动发布）。"
-        },
-        {
-          "version": "0.2.0",
-          "buildVersion": "134",
-          "date": "2026-10-30",
-          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-134-1/LosslessPlayer-dev-unsigned.ipa",
-          "size": 5889500,
-          "localizedDescription": "dev-134-1：最新开发版（自动发布）。"
         }
       ]
     }
