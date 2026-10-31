@@ -1044,6 +1044,7 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertEqual(MusicBrainzProtocol.requests.filter { $0.0.url?.host == "musicbrainz.org" }.count, 2)
     }
 
+    @MainActor
     func testAlbumOffersUpdateCoverOnlyWhenNoSongHasOne() {
         var a = localTrack(); let b = localTrack()
         XCTAssertEqual(LibraryStore.coverTarget([a, b])?.id, a.id)
