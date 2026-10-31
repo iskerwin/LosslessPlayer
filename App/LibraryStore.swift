@@ -16,8 +16,8 @@ final class LibraryStore: ObservableObject {
     private let scanner: AudioScanner
     private var job: Task<Void, Never>?
     private var attemptedCatalogMigration = false
-    private var catalogMigrationJob: Task<Void, Never>?
-    private var albumLookupJob: Task<Void, Never>?
+    private(set) var catalogMigrationJob: Task<Void, Never>?
+    private(set) var albumLookupJob: Task<Void, Never>?
     private var indexURL: URL { root.appendingPathComponent("library.json") }
     private var backupURL: URL { root.appendingPathComponent("library.backup.json") }
     private var playbackURL: URL { root.appendingPathComponent("playback.json") }
@@ -280,11 +280,13 @@ final class LibraryStore: ObservableObject {
 
     /// The next song to ask MusicBrainz about: one with no album tag, or one
     /// whose album has no artwork on any of its songs. Each is asked once per
-    /// version of the matching rules.
-    private func nextAlbumLookup() -> Track? {
+    /// version of the matching rules. `skipped` holds songs and albums whose
+    /// cover failed to download in this pass.
+    private func nextAlbumLookup(skipping skipped: Set<String>) -> Track? {
         let covered = Set(tracks.filter { $0.artworkFilename != nil }.map(\.albumID))
         return tracks.first {
-            $0.available && !($0.albumLookedUp == true && ($0.albumLookupRules ?? 1) >= Self.albumLookupRules)
+            $0.available && !skipped.contains($0.id.uuidString) && !skipped.contains($0.albumID)
+                && !($0.albumLookedUp == true && ($0.albumLookupRules ?? 1) >= Self.albumLookupRules)
                 && ReleaseMatching.known($0.title)
                 && ReleaseMatching.known($0.artist) && (!$0.hasAlbum || !covered.contains($0.albumID))
         }
@@ -294,15 +296,18 @@ final class LibraryStore: ObservableObject {
     /// untagged song gets the album `ReleaseMatching.automaticAlbum` picks, and
     /// an album with no artwork gets its Cover Art Archive front. Nothing found
     /// leaves the song a single named after itself, with the placeholder
-    /// cover. Network failures stop without marking, so the next launch
-    /// retries. Turning the switch off stops it after the current song.
-    /// Only the app catalog and thumbnail cache are written.
+    /// cover. A failed search stops without marking, so the next launch
+    /// retries. A failed cover download keeps the album found, leaves the song
+    /// unmarked for the next launch and moves on, so one unreachable cover
+    /// never holds up the rest. Turning the switch off stops it after the
+    /// current song. Only the app catalog and thumbnail cache are written.
     func lookUpAlbums(client: MusicBrainzClient = .shared) async {
+        var skipped = Set<String>()
         while !Task.isCancelled, albumLookupEnabled {
             while importing {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             }
-            guard let track = nextAlbumLookup() else { return }
+            guard let track = nextAlbumLookup(skipping: skipped) else { return }
             let fillsAlbum = !track.hasAlbum
             let release: ReleaseCandidate?
             do {
@@ -311,14 +316,17 @@ final class LibraryStore: ObservableObject {
             } catch { return }
             let updated = release.map { fillsAlbum ? ReleaseMatching.fillingAlbum($0, to: track) : track } ?? track
             var artwork: String?
-            if let release, track.artworkFilename == nil,
+            // The album's cover already failed in this pass, or fails now.
+            var coverFailed = release != nil && skipped.contains(updated.albumID)
+            if let release, !coverFailed, track.artworkFilename == nil,
                !tracks.contains(where: { $0.albumID == updated.albumID && $0.artworkFilename != nil }) {
                 do {
                     if let data = try await client.frontCover(for: release) {
                         artwork = await scanner.storeThumbnail(data: data)
                     }
-                } catch { return }
+                } catch { coverFailed = true }
             }
+            if coverFailed { skipped.formUnion([track.id.uuidString, updated.albumID]) }
             // A scan or edit during the requests wins; the song is asked again from its new state.
             guard !Task.isCancelled, !importing, trackByID[track.id] == track else {
                 if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
@@ -329,6 +337,7 @@ final class LibraryStore: ObservableObject {
                 || (!fillsAlbum && s.tracks[i].albumID == track.albumID) {
                 if s.tracks[i].id == track.id { s.tracks[i] = updated }
                 if s.tracks[i].artworkFilename == nil, let artwork { s.tracks[i].artworkFilename = artwork }
+                if coverFailed { continue }
                 s.tracks[i].albumLookedUp = true
                 s.tracks[i].albumLookupRules = Self.albumLookupRules
             }
@@ -585,9 +594,14 @@ final class LibraryStore: ObservableObject {
         persist(s)
     }
 
-    func startCatalogMigration() {
+    /// Songs re-read by the migration may only now have what the lookup
+    /// needs, so the lookup is started again once it finishes.
+    func startCatalogMigration(client: MusicBrainzClient = .shared) {
         guard !ScreenshotFixture.enabled, !attemptedCatalogMigration, catalogMigrationJob == nil else { return }
-        catalogMigrationJob = Task { await migrateCatalogIfNeeded() }
+        catalogMigrationJob = Task {
+            await migrateCatalogIfNeeded()
+            startAlbumLookup(client: client)
+        }
     }
 
     /// Once per launch, wait for imports and upgrade only stale catalog sources.

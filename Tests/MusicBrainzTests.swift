@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import CryptoKit
+import AVFoundation
 @testable import LosslessPlayer
 
 private let recordingID = "11111111-1111-4111-8111-111111111111"
@@ -583,9 +584,9 @@ final class MusicBrainzTests: XCTestCase {
 
     /// MusicBrainz lists 深夜港湾 under its traditional title 深夜港灣; only a
     /// compilation carries the simplified spelling.
-    private func harbourSearch() -> Data {
+    private func harbourSearch(length: Int = 240000) -> Data {
         func recording(_ id: String, _ title: String, _ releases: [[String: Any]]) -> [String: Any] {
-            ["id": id, "title": title, "length": 240000,
+            ["id": id, "title": title, "length": length,
              "artist-credit": [["artist": ["name": "甄楚倩"]]], "releases": releases]
         }
         return try! JSONSerialization.data(withJSONObject: ["recordings": [
@@ -627,6 +628,61 @@ final class MusicBrainzTests: XCTestCase {
         let asked = MusicBrainzProtocol.requests.count
         await library.lookUpAlbums(client: client)
         XCTAssertEqual(MusicBrainzProtocol.requests.count, asked, "Asked once under the current rules")
+    }
+
+    @MainActor
+    func testUnreachableCoverKeepsAlbumAndMovesOnToNextSong() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var other = localTrack(); other.album = "未知专辑"
+        let library = try makeLibrary(tracks: [harbourTrack(), other], root: root)
+        let harbour = harbourSearch(), song = search([release(releaseID, "Record", date: "2005")])
+        MusicBrainzProtocol.configure { request in
+            let url = request.url!
+            if url.host == "coverartarchive.org" { return .init(error: URLError(.timedOut)) }
+            return .init(data: url.absoluteString.contains("Ada") ? song : harbour)
+        }
+        await library.lookUpAlbums(client: client)
+        XCTAssertEqual(library.tracks.map(\.album), ["無伴的舞", "Record"], "Both found despite the covers")
+        XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil], "Covers are tried again next launch")
+        XCTAssertEqual(LibraryStore(root: root).tracks.first?.album, "無伴的舞")
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 4, "One search and one cover each, no retries within the pass")
+    }
+
+    @MainActor
+    func testLookupRunsAgainAfterMigrationRereadsFilenames() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410))
+        buffer.frameLength = 4410
+        try AVAudioFile(forWriting: folder.appendingPathComponent("深夜港湾-甄楚倩.wav"), settings: format.settings)
+            .write(from: buffer)
+        let root = base.appendingPathComponent("Index")
+        let scanned = LibraryStore(root: root)
+        await scanned.addFolder(folder)
+        // The catalog as an older version left it: the whole name as title, no artist.
+        var snapshot = scanned.snapshot
+        snapshot.tracks[0].catalogVersion = AudioTags.catalogVersion - 1
+        snapshot.tracks[0].title = "深夜港湾-甄楚倩"; snapshot.tracks[0].artist = "未知艺术家"
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        let search = harbourSearch(length: 100)
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "coverartarchive.org" ? .init(status: 404) : .init(data: search)
+        }
+        let library = LibraryStore(root: root)
+        // Launch order: the lookup finds nothing to ask before the migration re-reads the file.
+        library.startAlbumLookup(client: client)
+        await library.albumLookupJob?.value
+        XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty)
+        library.startCatalogMigration(client: client)
+        await library.catalogMigrationJob?.value
+        await library.albumLookupJob?.value
+        let track = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(track.artist, "甄楚倩")
+        XCTAssertEqual(track.album, "無伴的舞")
     }
 
     func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {
