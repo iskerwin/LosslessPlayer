@@ -8,6 +8,9 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var snapshot = LibrarySnapshot()
     @Published var errorMessage: String?
     @Published private(set) var musicBrainzNotice: String?
+    /// The song 更新封面 is looking up, and how the last one ended.
+    @Published private(set) var coverUpdating: UUID?
+    @Published var coverUpdateResult: CoverUpdate?
     @Published private(set) var importing = false
     @Published private(set) var progressText = ""
     @Published private(set) var progress: Double = 0
@@ -292,15 +295,13 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    /// Fills what tags left blank, one song per MusicBrainz request: an
-    /// untagged song gets the album `ReleaseMatching.automaticAlbum` picks, and
-    /// an album with no artwork gets its Cover Art Archive front, else Apple's
-    /// cover for the same artist and album. Nothing found
-    /// leaves the song a single named after itself, with the placeholder
-    /// cover. A failed search stops without marking, so the next launch
-    /// retries. A failed cover download keeps the album found, leaves the song
-    /// unmarked for the next launch and moves on, so one unreachable cover
-    /// never holds up the rest. Turning the switch off stops it after the
+    /// Fills what tags left blank, one song at a time: see `lookUp`. Nothing
+    /// found leaves the song a single named after itself, with the
+    /// placeholder cover. A song whose search or cover went unanswered keeps
+    /// what was found, stays unmarked for the next launch and is passed
+    /// over, so one unreachable service never holds up the rest. When
+    /// MusicBrainz and the cover services all fail the device is taken to be
+    /// offline and the pass stops. Turning the switch off stops it after the
     /// current song. Only the app catalog and thumbnail cache are written.
     func lookUpAlbums(client: MusicBrainzClient = .shared) async {
         var skipped = Set<String>()
@@ -309,51 +310,118 @@ final class LibraryStore: ObservableObject {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             }
             guard let track = nextAlbumLookup(skipping: skipped) else { return }
-            let fillsAlbum = !track.hasAlbum
-            let release: ReleaseCandidate?
+            let lookup = await lookUp(track, client: client, skipping: skipped)
+            if lookup.searchFailed && lookup.coverFailed { return }
+            if !lookup.complete { skipped.formUnion([track.id.uuidString, lookup.updated.albumID]) }
+            if save(lookup, for: track) == .failed { return }
+        }
+    }
+
+    /// One song's lookup. `searchFailed` and `coverFailed` mean a request went
+    /// unanswered, so the song is not marked as looked up.
+    private struct AlbumLookup {
+        var updated: Track
+        var fillsAlbum: Bool
+        var artwork: String?
+        var searchFailed = false
+        var coverFailed = false
+        var complete: Bool { !searchFailed && !coverFailed }
+    }
+
+    /// Asks MusicBrainz for the song: an untagged song gets the album
+    /// `ReleaseMatching.automaticAlbum` picks. A song with no artwork on its
+    /// album gets that release's Cover Art Archive front, else Apple's cover
+    /// for the same artist and album, or for a song with no album, the cover
+    /// of an album Apple lists the same song under. A failed search still
+    /// tries Apple with what the tags say.
+    private func lookUp(_ track: Track, client: MusicBrainzClient, skipping skipped: Set<String>) async -> AlbumLookup {
+        let fillsAlbum = !track.hasAlbum
+        var release: ReleaseCandidate?
+        var searchFailed = false
+        do {
+            let candidates = try await client.candidates(for: track)
+            release = fillsAlbum ? ReleaseMatching.automaticAlbum(candidates) : ReleaseMatching.automaticCover(candidates)
+        } catch { searchFailed = true }
+        let updated = release.map { fillsAlbum ? ReleaseMatching.fillingAlbum($0, to: track) : track } ?? track
+        var lookup = AlbumLookup(updated: updated, fillsAlbum: fillsAlbum, searchFailed: searchFailed)
+        // The album's cover already failed in this pass.
+        lookup.coverFailed = updated.hasAlbum && skipped.contains(updated.albumID)
+        guard !lookup.coverFailed, track.artworkFilename == nil,
+              !tracks.contains(where: { $0.albumID == updated.albumID && $0.artworkFilename != nil }) else { return lookup }
+        var data: Data?
+        if let release {
+            do { data = try await client.frontCover(for: release) } catch { lookup.coverFailed = true }
+        }
+        if data == nil {
             do {
-                let candidates = try await client.candidates(for: track)
-                release = fillsAlbum ? ReleaseMatching.automaticAlbum(candidates) : ReleaseMatching.automaticCover(candidates)
-            } catch { return }
-            let updated = release.map { fillsAlbum ? ReleaseMatching.fillingAlbum($0, to: track) : track } ?? track
-            var artwork: String?
-            // The album's cover already failed in this pass, or fails now.
-            var coverFailed = updated.hasAlbum && skipped.contains(updated.albumID)
-            if !coverFailed, updated.hasAlbum, track.artworkFilename == nil,
-               !tracks.contains(where: { $0.albumID == updated.albumID && $0.artworkFilename != nil }) {
-                var data: Data?
-                if let release {
-                    do { data = try await client.frontCover(for: release) } catch { coverFailed = true }
-                }
-                if data == nil {
-                    do { data = try await client.appleCover(artist: updated.albumArtistName, album: updated.album) }
-                    catch { coverFailed = true }
-                }
-                if let data {
-                    artwork = await scanner.storeThumbnail(data: data)
-                    coverFailed = false
-                }
-            }
-            if coverFailed { skipped.formUnion([track.id.uuidString, updated.albumID]) }
-            // A scan or edit during the requests wins; the song is asked again from its new state.
-            guard !Task.isCancelled, !importing, trackByID[track.id] == track else {
-                if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
-                continue
-            }
+                data = updated.hasAlbum
+                    ? try await client.appleCover(artist: updated.albumArtistName, album: updated.album)
+                    : try await client.appleSongCover(title: track.title, artist: track.artist)
+            } catch { lookup.coverFailed = true }
+        }
+        if let data {
+            lookup.artwork = await scanner.storeThumbnail(data: data)
+            lookup.coverFailed = false
+        }
+        return lookup
+    }
+
+    private enum LookupSave { case saved, changed, failed }
+
+    /// Writes a lookup to the song and, for a tagged album, the album's other
+    /// songs without artwork. A scan or edit during the requests wins; the
+    /// song is asked again from its new state.
+    private func save(_ lookup: AlbumLookup, for track: Track) -> LookupSave {
+        func discard() {
+            if let artwork = lookup.artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
+        }
+        guard !Task.isCancelled, !importing, trackByID[track.id] == track else { discard(); return .changed }
+        if !lookup.complete, lookup.artwork == nil, lookup.updated == track { return .saved }
+        var s = snapshot
+        for i in s.tracks.indices where s.tracks[i].id == track.id
+            || (!lookup.fillsAlbum && s.tracks[i].albumID == track.albumID) {
+            if s.tracks[i].id == track.id { s.tracks[i] = lookup.updated }
+            if s.tracks[i].artworkFilename == nil, let artwork = lookup.artwork { s.tracks[i].artworkFilename = artwork }
+            if !lookup.complete { continue }
+            s.tracks[i].albumLookedUp = true
+            s.tracks[i].albumLookupRules = Self.albumLookupRules
+        }
+        guard persist(s) else { discard(); return .failed }
+        if lookup.artwork != nil { ArtworkCache.shared.removeAll() }
+        return .saved
+    }
+
+    /// 更新封面 in a song's menu, one song at a time.
+    func startCoverUpdate(_ track: Track, client: MusicBrainzClient = .shared) {
+        guard coverUpdating == nil else { return }
+        coverUpdating = track.id
+        Task {
+            let result = await updateCover(track, client: client)
+            coverUpdating = nil
+            coverUpdateResult = result
+        }
+    }
+
+    /// The background lookup's steps for one song, asked again even if it was
+    /// looked up before and whether or not the switch is on. Nil when the
+    /// catalog could not be saved, which `errorMessage` already reports.
+    func updateCover(_ track: Track, client: MusicBrainzClient = .shared) async -> CoverUpdate? {
+        guard ReleaseMatching.known(track.title), ReleaseMatching.known(track.artist) else { return .notFound }
+        // Another song of the album already has a cover: share it.
+        if track.hasAlbum, track.artworkFilename == nil,
+           let cover = tracks.first(where: { $0.albumID == track.albumID && $0.artworkFilename != nil })?.artworkFilename {
             var s = snapshot
-            for i in s.tracks.indices where s.tracks[i].id == track.id
-                || (!fillsAlbum && s.tracks[i].albumID == track.albumID) {
-                if s.tracks[i].id == track.id { s.tracks[i] = updated }
-                if s.tracks[i].artworkFilename == nil, let artwork { s.tracks[i].artworkFilename = artwork }
-                if coverFailed { continue }
-                s.tracks[i].albumLookedUp = true
-                s.tracks[i].albumLookupRules = Self.albumLookupRules
-            }
-            if !persist(s) {
-                if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }
-                return
-            }
-            if artwork != nil { ArtworkCache.shared.removeAll() }
+            guard let i = s.tracks.firstIndex(where: { $0.id == track.id }) else { return .changed }
+            s.tracks[i].artworkFilename = cover
+            return persist(s) ? .found : nil
+        }
+        let lookup = await lookUp(track, client: client, skipping: [])
+        switch save(lookup, for: track) {
+        case .failed: return nil
+        case .changed: return trackByID[track.id]?.artworkFilename != nil ? .found : .changed
+        case .saved:
+            if lookup.artwork != nil { return .found }
+            return lookup.complete ? .notFound : .unreachable
         }
     }
 

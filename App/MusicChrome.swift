@@ -79,6 +79,10 @@ enum SongMenuCatalog {
         if let identify = handlers.identify {
             navigation.append(MenuAction(id: "identify", title: "识别专辑信息", symbol: "magnifyingglass") { identify(track) })
         }
+        // Only a song still showing the placeholder, so a right cover is never replaced.
+        if let updateCover = handlers.updateCover, track.artworkFilename == nil {
+            navigation.append(MenuAction(id: "update-cover", title: "更新封面", symbol: "photo.badge.arrow.down") { updateCover(track) })
+        }
         if model.includesLyrics {
             navigation.append(MenuAction(id: "lyrics", title: "查看完整歌词", symbol: "quote.bubble") { handlers.lyrics(track) })
         }
@@ -181,6 +185,7 @@ struct SongHandlers {
     var removeFromPlaylist: ((Track) -> Void)? = nil
     var setCover: ((Track) -> Void)? = nil
     var identify: ((Track) -> Void)? = nil
+    var updateCover: ((Track) -> Void)? = nil
 }
 
 struct ToolbarChrome: ViewModifier {

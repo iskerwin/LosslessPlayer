@@ -396,7 +396,8 @@ struct CollectionPage: View {
             delete: { onDelete([$0]) },
             removeFromPlaylist: playlist.map { list in { track in library.removeFromPlaylist(track, playlist: list) } },
             setCover: playlist.map { list in { track in library.setCover(track, for: list) } },
-            identify: { matchingTrack = $0 }
+            identify: { matchingTrack = $0 },
+            updateCover: { library.startCoverUpdate($0) }
         )
     }
 }

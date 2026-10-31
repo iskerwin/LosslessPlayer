@@ -151,6 +151,26 @@ struct LibraryView: View {
                 set: { if !$0 { library.errorMessage = nil; player.errorMessage = nil } }
             )) { Button("好") { library.errorMessage = nil; player.errorMessage = nil } }
             message: { Text([library.errorMessage, player.errorMessage].compactMap { $0 }.joined(separator: "\n")) }
+            .overlay(alignment: .top) {
+                ZStack {
+                    if library.coverUpdating != nil {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("正在更新封面…").font(.subheadline)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .transition(.opacity)
+                        .accessibilityIdentifier("cover-updating")
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: library.coverUpdating != nil)
+            }
+            .alert("更新封面", isPresented: Binding(
+                get: { !showSources && library.coverUpdateResult != nil },
+                set: { if !$0 { library.coverUpdateResult = nil } }
+            )) { Button("好") { library.coverUpdateResult = nil } }
+            message: { Text(library.coverUpdateResult?.message ?? "") }
     }
 
     /// At rest the native host owns the visible mini and its scroll animation.
@@ -340,7 +360,8 @@ struct LibraryView: View {
             artist: { open(.artist($0.primaryArtist)) },
             lyrics: { lyricsTrack = $0 },
             delete: { pendingDelete = [$0] },
-            identify: { matchingTrack = $0 }
+            identify: { matchingTrack = $0 },
+            updateCover: { library.startCoverUpdate($0) }
         )
     }
 

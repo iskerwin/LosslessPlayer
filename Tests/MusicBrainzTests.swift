@@ -532,14 +532,17 @@ final class MusicBrainzTests: XCTestCase {
         await library.lookUpAlbums(client: client)
         XCTAssertNil(library.tracks.first?.albumLookedUp, "Offline leaves the song for the next launch")
         let search = search([release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"])])
-        MusicBrainzProtocol.configure { _ in .init(data: search) }
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "itunes.apple.com" ? .init(data: Self.noAppleAlbums) : .init(data: search)
+        }
         await library.lookUpAlbums(client: client)
         let kept = try XCTUnwrap(library.tracks.first)
         XCTAssertEqual(kept.albumLookedUp, true)
         XCTAssertEqual(kept.album, "未知专辑")
         XCTAssertEqual(kept.albumTitle, "Song")
         XCTAssertNil(kept.artworkFilename)
-        XCTAssertEqual(MusicBrainzProtocol.requests.count, 1, "No cover is fetched for a release that was not chosen")
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host }, ["musicbrainz.org", "itunes.apple.com"],
+                       "No cover is fetched for a release that was not chosen; Apple is asked for the song")
         XCTAssertEqual(library.albumGroups.map(\.name), ["Song"])
     }
 
@@ -742,6 +745,142 @@ final class MusicBrainzTests: XCTestCase {
         let term = URLComponents(url: try XCTUnwrap(MusicBrainzProtocol.requests.first {
             $0.0.url?.host == "itunes.apple.com" }?.0.url), resolvingAgainstBaseURL: false)?.queryItems
         XCTAssertEqual(term?.first { $0.name == "country" }?.value, "hk")
+    }
+
+    private static let artwork = "https://is1-ssl.mzstatic.com/image/thumb/%@/100x100bb.jpg"
+
+    private func appleSong(_ artist: String, _ title: String, cover: String, compilation: Bool = false) -> [String: Any] {
+        var song: [String: Any] = ["artistName": artist, "trackName": title, "collectionName": cover,
+                                   "artworkUrl100": String(format: Self.artwork, cover)]
+        if compilation { song["collectionArtistName"] = "群星" }
+        return song
+    }
+
+    /// 1874 by 陳奕迅, as Apple's Hong Kong storefront lists it.
+    private func easonSongs() -> Data {
+        try! JSONSerialization.data(withJSONObject: ["results": [
+            appleSong("陳奕迅", "1874 (Live)", cover: "live"),
+            appleSong("陳奕迅", "1874", cover: "various", compilation: true),
+            appleSong("陳奕迅", "1874", cover: "own"),
+            appleSong("Other", "1874", cover: "other")
+        ]])
+    }
+
+    private func easonTrack() -> Track {
+        Track(id: UUID(), filename: "1874-陈奕迅.flac", title: "1874", artist: "陈奕迅", album: "未知专辑",
+              duration: 230, sampleRate: 44100, bitDepth: 16)
+    }
+
+    func testAppleSongNeedsSameTitleAndArtistAndPrefersTheArtistsOwnAlbum() throws {
+        struct Results: Decodable { var results: [AppleSong] }
+        let songs = try JSONDecoder().decode(Results.self, from: easonSongs()).results
+        XCTAssertEqual(ReleaseMatching.appleSong(songs, title: "1874", artist: "陈奕迅")?.artworkUrl100,
+                       String(format: Self.artwork, "own"))
+        XCTAssertEqual(ReleaseMatching.appleSong(Array(songs.prefix(2)), title: "1874", artist: "陈奕迅")?.artworkUrl100,
+                       String(format: Self.artwork, "various"), "A compilation's cover when nothing else lists it")
+        XCTAssertNil(ReleaseMatching.appleSong(Array(songs.prefix(1)), title: "1874", artist: "陈奕迅"), "Live is another song")
+    }
+
+    @MainActor
+    func testUntaggedSongWithoutMusicBrainzAlbumGetsAppleSongCover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try makeLibrary(tracks: [easonTrack()], root: root)
+        let songs = easonSongs(), png = coverPNG()
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: songs)
+            case "is1-ssl.mzstatic.com": return .init(data: png)
+            default: return .init(data: Data(#"{"recordings":[]}"#.utf8))
+            }
+        }
+        await library.lookUpAlbums(client: client)
+        let found = try XCTUnwrap(library.tracks.first)
+        XCTAssertNotNil(found.artworkFilename)
+        XCTAssertEqual(found.album, "未知专辑", "Apple's album is not confirmed, so the song stays a single")
+        XCTAssertEqual(found.albumLookedUp, true)
+        let search = try XCTUnwrap(MusicBrainzProtocol.requests.first { $0.0.url?.host == "itunes.apple.com" }?.0.url)
+        XCTAssertEqual(URLComponents(url: search, resolvingAgainstBaseURL: false)?.queryItems?
+            .first { $0.name == "entity" }?.value, "song")
+        XCTAssertEqual(MusicBrainzProtocol.requests.last?.0.url?.absoluteString,
+                       String(format: Self.artwork, "own").replacingOccurrences(of: "100x100bb", with: "600x600bb"))
+    }
+
+    @MainActor
+    func testFailedSearchStillTriesAppleAndMovesOnToNextSong() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var other = localTrack(); other.album = "未知专辑"
+        let library = try makeLibrary(tracks: [easonTrack(), other], root: root)
+        let songs = easonSongs(), png = coverPNG()
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: songs)
+            case "is1-ssl.mzstatic.com": return .init(data: png)
+            default: return .init(error: URLError(.timedOut))
+            }
+        }
+        await library.lookUpAlbums(client: client)
+        XCTAssertNotNil(library.tracks[0].artworkFilename, "Apple's cover despite MusicBrainz")
+        XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil], "Both asked MusicBrainz again next launch")
+        XCTAssertEqual(MusicBrainzProtocol.requests.filter { $0.0.url?.host == "musicbrainz.org" }.count, 2,
+                       "The second song is still asked")
+    }
+
+    @MainActor
+    func testOfflineStopsThePassAfterOneSong() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var other = localTrack(); other.album = "未知专辑"
+        let library = try makeLibrary(tracks: [easonTrack(), other], root: root)
+        MusicBrainzProtocol.configure { _ in .init(error: URLError(.notConnectedToInternet)) }
+        await library.lookUpAlbums(client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host }, ["musicbrainz.org", "itunes.apple.com"])
+        XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil])
+    }
+
+    @MainActor
+    func testUpdateCoverTellsNetworkFailureFromNothingFound() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = easonTrack(); track.albumLookedUp = true; track.albumLookupRules = LibraryStore.albumLookupRules
+        let library = try makeLibrary(tracks: [track], root: root)
+
+        MusicBrainzProtocol.configure { _ in .init(error: URLError(.notConnectedToInternet)) }
+        let offline = await library.updateCover(track, client: client)
+        XCTAssertEqual(offline, .unreachable)
+        XCTAssertFalse(MusicBrainzProtocol.requests.isEmpty, "Asked again although looked up before")
+
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "itunes.apple.com" ? .init(data: Self.noAppleAlbums) : .init(data: Data(#"{"recordings":[]}"#.utf8))
+        }
+        let missing = await library.updateCover(try XCTUnwrap(library.tracks.first), client: client)
+        XCTAssertEqual(missing, .notFound)
+
+        let songs = easonSongs(), png = coverPNG()
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: songs)
+            case "is1-ssl.mzstatic.com": return .init(data: png)
+            default: return .init(status: 503)
+            }
+        }
+        let found = await library.updateCover(try XCTUnwrap(library.tracks.first), client: client)
+        XCTAssertEqual(found, .found, "Busy MusicBrainz does not stop Apple's cover")
+        XCTAssertNotNil(library.tracks.first?.artworkFilename)
+    }
+
+    @MainActor
+    func testUpdateCoverSharesTheAlbumsExistingCover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bare = localTrack()
+        var covered = localTrack(); covered.id = UUID(); covered.title = "Second"; covered.artworkFilename = "c.artwork"
+        let library = try makeLibrary(tracks: [bare, covered], root: root)
+        let result = await library.updateCover(bare, client: client)
+        XCTAssertEqual(result, .found)
+        XCTAssertEqual(library.tracks.first?.artworkFilename, "c.artwork")
+        XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty)
     }
 
     func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {

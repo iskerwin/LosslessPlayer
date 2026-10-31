@@ -105,16 +105,33 @@ actor MusicBrainzClient {
     /// reached. The Hong Kong storefront: mainland China's lists no music.
     func appleCover(artist: String, album: String) async throws -> Data? {
         guard ReleaseMatching.known(artist), ReleaseMatching.known(album) else { return nil }
-        var components = URLComponents(string: "https://itunes.apple.com/search")!
-        components.queryItems = [URLQueryItem(name: "term", value: artist + " " + album),
-                                 URLQueryItem(name: "entity", value: "album"), URLQueryItem(name: "country", value: "hk"),
-                                 URLQueryItem(name: "limit", value: "25")]
         struct Results: Decodable { var results: [AppleAlbum] }
-        // Apple allows about 20 searches a minute.
-        let data = try await request(components.url!, spacing: 3.1)
+        let data = try await appleSearch(artist + " " + album, entity: "album")
         let albums = try JSONDecoder().decode(Results.self, from: data).results
-        guard let small = ReleaseMatching.appleAlbum(albums, artist: artist, album: album)?.artworkUrl100,
-              let url = URL(string: small.replacingOccurrences(of: "100x100bb", with: "600x600bb")),
+        return try await appleArtwork(ReleaseMatching.appleAlbum(albums, artist: artist, album: album)?.artworkUrl100)
+    }
+
+    /// Apple's cover for a song with no album: the cover of an album Apple
+    /// lists the same song under.
+    func appleSongCover(title: String, artist: String) async throws -> Data? {
+        guard ReleaseMatching.known(title), ReleaseMatching.known(artist) else { return nil }
+        struct Results: Decodable { var results: [AppleSong] }
+        let data = try await appleSearch(artist + " " + title, entity: "song")
+        let songs = try JSONDecoder().decode(Results.self, from: data).results
+        return try await appleArtwork(ReleaseMatching.appleSong(songs, title: title, artist: artist)?.artworkUrl100)
+    }
+
+    private func appleSearch(_ term: String, entity: String) async throws -> Data {
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [URLQueryItem(name: "term", value: term),
+                                 URLQueryItem(name: "entity", value: entity), URLQueryItem(name: "country", value: "hk"),
+                                 URLQueryItem(name: "limit", value: "25")]
+        // Apple allows about 20 searches a minute.
+        return try await request(components.url!, spacing: 3.1)
+    }
+
+    private func appleArtwork(_ small: String?) async throws -> Data? {
+        guard let small, let url = URL(string: small.replacingOccurrences(of: "100x100bb", with: "600x600bb")),
               url.scheme == "https" else { return nil }
         return try await request(url, missingIsEmpty: true).nilIfEmpty
     }

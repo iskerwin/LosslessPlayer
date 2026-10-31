@@ -56,6 +56,15 @@ struct AppleAlbum: Decodable, Sendable {
     var artworkUrl100: String?
 }
 
+/// One song from Apple's catalog search. A compilation of many artists
+/// names its own album artist, such as 群星.
+struct AppleSong: Decodable, Sendable {
+    var artistName: String
+    var trackName: String
+    var collectionArtistName: String?
+    var artworkUrl100: String?
+}
+
 struct ReleaseCandidate: Identifiable, Equatable, Sendable {
     var recordingMBID: String
     var releaseMBID: String
@@ -163,6 +172,18 @@ enum ReleaseMatching {
         let candidates = albums.filter { normalized($0.artistName) == artist && $0.artworkUrl100 != nil }
         return candidates.first { normalized($0.collectionName) == album }
             ?? candidates.first { normalized($0.collectionName).hasSuffix(" " + album) }
+    }
+
+    /// The Apple song whose album cover may stand in for a song with no
+    /// album: title and artist match exactly, so live and remixed versions
+    /// are left out. Apple's own order, the artist's albums before
+    /// compilations of many artists; its release dates are mostly placeholders.
+    static func appleSong(_ songs: [AppleSong], title: String, artist: String) -> AppleSong? {
+        let title = normalized(title), artist = normalized(artist)
+        let matches = songs.filter {
+            normalized($0.trackName) == title && normalized($0.artistName) == artist && $0.artworkUrl100 != nil
+        }
+        return matches.first { $0.collectionArtistName == nil } ?? matches.first
     }
 
     /// Official releases only. Albums before EPs before singles before other
