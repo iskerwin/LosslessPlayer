@@ -101,13 +101,31 @@ actor MusicBrainzClient {
         else { waiters.removeFirst().resume() }
     }
 
-    private func request(_ url: URL, missingIsEmpty: Bool = false) async throws -> Data {
+    /// Apple's album cover when Cover Art Archive has none or cannot be
+    /// reached. The Hong Kong storefront: mainland China's lists no music.
+    func appleCover(artist: String, album: String) async throws -> Data? {
+        guard ReleaseMatching.known(artist), ReleaseMatching.known(album) else { return nil }
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [URLQueryItem(name: "term", value: artist + " " + album),
+                                 URLQueryItem(name: "entity", value: "album"), URLQueryItem(name: "country", value: "hk"),
+                                 URLQueryItem(name: "limit", value: "25")]
+        struct Results: Decodable { var results: [AppleAlbum] }
+        // Apple allows about 20 searches a minute.
+        let data = try await request(components.url!, spacing: 3.1)
+        let albums = try JSONDecoder().decode(Results.self, from: data).results
+        guard let small = ReleaseMatching.appleAlbum(albums, artist: artist, album: album)?.artworkUrl100,
+              let url = URL(string: small.replacingOccurrences(of: "100x100bb", with: "600x600bb")),
+              url.scheme == "https" else { return nil }
+        return try await request(url, missingIsEmpty: true).nilIfEmpty
+    }
+
+    private func request(_ url: URL, missingIsEmpty: Bool = false, spacing: TimeInterval = 1.05) async throws -> Data {
         await acquire()
         defer { release() }
         for attempt in 0...2 {
             try Task.checkCancellation()
             if let lastStart {
-                let remaining = 1.05 - (ProcessInfo.processInfo.systemUptime - lastStart)
+                let remaining = spacing - (ProcessInfo.processInfo.systemUptime - lastStart)
                 if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
             }
             try Task.checkCancellation()
