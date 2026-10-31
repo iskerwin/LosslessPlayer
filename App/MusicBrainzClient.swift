@@ -103,22 +103,28 @@ actor MusicBrainzClient {
 
     /// Apple's album cover when Cover Art Archive has none or cannot be
     /// reached. The Hong Kong storefront: mainland China's lists no music.
-    func appleCover(artist: String, album: String) async throws -> Data? {
-        guard ReleaseMatching.known(artist), ReleaseMatching.known(album) else { return nil }
+    func appleCover(artist: String, album: String) async throws -> CatalogAnswer {
+        guard ReleaseMatching.known(artist), ReleaseMatching.known(album) else { return .nothing }
         struct Results: Decodable { var results: [AppleAlbum] }
         let data = try await appleSearch(artist + " " + album, entity: "album")
         let albums = try JSONDecoder().decode(Results.self, from: data).results
-        return try await appleArtwork(ReleaseMatching.appleAlbum(albums, artist: artist, album: album)?.artworkUrl100)
+        if let match = ReleaseMatching.appleAlbum(albums, artist: artist, album: album) {
+            return try await artwork(match.artworkUrl100?.replacingOccurrences(of: "100x100bb", with: "600x600bb"))
+        }
+        return ReleaseMatching.missingCover(albums.map { ($0.collectionName, [$0.artistName]) }, title: album, artist: artist)
     }
 
     /// Apple's cover for a song with no album: the cover of an album Apple
     /// lists the same song under.
-    func appleSongCover(title: String, artist: String) async throws -> Data? {
-        guard ReleaseMatching.known(title), ReleaseMatching.known(artist) else { return nil }
+    func appleSongCover(title: String, artist: String) async throws -> CatalogAnswer {
+        guard ReleaseMatching.known(title), ReleaseMatching.known(artist) else { return .nothing }
         struct Results: Decodable { var results: [AppleSong] }
         let data = try await appleSearch(artist + " " + title, entity: "song")
         let songs = try JSONDecoder().decode(Results.self, from: data).results
-        return try await appleArtwork(ReleaseMatching.appleSong(songs, title: title, artist: artist)?.artworkUrl100)
+        if let match = ReleaseMatching.appleSong(songs, title: title, artist: artist) {
+            return try await artwork(match.artworkUrl100?.replacingOccurrences(of: "100x100bb", with: "600x600bb"))
+        }
+        return ReleaseMatching.missingCover(songs.map { ($0.trackName, [$0.artistName]) }, title: title, artist: artist)
     }
 
     private func appleSearch(_ term: String, entity: String) async throws -> Data {
@@ -130,10 +136,44 @@ actor MusicBrainzClient {
         return try await request(components.url!, spacing: 3.1)
     }
 
-    private func appleArtwork(_ small: String?) async throws -> Data? {
-        guard let small, let url = URL(string: small.replacingOccurrences(of: "100x100bb", with: "600x600bb")),
-              url.scheme == "https" else { return nil }
-        return try await request(url, missingIsEmpty: true).nilIfEmpty
+    /// NetEase Cloud Music's album cover, after Apple. Its search is not a
+    /// published API; an answer other than code 200 counts as unreachable.
+    func neteaseCover(artist: String, album: String) async throws -> CatalogAnswer {
+        guard ReleaseMatching.known(artist), ReleaseMatching.known(album) else { return .nothing }
+        let albums = try await neteaseSearch(artist + " " + album, type: 10).result?.albums ?? []
+        if let match = ReleaseMatching.neteaseAlbum(albums, artist: artist, album: album) {
+            return try await artwork(match.picUrl.map { $0.replacingOccurrences(of: "http://", with: "https://") + "?param=600y600" })
+        }
+        return ReleaseMatching.missingCover(albums.map { ($0.name, $0.artistNames) }, title: album, artist: artist)
+    }
+
+    /// NetEase's cover for a song with no album: the song's album, found by a
+    /// second search since song results carry no image.
+    func neteaseSongCover(title: String, artist: String) async throws -> CatalogAnswer {
+        guard ReleaseMatching.known(title), ReleaseMatching.known(artist) else { return .nothing }
+        let songs = try await neteaseSearch(artist + " " + title, type: 1).result?.songs ?? []
+        if let album = ReleaseMatching.neteaseSong(songs, title: title, artist: artist)?.album?.name {
+            let answer = try await neteaseCover(artist: artist, album: album)
+            if case .cover = answer { return answer }
+            // The song is listed; its album is credited elsewhere or has no image.
+            return .noImage
+        }
+        return ReleaseMatching.missingCover(songs.map { ($0.name, $0.artists.map(\.name)) }, title: title, artist: artist)
+    }
+
+    private func neteaseSearch(_ term: String, type: Int) async throws -> NeteaseResults {
+        var components = URLComponents(string: "https://music.163.com/api/search/get/web")!
+        components.queryItems = [URLQueryItem(name: "s", value: term), URLQueryItem(name: "type", value: String(type)),
+                                 URLQueryItem(name: "limit", value: "30")]
+        let results = try JSONDecoder().decode(NeteaseResults.self, from: try await request(components.url!))
+        if let code = results.code, code != 200 { throw MusicBrainzError.http(code) }
+        return results
+    }
+
+    /// A 404 image is a listed album without a cover.
+    private func artwork(_ link: String?) async throws -> CatalogAnswer {
+        guard let link, let url = URL(string: link), url.scheme == "https" else { return .noImage }
+        return try await request(url, missingIsEmpty: true).nilIfEmpty.map(CatalogAnswer.cover) ?? .noImage
     }
 
     private func request(_ url: URL, missingIsEmpty: Bool = false, spacing: TimeInterval = 1.05) async throws -> Data {

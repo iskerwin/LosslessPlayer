@@ -541,8 +541,9 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertEqual(kept.album, "未知专辑")
         XCTAssertEqual(kept.albumTitle, "Song")
         XCTAssertNil(kept.artworkFilename)
-        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host }, ["musicbrainz.org", "itunes.apple.com"],
-                       "No cover is fetched for a release that was not chosen; Apple is asked for the song")
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host },
+                       ["musicbrainz.org", "itunes.apple.com", "music.163.com"],
+                       "No cover is fetched for a release that was not chosen; Apple and NetEase are asked for the song")
         XCTAssertEqual(library.albumGroups.map(\.name), ["Song"])
     }
 
@@ -656,8 +657,8 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertEqual(library.tracks.map(\.album), ["無伴的舞", "Record"], "Both found despite the covers")
         XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil], "Covers are tried again next launch")
         XCTAssertEqual(LibraryStore(root: root).tracks.first?.album, "無伴的舞")
-        XCTAssertEqual(MusicBrainzProtocol.requests.count, 6,
-                       "One search, one cover and one Apple search each, no retries within the pass")
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, 8,
+                       "One search, one cover, one Apple and one NetEase search each, no retries within the pass")
     }
 
     @MainActor
@@ -835,7 +836,8 @@ final class MusicBrainzTests: XCTestCase {
         let library = try makeLibrary(tracks: [easonTrack(), other], root: root)
         MusicBrainzProtocol.configure { _ in .init(error: URLError(.notConnectedToInternet)) }
         await library.lookUpAlbums(client: client)
-        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host }, ["musicbrainz.org", "itunes.apple.com"])
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host },
+                       ["musicbrainz.org", "itunes.apple.com", "music.163.com"])
         XCTAssertEqual(library.tracks.map(\.albumLookedUp), [nil, nil])
     }
 
@@ -848,14 +850,14 @@ final class MusicBrainzTests: XCTestCase {
 
         MusicBrainzProtocol.configure { _ in .init(error: URLError(.notConnectedToInternet)) }
         let offline = await library.updateCover(track, client: client)
-        XCTAssertEqual(offline, .unreachable)
+        XCTAssertEqual(offline, .unreachable(["MusicBrainz", "Apple Music", "网易云音乐"]))
         XCTAssertFalse(MusicBrainzProtocol.requests.isEmpty, "Asked again although looked up before")
 
         MusicBrainzProtocol.configure { request in
             request.url!.host == "itunes.apple.com" ? .init(data: Self.noAppleAlbums) : .init(data: Data(#"{"recordings":[]}"#.utf8))
         }
         let missing = await library.updateCover(try XCTUnwrap(library.tracks.first), client: client)
-        XCTAssertEqual(missing, .notFound)
+        XCTAssertEqual(missing, .notFound("1874 - 陈奕迅"))
 
         let songs = easonSongs(), png = coverPNG()
         MusicBrainzProtocol.configure { request in
@@ -881,6 +883,172 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertEqual(result, .found)
         XCTAssertEqual(library.tracks.first?.artworkFilename, "c.artwork")
         XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty)
+    }
+
+    private func neteaseAlbums(_ albums: [(name: String, artist: String, picUrl: String?)]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["code": 200, "result": ["albums": albums.map { album -> [String: Any] in
+            var item: [String: Any] = ["name": album.name, "artist": ["name": album.artist], "artists": [["name": album.artist]]]
+            if let picUrl = album.picUrl { item["picUrl"] = picUrl }
+            return item
+        }]])
+    }
+
+    private func neteaseSongs(_ songs: [(name: String, artist: String, album: String)]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["code": 200, "result": ["songs": songs.map {
+            ["name": $0.name, "artists": [["name": $0.artist]], "album": ["name": $0.album]]
+        }]])
+    }
+
+    private static func neteaseType(_ request: URLRequest) -> String? {
+        URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "type" }?.value
+    }
+
+    func testMissingCoverTellsNoImageFromAnotherArtist() {
+        XCTAssertEqual(ReleaseMatching.missingCover([("1874", ["陳奕迅"])], title: "1874", artist: "Eason"),
+                       .otherArtist("陳奕迅"))
+        XCTAssertEqual(ReleaseMatching.missingCover([("1874", ["Other", "陳奕迅"])], title: "1874", artist: "陈奕迅"),
+                       .noImage, "Listed by the song's own artist, without an image")
+        XCTAssertEqual(ReleaseMatching.missingCover([("1874 (Live)", ["陳奕迅"])], title: "1874", artist: "Eason"), .nothing)
+    }
+
+    func testNeteaseAlbumMatchesAnyCreditedArtistWithAnImage() throws {
+        let albums = try XCTUnwrap(JSONDecoder().decode(NeteaseResults.self, from: neteaseAlbums([
+            ("无伴的舞", "Other", "https://p2.music.126.net/a.jpg"), ("无伴的舞", "甄楚倩", nil),
+            ("经典系列: 无伴的舞", "甄楚倩", "https://p2.music.126.net/b.jpg")
+        ])).result?.albums)
+        XCTAssertEqual(ReleaseMatching.neteaseAlbum(albums, artist: "甄楚倩", album: "無伴的舞")?.picUrl,
+                       "https://p2.music.126.net/b.jpg")
+        XCTAssertNil(ReleaseMatching.neteaseAlbum(albums, artist: "Ada", album: "無伴的舞"))
+    }
+
+    @MainActor
+    func testNeteaseStandsInWhenAppleHasNoCover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try makeLibrary(tracks: [harbourTrack()], root: root)
+        let search = harbourSearch(), png = coverPNG()
+        let albums = neteaseAlbums([("无伴的舞", "甄楚倩", "http://p2.music.126.net/x.jpg")])
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "coverartarchive.org": return .init(status: 404)
+            case "itunes.apple.com": return .init(data: Self.noAppleAlbums)
+            case "music.163.com": return .init(data: albums)
+            case "p2.music.126.net": return .init(data: png)
+            default: return .init(data: search)
+            }
+        }
+        await library.lookUpAlbums(client: client)
+        let found = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(found.album, "無伴的舞")
+        XCTAssertNotNil(found.artworkFilename)
+        XCTAssertEqual(found.albumLookedUp, true)
+        XCTAssertEqual(MusicBrainzProtocol.requests.last?.0.url?.absoluteString, "https://p2.music.126.net/x.jpg?param=600y600")
+    }
+
+    @MainActor
+    func testNeteaseSongFindsItsAlbumsCover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try makeLibrary(tracks: [easonTrack()], root: root)
+        let png = coverPNG()
+        let songs = neteaseSongs([("1874 (Live)", "陈奕迅", "Get A Life (Live)"), ("1874", "陈奕迅", "The Line-Up")])
+        let albums = neteaseAlbums([("The Line-Up", "陈奕迅", "https://p2.music.126.net/line-up.jpg")])
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: Self.noAppleAlbums)
+            case "music.163.com": return .init(data: Self.neteaseType(request) == "1" ? songs : albums)
+            case "p2.music.126.net": return .init(data: png)
+            default: return .init(data: Data(#"{"recordings":[]}"#.utf8))
+            }
+        }
+        let track = try XCTUnwrap(library.tracks.first)
+        let found = await library.updateCover(track, client: client)
+        XCTAssertEqual(found, .found)
+        XCTAssertEqual(library.tracks.first?.album, "未知专辑", "NetEase's album is not confirmed")
+        let albumSearch = try XCTUnwrap(MusicBrainzProtocol.requests.last { Self.neteaseType($0.0) == "10" }?.0.url)
+        XCTAssertEqual(URLComponents(url: albumSearch, resolvingAgainstBaseURL: false)?.queryItems?
+            .first { $0.name == "s" }?.value, "陈奕迅 The Line-Up")
+    }
+
+    @MainActor
+    func testUpdateCoverExplainsWhyNothingWasFound() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var nameless = localTrack(); nameless.artist = "未知艺术家"
+        var eason = easonTrack(); eason.artist = "Eason"
+        let library = try makeLibrary(tracks: [nameless, eason, harbourTrack()], root: root)
+
+        let incomplete = await library.updateCover(nameless, client: client)
+        XCTAssertEqual(incomplete, .incomplete("艺术家"))
+        XCTAssertTrue(MusicBrainzProtocol.requests.isEmpty, "Nothing to search with")
+
+        let songs = easonSongs(), harbour = harbourSearch()
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: songs)
+            case "coverartarchive.org": return .init(status: 404)
+            case "music.163.com": return .init(data: Data(#"{"code":200,"result":{}}"#.utf8))
+            default:
+                return .init(data: request.url!.absoluteString.contains("Eason") ? Data(#"{"recordings":[]}"#.utf8) : harbour)
+            }
+        }
+        let otherArtist = await library.updateCover(library.tracks[1], client: client)
+        XCTAssertEqual(otherArtist, .otherArtist(found: "陳奕迅", local: "Eason"))
+        XCTAssertTrue(otherArtist?.message.contains("「陳奕迅」") == true)
+
+        let noImage = await library.updateCover(library.tracks[2], client: client)
+        XCTAssertEqual(noImage, .noImage("無伴的舞"), "MusicBrainz knows the album; no service has its image")
+    }
+
+    @MainActor
+    func testNeteaseBlockingCountsAsUnreachable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = try makeLibrary(tracks: [easonTrack()], root: root)
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "itunes.apple.com": return .init(data: Self.noAppleAlbums)
+            case "music.163.com": return .init(data: Data(#"{"code":-460,"msg":"Cheating"}"#.utf8))
+            default: return .init(data: Data(#"{"recordings":[]}"#.utf8))
+            }
+        }
+        let result = await library.updateCover(try XCTUnwrap(library.tracks.first), client: client)
+        XCTAssertEqual(result, .unreachable(["网易云音乐"]))
+    }
+
+    @MainActor
+    func testUpdateMissingCoversAsksEachAlbumOnceAndReportsAll() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = localTrack()
+        var second = localTrack(); second.id = UUID(); second.title = "Second"; second.filename = "second.flac"
+        var covered = localTrack(); covered.id = UUID(); covered.album = "Covered"; covered.artworkFilename = "c.artwork"
+        let library = try makeLibrary(tracks: [first, second, covered, easonTrack()], root: root)
+        XCTAssertEqual(library.coverTargets.map(\.title), ["Song", "1874"], "One per album without a cover")
+        let record = search([release(releaseID, "Record", date: "2005")]), png = coverPNG()
+        MusicBrainzProtocol.configure { request in
+            switch request.url!.host {
+            case "coverartarchive.org": return .init(data: png)
+            case "itunes.apple.com", "music.163.com": return .init(data: Self.noAppleAlbums)
+            default: return .init(data: request.url!.absoluteString.contains("Ada") ? record : Data(#"{"recordings":[]}"#.utf8))
+            }
+        }
+        library.startCoverUpdate(library.coverTargets, client: client)
+        XCTAssertEqual(library.coverProgress, CoverProgress(done: 0, total: 2))
+        await library.coverJob?.value
+        XCTAssertNil(library.coverProgress)
+        let report = try XCTUnwrap(library.coverReport)
+        XCTAssertEqual(report.items.map(\.title), ["Record", "1874"])
+        XCTAssertEqual(report.items.map(\.result), [.found, .notFound("1874 - 陈奕迅")])
+        XCTAssertNotNil(library.tracks[1].artworkFilename, "The album's other song shares the cover")
+        XCTAssertEqual(MusicBrainzProtocol.requests.filter { $0.0.url?.host == "musicbrainz.org" }.count, 2)
+    }
+
+    func testAlbumOffersUpdateCoverOnlyWhenNoSongHasOne() {
+        var a = localTrack(); let b = localTrack()
+        XCTAssertEqual(LibraryStore.coverTarget([a, b])?.id, a.id)
+        a.artworkFilename = "a.artwork"
+        XCTAssertNil(LibraryStore.coverTarget([b, a]))
     }
 
     func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {
