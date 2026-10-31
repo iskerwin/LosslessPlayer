@@ -261,6 +261,9 @@ final class LibraryStore: ObservableObject {
 
     /// The 自动补全专辑与封面 switch in 音乐文件夹. On unless the user turned it off.
     static let albumLookupKey = "autoAlbumLookup"
+    /// Bumped when matching improves, so songs looked up under older rules are asked once more.
+    /// 2: traditional and simplified Chinese match.
+    static let albumLookupRules = 2
     private var albumLookupEnabled: Bool {
         UserDefaults.standard.object(forKey: Self.albumLookupKey) as? Bool ?? true
     }
@@ -276,11 +279,13 @@ final class LibraryStore: ObservableObject {
     }
 
     /// The next song to ask MusicBrainz about: one with no album tag, or one
-    /// whose album has no artwork on any of its songs. Each is asked once.
+    /// whose album has no artwork on any of its songs. Each is asked once per
+    /// version of the matching rules.
     private func nextAlbumLookup() -> Track? {
         let covered = Set(tracks.filter { $0.artworkFilename != nil }.map(\.albumID))
         return tracks.first {
-            $0.available && $0.albumLookedUp != true && ReleaseMatching.known($0.title)
+            $0.available && !($0.albumLookedUp == true && ($0.albumLookupRules ?? 1) >= Self.albumLookupRules)
+                && ReleaseMatching.known($0.title)
                 && ReleaseMatching.known($0.artist) && (!$0.hasAlbum || !covered.contains($0.albumID))
         }
     }
@@ -325,6 +330,7 @@ final class LibraryStore: ObservableObject {
                 if s.tracks[i].id == track.id { s.tracks[i] = updated }
                 if s.tracks[i].artworkFilename == nil, let artwork { s.tracks[i].artworkFilename = artwork }
                 s.tracks[i].albumLookedUp = true
+                s.tracks[i].albumLookupRules = Self.albumLookupRules
             }
             if !persist(s) {
                 if let artwork { try? FileManager.default.removeItem(at: root.appendingPathComponent(artwork)) }

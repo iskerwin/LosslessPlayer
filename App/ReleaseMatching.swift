@@ -75,8 +75,11 @@ struct ReleaseCandidate: Identifiable, Equatable, Sendable {
 }
 
 enum ReleaseMatching {
+    /// Traditional characters fold to simplified, so a simplified local tag
+    /// matches a MusicBrainz title such as 深夜港灣.
     static func normalized(_ text: String) -> String {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        (text.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? text)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
     }
 

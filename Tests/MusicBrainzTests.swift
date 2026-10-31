@@ -581,6 +581,54 @@ final class MusicBrainzTests: XCTestCase {
         XCTAssertNil(library.tracks[2].albumLookedUp, "An album with artwork needs no lookup")
     }
 
+    /// MusicBrainz lists 深夜港湾 under its traditional title 深夜港灣; only a
+    /// compilation carries the simplified spelling.
+    private func harbourSearch() -> Data {
+        func recording(_ id: String, _ title: String, _ releases: [[String: Any]]) -> [String: Any] {
+            ["id": id, "title": title, "length": 240000,
+             "artist-credit": [["artist": ["name": "甄楚倩"]]], "releases": releases]
+        }
+        return try! JSONSerialization.data(withJSONObject: ["recordings": [
+            recording(recordingID, "深夜港灣", [release(releaseID, "無伴的舞", date: "1988")]),
+            recording("77777777-7777-4777-8777-777777777777", "深夜港湾",
+                      [release(Self.compilationID, "靚聲王", date: "2015-05-20", secondary: ["Compilation"])])
+        ]])
+    }
+
+    private func harbourTrack() -> Track {
+        Track(id: UUID(), filename: "深夜港湾-甄楚倩.flac", title: "深夜港湾", artist: "甄楚倩", album: "未知专辑",
+              duration: 240, sampleRate: 44100, bitDepth: 16)
+    }
+
+    func testAutomaticAlbumMatchesTraditionalTitleForSimplifiedTag() throws {
+        struct Results: Decodable { var recordings: [MusicBrainzRecording] }
+        let results = try JSONDecoder().decode(Results.self, from: harbourSearch())
+        let picked = try XCTUnwrap(ReleaseMatching.automaticAlbum(
+            ReleaseMatching.candidates(for: harbourTrack(), recordings: results.recordings)))
+        XCTAssertEqual(picked.album, "無伴的舞")
+        XCTAssertEqual(picked.year, 1988)
+    }
+
+    @MainActor
+    func testSongLookedUpUnderOlderRulesIsAskedOnceMore() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var track = harbourTrack(); track.albumLookedUp = true
+        let library = try makeLibrary(tracks: [track], root: root)
+        let search = harbourSearch()
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "coverartarchive.org" ? .init(status: 404) : .init(data: search)
+        }
+        await library.lookUpAlbums(client: client)
+        let found = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(found.album, "無伴的舞")
+        XCTAssertEqual(found.albumLookupRules, LibraryStore.albumLookupRules)
+        XCTAssertEqual(LibraryStore(root: root).tracks.first?.albumLookupRules, LibraryStore.albumLookupRules)
+        let asked = MusicBrainzProtocol.requests.count
+        await library.lookUpAlbums(client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.count, asked, "Asked once under the current rules")
+    }
+
     func testUntaggedSongsPresentAsSinglesNamedAfterThemselves() {
         var a = localTrack(); a.album = "未知专辑"; a.folderID = UUID(); a.relativePath = "Mixed/a.flac"
         var b = a; b.id = UUID(); b.title = "Other"; b.relativePath = "Mixed/b.flac"
