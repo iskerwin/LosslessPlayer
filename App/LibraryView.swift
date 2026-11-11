@@ -280,7 +280,7 @@ struct LibraryView: View {
 
     private var searchPage: some View {
         searchResults
-            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑")
+            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑、歌单")
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("搜索")
             .navigationBarTitleDisplayMode(.large)
@@ -297,7 +297,7 @@ struct LibraryView: View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
-                                   description: Text("输入歌曲、艺术家或专辑名称"))
+                                   description: Text("输入歌曲、艺术家、专辑或歌单名称"))
         } else {
             let results = library.searchResults(matching: trimmed)
             if results.isEmpty {
@@ -324,6 +324,28 @@ struct LibraryView: View {
                                           groups: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks))) {
                                     open(.album(album.id))
                                 }
+                            }
+                        }
+                    }
+                    if !results.playlists.isEmpty {
+                        Section("歌单") {
+                            ForEach(results.playlists) { playlist in
+                                Button { open(.playlist(playlist.id)) } label: {
+                                    HStack(spacing: 12) {
+                                        PlaylistCover(playlist: playlist, library: library)
+                                            .frame(width: 48, height: 48)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(playlist.name).foregroundStyle(.primary)
+                                            Text("\(playlist.trackIDs.count) 首歌曲")
+                                                .font(.subheadline).foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(RowPressStyle())
+                                .accessibilityIdentifier("search-playlist-\(playlist.id)")
                             }
                         }
                     }
@@ -813,12 +835,13 @@ struct SearchResults {
     var songs: [Track] = []
     var albums: [AlbumGroup] = []
     var artists: [String] = []
+    var playlists: [Playlist] = []
     /// Songs for each displayed artist, keyed by the artist string. Built once
     /// per query so a row does not scan the song list and re-normalize names.
     var tracksByArtist: [String: [Track]] = [:]
-    var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty }
+    var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty }
 
-    static func group(tracks: [Track], query: String) -> SearchResults {
+    static func group(tracks: [Track], playlists: [Playlist] = [], query: String) -> SearchResults {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return SearchResults() }
         let matched = tracks.filter { $0.matchesSearch(query) }
@@ -846,7 +869,9 @@ struct SearchResults {
         }
         var tracksByArtist: [String: [Track]] = [:]
         for artist in artists { tracksByArtist[artist] = byNorm[AudioTags.normalized(artist)] ?? [] }
-        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists, tracksByArtist: tracksByArtist)
+        let matchingPlaylists = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists,
+                             playlists: matchingPlaylists, tracksByArtist: tracksByArtist)
     }
 }
 

@@ -1,6 +1,15 @@
 import Foundation
 import UniformTypeIdentifiers
 
+enum CollectionSearch {
+    /// Preserve the page's sort or playlist order, and search only its members.
+    static func filter(_ tracks: [Track], query: String) -> [Track] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return tracks }
+        return tracks.filter { $0.matchesSearch(trimmed) }
+    }
+}
+
 enum LibrarySort: String, CaseIterable, Identifiable {
     case title, artist, added, played, album
     var id: String { rawValue }

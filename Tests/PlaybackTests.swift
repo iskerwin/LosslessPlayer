@@ -882,6 +882,46 @@ final class SearchResultsTests: XCTestCase {
         XCTAssertTrue(SearchResults.group(tracks: library, query: "   ").isEmpty)
         XCTAssertTrue(SearchResults.group(tracks: library, query: "zzzz").isEmpty)
     }
+
+    func testPlaylistNameMatchesWithoutMatchingSongsIncludingEmptyPlaylists() {
+        let evening = Playlist(name: "Blue Evening")
+        let other = Playlist(name: "Morning")
+        let results = SearchResults.group(tracks: [], playlists: [other, evening], query: "  BLUE \n")
+        XCTAssertEqual(results.playlists.map(\.id), [evening.id])
+        XCTAssertFalse(results.isEmpty)
+        XCTAssertTrue(results.songs.isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: library, playlists: [evening], query: " \n").isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: [], playlists: [evening], query: "missing").isEmpty)
+    }
+
+    func testCollectionSearchPreservesOrderAndRestoresAllMembersWhenCleared() {
+        let members = library
+        let ordered = [members[2], members[1], members[0]]
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: " BLUE ").map(\.id), ordered.map(\.id))
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: "Horizons").map(\.id), [members[0].id])
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: "ADA").map(\.id), [members[0].id])
+        XCTAssertTrue(CollectionSearch.filter(ordered, query: "Mountain").isEmpty,
+                      "Search must not pull in library songs outside this page")
+        XCTAssertTrue(CollectionSearch.filter(ordered, query: "unmatched").isEmpty)
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: " \n").map(\.id), ordered.map(\.id))
+    }
+}
+
+@MainActor
+final class PlaylistSearchCacheTests: XCTestCase {
+    func testSameQueryReflectsCreateRenameAndDelete() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        XCTAssertTrue(library.searchResults(matching: "Night").isEmpty)
+        let playlist = try XCTUnwrap(library.createPlaylist("Night"))
+        XCTAssertEqual(library.searchResults(matching: "Night").playlists.map(\.id), [playlist.id])
+        library.rename(playlist, to: "Morning")
+        XCTAssertTrue(library.searchResults(matching: "Night").isEmpty)
+        XCTAssertEqual(library.searchResults(matching: "Morning").playlists.map(\.id), [playlist.id])
+        library.removePlaylist(playlist)
+        XCTAssertTrue(library.searchResults(matching: "Morning").isEmpty)
+    }
 }
 
 final class ArtworkSwipeTests: XCTestCase {

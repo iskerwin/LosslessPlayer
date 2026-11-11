@@ -2,6 +2,84 @@ import XCTest
 import UIKit
 
 final class GlassScreenshots: XCTestCase {
+    func testSongsSearchFiltersPlaybackAndClears() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-searchScreenshotLibrary"]
+        app.launch()
+        let songs = app.buttons["歌曲"]
+        XCTAssertTrue(songs.waitForExistence(timeout: 20))
+        songs.tap()
+        let list = app.descendants(matching: .any)["songs-list"]
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 8))
+        search.tap()
+        search.typeText("Stop")
+        XCTAssertTrue(list.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+        XCTAssertFalse(list.staticTexts["Apologize"].exists)
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4))
+        XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 5))
+        search.typeText("Stop\n")
+        list.buttons["播放"].tap()
+        let mini = try readyMini(in: app)
+        XCTAssertTrue(mini.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
+        try tapMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        player.buttons["显示播放队列"].tap()
+        let queue = player.scrollViews["now-playing-queue-scroll"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 5))
+        XCTAssertTrue(queue.staticTexts["队列已播放完毕"].waitForExistence(timeout: 5))
+        XCTAssertFalse(queue.staticTexts["Apologize"].exists)
+        XCTAssertFalse(queue.staticTexts["Mercy"].exists)
+        XCTAssertFalse(queue.staticTexts["Come Home"].exists)
+    }
+
+    func testGlobalSearchOpensPlaylistAndSearchesItsMembers() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-searchScreenshotLibrary"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["搜索"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["搜索"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 8))
+        search.tap()
+        search.typeText("Night")
+        let playlist = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-playlist-")).firstMatch
+        XCTAssertTrue(playlist.waitForExistence(timeout: 5))
+        playlist.tap()
+        let detail = app.descendants(matching: .any)["playlist-detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 8))
+        let pageSearch = app.searchFields.firstMatch
+        pageSearch.tap()
+        pageSearch.typeText("Mercy")
+        XCTAssertTrue(detail.staticTexts["Mercy"].waitForExistence(timeout: 5))
+        XCTAssertFalse(detail.staticTexts["Apologize"].exists)
+        XCTAssertTrue(detail.staticTexts["本地歌单 · 6 首歌曲"].exists)
+        pageSearch.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+        XCTAssertTrue(detail.staticTexts["Apologize"].waitForExistence(timeout: 5))
+    }
+
+    func testFavoritesSearchStaysWithinFavoritesAndShowsNoResults() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-searchScreenshotLibrary"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["收藏"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["收藏"].tap()
+        let list = app.descendants(matching: .any)["collection-list"]
+        XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 8))
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("Stop")
+        XCTAssertTrue(list.descendants(matching: .any)["collection-search-empty"].waitForExistence(timeout: 5))
+        XCTAssertFalse(list.staticTexts["Stop and Stare"].exists)
+        XCTAssertFalse(list.staticTexts["Apologize"].exists)
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4))
+        XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 5))
+    }
+
     func testMiniPlayerSwipeUpReopens() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

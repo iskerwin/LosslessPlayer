@@ -37,6 +37,10 @@ enum ScreenshotFixture {
             tracks.append(track)
         }
         var playlist = Playlist(name: "深夜")
+        if ProcessInfo.processInfo.arguments.contains("-searchScreenshotLibrary") {
+            playlist.name = "Night"
+            tracks[0].favorite = true
+        }
         playlist.trackIDs = tracks.map(\.id)
         playlist.coverTrackID = tracks.first?.id
         var snapshot = LibrarySnapshot()

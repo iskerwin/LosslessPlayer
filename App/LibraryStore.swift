@@ -80,7 +80,7 @@ final class LibraryStore: ObservableObject {
     func searchResults(matching query: String) -> SearchResults {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if let cachedSearch, cachedSearch.query == trimmed { return cachedSearch.results }
-        let results = SearchResults.group(tracks: tracks, query: trimmed)
+        let results = SearchResults.group(tracks: tracks, playlists: snapshot.playlists, query: trimmed)
         cachedSearch = (trimmed, results)
         return results
     }

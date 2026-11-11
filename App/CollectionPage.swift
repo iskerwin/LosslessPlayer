@@ -19,6 +19,21 @@ private struct PlaylistEditing: ViewModifier {
     }
 }
 
+private struct CollectionSearchField: ViewModifier {
+    var enabled: Bool
+    @Binding var query: String
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                               prompt: "搜索此列表")
+                .scrollDismissesKeyboard(.interactively)
+        } else {
+            content
+        }
+    }
+}
+
 struct CollectionPage: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -42,6 +57,7 @@ struct CollectionPage: View {
     @AppStorage("librarySort") private var sortRaw = LibrarySort.title.rawValue
     @AppStorage("albumSort") private var albumSortRaw = LibrarySort.album.rawValue
     @State private var editing = false
+    @State private var query = ""
     @State private var coverTarget: Playlist?
     @State private var matchingTrack: Track?
     @State private var orderMemo = TrackOrderMemo()
@@ -54,6 +70,7 @@ struct CollectionPage: View {
             .navigationTitle(kind == .playlist ? "" : title)
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
+            .modifier(CollectionSearchField(enabled: supportsSearch && !editing, query: $query))
             .background {
                 if usesArtworkBackground {
                     ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
@@ -78,6 +95,9 @@ struct CollectionPage: View {
 
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
     private var usesArtworkBackground: Bool { kind == .album || kind == .playlist }
+    private var supportsSearch: Bool { kind == .songs || kind == .favorites || kind == .playlist }
+    private var isFiltering: Bool { supportsSearch && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var visibleTracks: [Track] { CollectionSearch.filter(sorted, query: supportsSearch ? query : "") }
 
     private var songList: some View {
         let contextID = playbackContextID
@@ -85,13 +105,13 @@ struct CollectionPage: View {
             if (kind == .album && !sorted.isEmpty) || playlist != nil { header }
             if kind == .playlist { playlistTransport }
             if showTransport && kind != .playlist {
-                PlayShuffleBar(enabled: sorted.contains(where: \.available), play: {
-                    player.play(sorted, shuffled: false)
+                PlayShuffleBar(enabled: visibleTracks.contains(where: \.available), play: {
+                    player.play(visibleTracks, shuffled: false)
                 }, shuffle: {
-                    player.play(sorted, shuffled: true)
+                    player.play(visibleTracks, shuffled: true)
                 })
             }
-            ForEach(sorted) { track in
+            ForEach(visibleTracks) { track in
                 SongContextRow(
                     track: track,
                     root: library.root,
@@ -123,21 +143,29 @@ struct CollectionPage: View {
                 // and swipe actions. Inner insets leave the system's vertical padding.
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+                .moveDisabled(isFiltering)
             }
             .onMove { offsets, destination in
-                guard let playlist else { return }
+                guard let playlist, !isFiltering else { return }
                 library.moveTracks(in: playlist, displayed: sorted.map(\.id), from: offsets, to: destination)
             }
-            if kind == .playlist && !sorted.isEmpty {
-                Text(lengthText(sorted))
+            if kind == .playlist && !visibleTracks.isEmpty {
+                Text(lengthText(visibleTracks))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .padding(.vertical, 12)
             }
-            if sorted.isEmpty {
-                ContentUnavailableView("还没有歌曲", systemImage: "music.note", description: Text(emptyDescription))
+            if visibleTracks.isEmpty {
+                Group {
+                    if isFiltering {
+                        ContentUnavailableView.search(text: query.trimmingCharacters(in: .whitespacesAndNewlines))
+                            .accessibilityIdentifier("collection-search-empty")
+                    } else {
+                        ContentUnavailableView("还没有歌曲", systemImage: "music.note", description: Text(emptyDescription))
+                    }
+                }
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
@@ -211,22 +239,22 @@ struct CollectionPage: View {
 
     private var playlistTransport: some View {
         HStack(spacing: 14) {
-            Button { player.play(sorted, shuffled: true) } label: {
+            Button { player.play(visibleTracks, shuffled: true) } label: {
                 Image(systemName: "shuffle")
                     .font(.title3.weight(.semibold))
                     .frame(width: 48, height: 48)
                     .background(Color.primary.opacity(0.1), in: Circle())
             }
-            .disabled(!sorted.contains(where: \.available))
+            .disabled(!visibleTracks.contains(where: \.available))
             .accessibilityLabel("随机播放")
-            Button { player.play(sorted, shuffled: false) } label: {
+            Button { player.play(visibleTracks, shuffled: false) } label: {
                 Label("播放", systemImage: "play.fill")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 48)
                     .foregroundStyle(Color(uiColor: .systemBackground))
                     .background(Color.primary, in: Capsule())
             }
-            .disabled(!sorted.contains(where: \.available))
+            .disabled(!visibleTracks.contains(where: \.available))
             .accessibilityLabel("播放歌单")
             Button {
                 if let playlist { onAddSongs(playlist) }
@@ -312,7 +340,7 @@ struct CollectionPage: View {
         return orderMemo.indices.map { tracks[$0] }
     }
 
-    private var playbackContextID: Int { trackContextID(sorted) }
+    private var playbackContextID: Int { trackContextID(visibleTracks) }
 
     private var sortControl: some View {
         Menu {
@@ -345,7 +373,7 @@ struct CollectionPage: View {
             return [
                 MenuGroup(id: "edit", entries: [
                     MenuAction(id: "add", title: "添加歌曲", symbol: "plus") { onAddSongs(playlist) },
-                    MenuAction(id: "edit", title: "编辑", symbol: "pencil") { editing = true },
+                    MenuAction(id: "edit", title: "编辑", symbol: "pencil") { query = ""; editing = true },
                     MenuAction(id: "rename", title: "重命名", symbol: "pencil") { onRename(playlist) },
                     MenuAction(id: "cover", title: "修改封面", symbol: "photo") { coverTarget = playlist },
                     MenuAction(id: "export", title: "导出播放列表", symbol: "square.and.arrow.up") { onExport(playlist, sorted) }
@@ -391,7 +419,7 @@ struct CollectionPage: View {
 
     private var handlers: SongHandlers {
         SongHandlers(
-            play: { player.load($0, context: sorted) },
+            play: { player.load($0, context: visibleTracks) },
             favorite: { library.toggleFavorite($0) },
             playlist: { onAddToPlaylist([$0]) },
             playNext: { player.enqueue([$0], next: true) },
