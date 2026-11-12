@@ -2,6 +2,25 @@ import XCTest
 import UIKit
 
 final class GlassScreenshots: XCTestCase {
+    func testSongRowsIdentifyTracksWithLyricsWithoutOpeningThem() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-lyricsScreenshotLibrary"]
+        app.launch()
+        let songs = app.buttons["歌曲"]
+        XCTAssertTrue(songs.waitForExistence(timeout: 20))
+        songs.tap()
+        let list = app.descendants(matching: .any)["songs-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        let withLyrics = list.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ AND value == %@", "Apologize", "有歌词")).firstMatch
+        XCTAssertTrue(withLyrics.waitForExistence(timeout: 5))
+        let withoutLyrics = list.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ AND value == %@", "Stop and Stare", "有歌词")).firstMatch
+        XCTAssertFalse(withoutLyrics.exists)
+        save("songs-with-lyrics-indicator")
+    }
+
     func testSelectingLyricFromPauseSeeksHighlightsAndStartsPlayback() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

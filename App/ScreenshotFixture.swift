@@ -33,7 +33,7 @@ enum ScreenshotFixture {
                 album: "Dreaming Out Loud", duration: 211, sampleRate: 48000, bitDepth: 24
             )
             track.artworkFilename = "cover.jpg"
-            if ProcessInfo.processInfo.arguments.contains("-lyricsScreenshotLibrary") {
+            if index != 1, ProcessInfo.processInfo.arguments.contains("-lyricsScreenshotLibrary") {
                 track.lyrics = "Plain introduction\n[00:00.00]Opening line\n[00:12.00]Middle line\n[00:25.00]Closing line"
             }
             track.addedAt = Date().addingTimeInterval(TimeInterval(-index * 3600))
