@@ -71,10 +71,12 @@ struct Track: Identifiable, Codable, Equatable, Sendable {
         return AudioTags.normalized(albumArtistName) + "\u{1f}" + title
     }
     func matchesSearch(_ query: String) -> Bool {
+        matchesSearch(LibrarySearchQuery(query))
+    }
+    func matchesSearch(_ query: LibrarySearchQuery) -> Bool {
         if query.isEmpty { return true }
         let yearText = year.map(String.init) ?? ""
-        let blob = [title, artist, artistNames.joined(separator: " "), albumTitle, albumArtist ?? "", genre ?? "", yearText].joined(separator: " ")
-        return blob.localizedCaseInsensitiveContains(query)
+        return query.matches([title, artist, artistNames.joined(separator: " "), albumTitle, albumArtist ?? "", genre ?? "", yearText])
     }
     var specification: String {
         let depth = bitDepth > 0 ? "\(bitDepth)-bit · " : ""

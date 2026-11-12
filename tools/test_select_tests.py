@@ -21,13 +21,15 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["full"])
         self.assertFalse(result["screenshots"])
         for name in ("PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests",
-                     "FolderScanTests", "FolderPlaylistTests"):
+                     "FolderScanTests", "FolderPlaylistTests",
+                     "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests"):
             self.assertIn(f"-only-testing:LosslessPlayerTests/{name}", result["only_testing"])
 
     def test_now_playing_keeps_lyrics_coverage_and_screenshots(self):
         result = select_tests(["App/NowPlayingView.swift"])
         self.assertTrue(result["screenshots"])
         self.assertIn("-only-testing:LosslessPlayerTests/MigrationAndLyricsTests", result["only_testing"])
+        self.assertIn("-only-testing:LosslessPlayerTests/LyricPlaybackTests", result["only_testing"])
 
     def test_mixed_paths_union_and_deduplicate(self):
         engine = select_tests(["App/EnginePlayer.swift"])
@@ -35,6 +37,26 @@ class SelectionTests(unittest.TestCase):
         mixed = select_tests(["App/EnginePlayer.swift", "App/NowPlayingView.swift", "App/EnginePlayer.swift"])
         self.assertEqual(mixed["only_testing"], sorted(set(engine["only_testing"] + ui["only_testing"])))
         self.assertTrue(mixed["screenshots"])
+
+    def test_card_progress_keeps_rendering_regressions(self):
+        for path in ("App/PlayerCard.swift", "App/DetailCard.swift"):
+            with self.subTest(path=path):
+                result = select_tests([path])
+                self.assertFalse(result["full"])
+                self.assertTrue(result["screenshots"])
+                self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardRenderingTests", result["only_testing"])
+                self.assertIn("-only-testing:LosslessPlayerTests/BrowseAndArtworkPerformanceTests",
+                              result["only_testing"])
+
+    def test_search_changes_keep_matching_and_cache_regressions(self):
+        for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):
+            with self.subTest(path=path):
+                self.assertIn("-only-testing:LosslessPlayerTests/PlaylistSearchCacheTests",
+                              select_tests([path])["only_testing"])
+        for path in ("App/CollectionPage.swift", "App/PlaylistBrowser.swift"):
+            with self.subTest(path=path):
+                self.assertIn("-only-testing:LosslessPlayerTests/SearchResultsTests",
+                              select_tests([path])["only_testing"])
 
     def test_uncertain_inputs_never_narrow(self):
         for path in ("App/NewView.swift", "README.md", "project.yml",

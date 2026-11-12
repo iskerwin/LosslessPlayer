@@ -27,6 +27,7 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Lossless
+        CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
         UIFileSharingEnabled: true

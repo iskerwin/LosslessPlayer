@@ -167,13 +167,14 @@ struct NowPlayingView: View {
     var onClose: () -> Void
     var onPull: (CGFloat) -> Void
     var onPullCancelled: () -> Void
+    var presentationSettled: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
     @ScaledMetric(relativeTo: .headline) private var compactHeaderHeight: CGFloat = PlayerScrollMorph.compactHeight
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, presentationSettled: Bool = true) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
@@ -181,6 +182,7 @@ struct NowPlayingView: View {
         self.onClose = onClose
         self.onPull = onPull
         self.onPullCancelled = onPullCancelled
+        self.presentationSettled = presentationSettled
     }
 
     private enum Panel { case artwork, lyrics }
@@ -198,10 +200,12 @@ struct NowPlayingView: View {
     /// Direction of the most recent track change, so the artwork/title slide
     /// the way Music does: next slides in from the right, previous from the left.
     @State private var skipDirection: ArtworkSwipe.Direction = .next
-    /// Parsed once per track. The playback clock must not re-run the regex
+    /// Parsed off the main thread when the lyrics panel needs new text.
+    /// The playback clock must not re-run the regex
     /// on every tick, and the clock is observed only by the scrubber and
     /// the lyrics list so a position update does not rebuild the player.
-    @State private var lyricLines: [LyricsLine] = []
+    @State private var parsedLyrics = ParsedLyrics(source: nil, lines: [])
+    private var lyricLines: [LyricsLine] { parsedLyrics.lines(matching: current?.lyrics) }
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
         let duration = current?.duration ?? 0
@@ -227,11 +231,12 @@ struct NowPlayingView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
         // The gesture owns the 90pt dismissal decision; the card owns motion.
-        .onAppear {
-            reloadLyrics()
+        .task(id: panel == .lyrics ? current?.lyrics : nil) {
+            guard panel == .lyrics, parsedLyrics.source != current?.lyrics else { return }
+            let result = await ParsedLyrics.load(current?.lyrics)
+            guard !Task.isCancelled else { return }
+            parsedLyrics = result
         }
-        .onChange(of: current?.id) { _, _ in reloadLyrics() }
-        .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
         .onChange(of: player.upcomingTracks.map(\.id)) { _, _ in queueDrag = nil }
         .onChange(of: panel) { _, _ in queueDrag = nil }
         .onChange(of: scenePhase) { _, phase in
@@ -241,8 +246,8 @@ struct NowPlayingView: View {
             if !interactive { queueDrag = nil }
         }
         .onDisappear { queueDrag = nil }
-        .task {
-            try? await Task.sleep(for: .milliseconds(350))
+        .task(id: presentationSettled) {
+            guard presentationSettled else { return }
             chromeReady = true
         }
         .accessibilityAction(.escape) { onClose() }
@@ -263,6 +268,7 @@ struct NowPlayingView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("收起播放器")
+            .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
             .highPriorityGesture(dismissGesture)
             Group {
                 if panel == .lyrics {
@@ -576,6 +582,7 @@ struct NowPlayingView: View {
                 if chromeReady {
                     RoutePicker()
                         .accessibilityLabel("选择音频输出")
+                        .accessibilityIdentifier("player-route-picker")
                         .transition(.opacity)
                 }
             }
@@ -752,19 +759,15 @@ struct NowPlayingView: View {
     }
 
     @ViewBuilder private var lyricsPanel: some View {
-        if lyricLines.isEmpty {
+        if current?.hasLyrics == true, parsedLyrics.source != current?.lyrics {
+            ProgressView().tint(.white)
+        } else if lyricLines.isEmpty {
             ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。"))
         } else {
-            PlaybackLyrics(clock: player.clock, lines: lyricLines) { player.seek($0) }
+            PlaybackLyrics(clock: player.clock, lines: lyricLines) { time in
+                if let current = player.current { player.playLyric(in: current, at: time) }
+            }
         }
-    }
-
-    private func reloadLyrics() {
-        guard let text = current?.lyrics, current?.hasLyrics == true else {
-            lyricLines = []
-            return
-        }
-        lyricLines = LyricsLine.parse(text)
     }
 
     private var detailsSheet: some View {
@@ -1192,24 +1195,30 @@ struct LyricsScroll: View {
     var seek: (Double) -> Void
 
     var body: some View {
-        let active = position.flatMap { value in lines.lastIndex { ($0.time ?? -.infinity) <= value } }
+        let active = LyricsLine.activeIndex(in: lines, at: position)
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(spacing: 18) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                         LyricLineText(
                             text: line.text,
                             prominent: line.time == nil || index == active,
+                            selected: index == active,
                             time: line.time,
-                            seek: seek
+                            seek: { time in
+                                seek(time)
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                                    proxy.scrollTo(index, anchor: .center)
+                                }
+                            }
                         )
-                        .equatable()
                         .id(index)
                     }
                 }
                 .padding(.vertical)
             }
-            .onChange(of: active) { _, value in
+            .accessibilityIdentifier("lyrics-scroll")
+            .onChange(of: active, initial: true) { _, value in
                 if let value {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
                         proxy.scrollTo(value, anchor: .center)
@@ -1220,26 +1229,33 @@ struct LyricsScroll: View {
     }
 }
 
-private struct LyricLineText: View, Equatable {
+private struct LyricLineText: View {
     var text: String
     var prominent: Bool
+    var selected: Bool
     var time: Double?
     var seek: (Double) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    static func == (lhs: LyricLineText, rhs: LyricLineText) -> Bool {
-        lhs.text == rhs.text && lhs.prominent == rhs.prominent && lhs.time == rhs.time
+    @ViewBuilder var body: some View {
+        if let time {
+            Button { seek(time) } label: { lineText }
+                .buttonStyle(.plain)
+                .accessibilityHint("从这句开始播放")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+        } else {
+            lineText
+        }
     }
 
-    var body: some View {
-        Button { if let time { seek(time) } } label: {
-            Text(text)
-                .font(.title3.bold())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(prominent ? Color.white : Color.white.opacity(0.45))
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: prominent)
-        }
-        .buttonStyle(.plain)
+    private var lineText: some View {
+        Text(text)
+            .font(.title3.bold())
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
+            .contentShape(Rectangle())
+            .foregroundStyle(Color.primary.opacity(prominent ? 1 : 0.45))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: prominent)
     }
 }
 
@@ -1292,12 +1308,7 @@ private struct LyricsReaderBody: View {
 
     var body: some View {
         LyricsScroll(lines: lines, position: isCurrent ? clock.position : nil) { time in
-            if isCurrent || player.queueIDs.contains(track.id) {
-                if isCurrent { player.seek(time) }
-                else { player.load(track, at: time, keepTransport: true) }
-            } else {
-                player.load(track, at: time)
-            }
+            player.playLyric(in: track, at: time)
         }
     }
 }
@@ -1314,6 +1325,7 @@ struct SystemVolumeBar: View {
             Group {
                 if ready {
                     NativeVolumeView()
+                        .accessibilityIdentifier("player-system-volume")
                         .transition(.opacity)
                 } else {
                     Color.clear
@@ -1399,9 +1411,36 @@ private struct RoutePicker: UIViewRepresentable {
     }
 }
 
+struct ParsedLyrics {
+    let source: String?
+    private let parsedLines: [LyricsLine]
+
+    init(source: String?, lines: [LyricsLine]) {
+        self.source = source
+        parsedLines = lines
+    }
+
+    func lines(matching text: String?) -> [LyricsLine] {
+        source == text ? parsedLines : []
+    }
+
+    static func load(_ source: String?) async -> Self {
+        guard let source, !source.isEmpty else { return Self(source: source, lines: []) }
+        let lines = await Task.detached(priority: .utility) { LyricsLine.parse(source) }.value
+        return Self(source: source, lines: lines)
+    }
+}
+
 struct LyricsLine: Equatable {
     var time: Double?
     var text: String
+    static func activeIndex(in lines: [Self], at position: Double?) -> Int? {
+        guard let position, position.isFinite else { return nil }
+        return lines.lastIndex { line in
+            guard let time = line.time else { return false }
+            return time <= position
+        }
+    }
     static func parse(_ text: String) -> [Self] {
         let regex = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{2}(?:\.\d{1,3})?)\]"#)
         let offsetRegex = try! NSRegularExpression(pattern: #"\[offset:[ \t]*([+-]?[0-9]+)\]"#, options: .caseInsensitive)

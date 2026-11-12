@@ -1,6 +1,38 @@
 import Foundation
 import UniformTypeIdentifiers
 
+struct LibrarySearchQuery {
+    let terms: [String]
+    var isEmpty: Bool { terms.isEmpty }
+
+    init(_ text: String) {
+        terms = Self.normalize(text).split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    func matches(_ fields: [String]) -> Bool {
+        guard !isEmpty else { return true }
+        let normalized = fields.map(Self.normalize)
+        return terms.allSatisfy { term in normalized.contains { $0.contains(term) } }
+    }
+
+    func matches(_ text: String) -> Bool { matches([text]) }
+
+    private static func normalize(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                     locale: Locale(identifier: "en_US_POSIX"))
+            .precomposedStringWithCanonicalMapping
+    }
+}
+
+enum CollectionSearch {
+    /// Preserve the page's sort or playlist order, and search only its members.
+    static func filter(_ tracks: [Track], query: String) -> [Track] {
+        let search = LibrarySearchQuery(query)
+        guard !search.isEmpty else { return tracks }
+        return tracks.filter { $0.matchesSearch(search) }
+    }
+}
+
 enum LibrarySort: String, CaseIterable, Identifiable {
     case title, artist, added, played, album
     var id: String { rawValue }

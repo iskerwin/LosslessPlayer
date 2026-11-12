@@ -389,7 +389,102 @@ final class LibraryTests: XCTestCase {
     }
 }
 
+@MainActor
+final class LyricPlaybackTests: XCTestCase {
+    private func fixture() throws -> (URL, LibraryStore, [Track]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 240000))
+        buffer.frameLength = 240000
+        for frame in 0..<Int(buffer.frameLength) { buffer.floatChannelData![0][frame] = 0 }
+        var tracks: [Track] = []
+        for name in ["First", "Second", "Third"] {
+            let filename = name + ".wav"
+            do {
+                let file = try AVAudioFile(forWriting: root.appendingPathComponent(filename), settings: format.settings)
+                try file.write(from: buffer)
+            }
+            tracks.append(Track(id: UUID(), filename: filename, title: name, artist: "Artist", album: "Album",
+                                duration: 30, sampleRate: 8000, bitDepth: 16))
+        }
+        var snapshot = LibrarySnapshot()
+        snapshot.tracks = tracks
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        return (root, LibraryStore(root: root), tracks)
+    }
+
+    func testSelectingCurrentLyricSeeksResumesAndPreservesQueue() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: Array(tracks.prefix(2)))
+        XCTAssertFalse(player.playing)
+        let queue = player.queueIDs, context = player.contextIDs
+        player.playLyric(in: tracks[0], at: 12)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.position, 12, accuracy: 0.1)
+        XCTAssertEqual(player.current?.id, tracks[0].id)
+        XCTAssertEqual(player.queueIDs, queue)
+        XCTAssertEqual(player.contextIDs, context)
+        player.playLyric(in: tracks[0], at: 2)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.position, 2, accuracy: 0.1)
+    }
+
+    func testSelectingAnotherTracksLyricLoadsAtTimeAndKeepsExistingQueue() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: Array(tracks.prefix(2)))
+        let queue = player.queueIDs, context = player.contextIDs
+        player.playLyric(in: tracks[1], at: 9)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[1].id)
+        XCTAssertEqual(player.position, 9, accuracy: 0.1)
+        XCTAssertEqual(player.queueIDs, queue)
+        XCTAssertEqual(player.contextIDs, context)
+        player.playLyric(in: tracks[2], at: 5)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[2].id)
+        XCTAssertEqual(player.position, 5, accuracy: 0.1)
+    }
+
+    func testInvalidLyricTimeDoesNotResumeOrSwitchTracks() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        player.load(tracks[0], autoplay: false, at: 3)
+        player.playLyric(in: tracks[0], at: .nan)
+        player.playLyric(in: tracks[1], at: .infinity)
+        XCTAssertFalse(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[0].id)
+        XCTAssertEqual(player.position, 3, accuracy: 0.1)
+    }
+}
+
 final class MigrationAndLyricsTests: XCTestCase {
+    func testActiveLyricUsesTimedLinesAndUpdatesAfterSeekingBackwards() {
+        let lines = LyricsLine.parse("Plain lyrics\n[00:05.00]First\n[00:15.00]Second")
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: nil))
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: .nan))
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: 0))
+        XCTAssertEqual(LyricsLine.activeIndex(in: lines, at: 15), 2)
+        XCTAssertEqual(LyricsLine.activeIndex(in: lines, at: 5), 1)
+        XCTAssertNil(LyricsLine.activeIndex(in: LyricsLine.parse("Plain lyrics"), at: 20))
+    }
+
+    func testBackgroundLyricsOnlyExposeLinesForTheMatchingSource() async {
+        let text = "[00:05.00]First\n[00:10.00]Second"
+        let loaded = await ParsedLyrics.load(text)
+        XCTAssertEqual(loaded.lines(matching: text), LyricsLine.parse(text))
+        XCTAssertTrue(loaded.lines(matching: "[00:05.00]Different track").isEmpty)
+        XCTAssertTrue(loaded.lines(matching: nil).isEmpty)
+        let empty = await ParsedLyrics.load(nil)
+        XCTAssertTrue(empty.lines(matching: nil).isEmpty)
+    }
     func testOldLibraryWithoutFolderAndPlaylistFieldsMigrates() throws {
         let old = Data(#"{"tracks":[],"position":12.5}"#.utf8)
         let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: old)
@@ -615,6 +710,49 @@ final class FolderScanTests: XCTestCase {
         XCTAssertEqual(again.playCount, 1)
         XCTAssertNotNil(again.lastPlayed)
         XCTAssertEqual(again.id, track.id)
+    }
+
+    func testChangedFileStaysAndMissingFileCanBeDroppedWithoutExcludingIt() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        let gone = folder.appendingPathComponent("gone.wav")
+        let edited = folder.appendingPathComponent("edited.wav")
+        try wav(gone)
+        try wav(edited)
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let missing = try XCTUnwrap(library.tracks.first { $0.relativePath == "gone.wav" })
+        let kept = try XCTUnwrap(library.tracks.first { $0.relativePath == "edited.wav" })
+        let playlist = try XCTUnwrap(library.createPlaylist("Evening"))
+        library.add([missing, kept], to: playlist)
+        library.setCover(missing, for: playlist)
+        library.remember(id: missing.id, position: 4)
+        library.rememberQueue([missing.id, kept.id], contextOrder: [missing.id, kept.id])
+        try wav(edited)
+        try FileManager.default.removeItem(at: gone)
+        let folderID = try XCTUnwrap(library.snapshot.folders.first?.id)
+        await library.scanFolder(folderID)
+        let missingNow = try XCTUnwrap(library.tracks.first { $0.id == missing.id })
+        let keptNow = try XCTUnwrap(library.tracks.first { $0.id == kept.id })
+        XCTAssertEqual(missingNow.missing, true)
+        XCTAssertNotEqual(keptNow.missing, true)
+        XCTAssertTrue(library.scanSummary?.contains("失效 1 首") == true)
+        library.removeMissing([missingNow, keptNow])
+        XCTAssertNil(library.tracks.first { $0.id == missing.id })
+        XCTAssertEqual(library.tracks.first { $0.id == kept.id }?.id, kept.id)
+        XCTAssertEqual(library.snapshot.playlists.first?.trackIDs, [kept.id])
+        XCTAssertNil(library.snapshot.playlists.first?.coverTrackID)
+        XCTAssertEqual(library.snapshot.folders.first?.excludedPaths, [])
+        XCTAssertNil(library.snapshot.currentID)
+        XCTAssertEqual(library.snapshot.queueIDs, [kept.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: edited.path))
+        try wav(gone)
+        await library.scanFolder(folderID)
+        let returned = try XCTUnwrap(library.tracks.first { $0.relativePath == "gone.wav" })
+        XCTAssertNotEqual(returned.missing, true)
+        XCTAssertEqual(library.tracks.filter { $0.relativePath == "edited.wav" }.count, 1)
     }
 }
 
@@ -850,6 +988,139 @@ final class AudioPathTests: XCTestCase {
 }
 
 final class SearchResultsTests: XCTestCase {
+    func testPlaylistTabReturnsHomeOnlyAfterLeavingIt() throws {
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: true, detailOpen: false), .stay)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: false, detailOpen: false), .popPath)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: true, detailOpen: true), .closeCard)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: false, detailOpen: true), .closeCard)
+        XCTAssertFalse(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: true, detailOpen: false))
+        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: false, detailOpen: false))
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private func returnToPlaylistHome()"))
+        let rest = source[start.lowerBound...]
+        let end = rest.range(of: "\n    private func ")
+        let body = String(rest[..<(end?.lowerBound ?? rest.endIndex)])
+        XCTAssertNotNil(body.range(of: "playlistCardDismiss.close()"))
+        XCTAssertNil(body.range(of: "detailSource = nil"))
+    }
+
+    @MainActor
+    func testReselectKeepsSeparateSearchAndPlaylistActions() {
+        let proxy = SearchTabReselect.Proxy(original: nil)
+        var search = 0
+        var playlists = 0
+        proxy.handlers["搜索"] = { search += 1 }
+        proxy.handlers["歌单"] = { playlists += 1 }
+        let tab = UITabBarController()
+        let libraryTab = UIViewController()
+        libraryTab.tabBarItem = UITabBarItem(title: "资料库", image: nil, tag: 0)
+        let playlistTab = UIViewController()
+        playlistTab.tabBarItem = UITabBarItem(title: "歌单", image: nil, tag: 1)
+        let searchTab = UIViewController()
+        searchTab.tabBarItem = UITabBarItem(title: "搜索", image: nil, tag: 2)
+        tab.viewControllers = [libraryTab, playlistTab, searchTab]
+        tab.selectedIndex = 1
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: playlistTab))
+        XCTAssertEqual(playlists, 1)
+        XCTAssertEqual(search, 0)
+        tab.selectedIndex = 2
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: searchTab))
+        XCTAssertEqual(search, 1)
+        XCTAssertEqual(playlists, 1)
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: playlistTab))
+        XCTAssertEqual(playlists, 1, "A tap that changes tabs does not run the playlist action")
+    }
+
+    func testReselectTitleUsesTheGlassTabWhenTheBarItemIsBlank() {
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: nil, tabTitle: "歌单", accessibilityLabel: nil), "歌单")
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: "", tabTitle: "歌单", accessibilityLabel: "歌单"), "歌单")
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: "搜索", tabTitle: "歌单", accessibilityLabel: nil), "歌单")
+        XCTAssertNil(SearchTabReselect.Match.title(itemTitle: nil, tabTitle: nil, accessibilityLabel: nil))
+        XCTAssertNil(SearchTabReselect.Match.title(itemTitle: " ", tabTitle: "", accessibilityLabel: "\n"))
+    }
+
+    @MainActor
+    func testReselectInstallsWhenTheTabControllerIsNotAnAncestor() {
+        let host = UIViewController()
+        let tab = UITabBarController()
+        let probe = SearchTabReselect.Controller()
+        host.addChild(tab)
+        host.addChild(probe)
+        XCTAssertNil(probe.tabBarController)
+        var runs = 0
+        probe.titleToMatch = "歌单"
+        probe.onReselect = { runs += 1 }
+        probe.install(in: [host])
+        let playlist = UIViewController()
+        playlist.tabBarItem = UITabBarItem(title: "歌单", image: nil, tag: 1)
+        tab.viewControllers = [playlist]
+        tab.selectedIndex = 0
+        XCTAssertTrue(tab.delegate?.tabBarController?(tab, shouldSelect: playlist) ?? false)
+        XCTAssertEqual(runs, 1)
+    }
+
+    @MainActor
+    func testGlassTabReselectUsesTheTabTitleAndFiresOnce() {
+        guard #available(iOS 18, *) else { return }
+        let proxy = SearchTabReselect.Proxy(original: nil)
+        var playlists = 0
+        var search = 0
+        proxy.handlers["歌单"] = { playlists += 1 }
+        proxy.handlers["搜索"] = { search += 1 }
+        let tab = UITabBarController()
+        tab.loadViewIfNeeded()
+        let playlist = UITab(title: "歌单", image: nil, identifier: "playlists") { _ in
+            let controller = UIViewController()
+            controller.tabBarItem.title = nil
+            return controller
+        }
+        let searchTab = UITab(title: "搜索", image: nil, identifier: "search") { _ in UIViewController() }
+        tab.tabs = [playlist, searchTab]
+        tab.selectedTab = playlist
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelectTab: playlist))
+        proxy.tabBarController(tab, didSelectTab: playlist, previousTab: playlist)
+        XCTAssertEqual(playlists, 1)
+        XCTAssertEqual(search, 0)
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelectTab: searchTab))
+        XCTAssertEqual(search, 0, "A tap that changes tabs does not run the search action")
+        tab.selectedTab = searchTab
+        proxy.tabBarController(tab, didSelectTab: searchTab, previousTab: playlist)
+        XCTAssertEqual(search, 0)
+        proxy.tabBarController(tab, didSelectTab: searchTab, previousTab: searchTab)
+        XCTAssertEqual(search, 1)
+        XCTAssertEqual(playlists, 1)
+    }
+
+    func testFuzzySearchMatchesSeparateKeywordsAcrossTitleAndArtist() {
+        let tracks = library
+        let query = "  SKY\tada \n"
+        XCTAssertEqual(SearchResults.group(tracks: tracks, query: query).songs.map(\.id), [tracks[0].id])
+        XCTAssertEqual(CollectionSearch.filter(tracks, query: query).map(\.id), [tracks[0].id])
+        XCTAssertTrue(SearchResults.group(tracks: tracks, query: "Ada Ocean").songs.isEmpty)
+        XCTAssertTrue(CollectionSearch.filter(Array(tracks.suffix(3)), query: query).isEmpty)
+    }
+
+    func testFuzzySearchIgnoresCaseDiacriticsAndCharacterWidth() {
+        let query = LibrarySearchQuery(" CAFE  ＢＬＵＥ ")
+        XCTAssertTrue(query.matches(["Café", "Blue Sky"]))
+        XCTAssertFalse(query.matches(["Café", "Red Sky"]))
+        XCTAssertTrue(LibrarySearchQuery("\n \t").isEmpty)
+        let song = track("夜曲", artist: "周杰伦", album: "十一月的萧邦", file: "night.flac")
+        XCTAssertTrue(song.matchesSearch("杰  曲"))
+        XCTAssertFalse(song.matchesSearch("杰  晴天"))
+    }
+
+    func testGlobalArtistAndPlaylistSectionsUseTheSameFuzzyRules() {
+        let playlist = Playlist(name: "Blue Night")
+        XCTAssertEqual(SearchResults.group(tracks: library, playlists: [playlist], query: "NIGHT blue").playlists.map(\.id), [playlist.id])
+        let results = SearchResults.group(tracks: library, query: "band BLUE")
+        XCTAssertEqual(results.artists, ["Blue Band"])
+        XCTAssertEqual(results.songs.map(\.title), ["Ocean"])
+    }
+
     private func track(_ title: String, artist: String, album: String, file: String) -> Track {
         Track(id: UUID(), filename: file, title: title, artist: artist, album: album, duration: 1, sampleRate: 44100, bitDepth: 16)
     }
@@ -881,6 +1152,46 @@ final class SearchResultsTests: XCTestCase {
         XCTAssertTrue(SearchResults.group(tracks: library, query: "").isEmpty)
         XCTAssertTrue(SearchResults.group(tracks: library, query: "   ").isEmpty)
         XCTAssertTrue(SearchResults.group(tracks: library, query: "zzzz").isEmpty)
+    }
+
+    func testPlaylistNameMatchesWithoutMatchingSongsIncludingEmptyPlaylists() {
+        let evening = Playlist(name: "Blue Evening")
+        let other = Playlist(name: "Morning")
+        let results = SearchResults.group(tracks: [], playlists: [other, evening], query: "  BLUE \n")
+        XCTAssertEqual(results.playlists.map(\.id), [evening.id])
+        XCTAssertFalse(results.isEmpty)
+        XCTAssertTrue(results.songs.isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: library, playlists: [evening], query: " \n").isEmpty)
+        XCTAssertTrue(SearchResults.group(tracks: [], playlists: [evening], query: "missing").isEmpty)
+    }
+
+    func testCollectionSearchPreservesOrderAndRestoresAllMembersWhenCleared() {
+        let members = library
+        let ordered = [members[2], members[1], members[0]]
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: " BLUE ").map(\.id), ordered.map(\.id))
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: "Horizons").map(\.id), [members[0].id])
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: "ADA").map(\.id), [members[0].id])
+        XCTAssertTrue(CollectionSearch.filter(ordered, query: "Mountain").isEmpty,
+                      "Search must not pull in library songs outside this page")
+        XCTAssertTrue(CollectionSearch.filter(ordered, query: "unmatched").isEmpty)
+        XCTAssertEqual(CollectionSearch.filter(ordered, query: " \n").map(\.id), ordered.map(\.id))
+    }
+}
+
+@MainActor
+final class PlaylistSearchCacheTests: XCTestCase {
+    func testSameQueryReflectsCreateRenameAndDelete() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        XCTAssertTrue(library.searchResults(matching: "Night").isEmpty)
+        let playlist = try XCTUnwrap(library.createPlaylist("Night"))
+        XCTAssertEqual(library.searchResults(matching: "Night").playlists.map(\.id), [playlist.id])
+        library.rename(playlist, to: "Morning")
+        XCTAssertTrue(library.searchResults(matching: "Night").isEmpty)
+        XCTAssertEqual(library.searchResults(matching: "Morning").playlists.map(\.id), [playlist.id])
+        library.removePlaylist(playlist)
+        XCTAssertTrue(library.searchResults(matching: "Morning").isEmpty)
     }
 }
 
@@ -938,6 +1249,93 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
+    func testDiscardingCurrentTrackClearsEveryPresentationPhase() {
+        for phase in 0..<4 {
+            var state = PlayerPresentationState()
+            _ = state.request(true)
+            if phase > 0 { _ = state.beginMountedPresentation() }
+            if phase > 1 { state.complete(state.generation) }
+            if phase > 2 { _ = state.request(false) }
+            let staleGeneration = state.generation
+
+            state.discard()
+            XCTAssertFalse(state.presented)
+            XCTAssertFalse(state.mounted)
+            XCTAssertFalse(state.settled)
+            XCTAssertNil(state.beginMountedPresentation())
+            state.complete(staleGeneration)
+            XCTAssertFalse(state.mounted)
+            XCTAssertFalse(state.settled)
+
+            // A later song must create a fresh collapsed card, and old
+            // completions must not settle or remove that card.
+            XCTAssertEqual(state.request(true), .prepare(state.generation))
+            XCTAssertEqual(state.beginMountedPresentation(), state.generation)
+            state.complete(staleGeneration)
+            XCTAssertTrue(state.mounted)
+            XCTAssertFalse(state.settled)
+            state.complete(state.generation)
+            XCTAssertTrue(state.settled)
+        }
+    }
+
+    func testMiniSlotCacheKeepsLatestNativePositionAndRejectsInvalidGeometry() {
+        let cache = PlayerMiniSlotCache()
+        let expanded = PlayerMiniSlot(frame: CGRect(x: 21, y: 705, width: 348, height: 56), compact: false)
+        let inline = PlayerMiniSlot(frame: CGRect(x: 21, y: 761, width: 260, height: 36), compact: true)
+        XCTAssertTrue(cache.record(expanded))
+        XCTAssertFalse(cache.record(expanded))
+        XCTAssertTrue(cache.record(inline))
+        XCTAssertEqual(cache.latest, inline)
+        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: .zero)))
+        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: CGRect(x: CGFloat.infinity, y: 0, width: 300, height: 56))))
+        XCTAssertEqual(cache.latest, inline)
+    }
+
+    func testColdPlayerPresentationRequiresAMountedStartingLayout() {
+        var state = PlayerPresentationState()
+        XCTAssertEqual(state.request(true), .prepare(1))
+        XCTAssertTrue(state.mounted)
+        XCTAssertFalse(state.settled)
+        state.complete(1)
+        XCTAssertFalse(state.settled, "Completion cannot bypass the cold card's starting layout")
+        XCTAssertEqual(state.beginMountedPresentation(), 1)
+        XCTAssertNil(state.beginMountedPresentation())
+        state.complete(1)
+        XCTAssertTrue(state.settled)
+        XCTAssertEqual(state.request(false), .animate(2))
+        XCTAssertTrue(state.mounted)
+        state.complete(2)
+        XCTAssertFalse(state.mounted)
+    }
+
+    func testReopeningRejectsStaleCloseCompletion() {
+        var state = PlayerPresentationState()
+        _ = state.request(true)
+        _ = state.beginMountedPresentation()
+        state.complete(1)
+        XCTAssertEqual(state.request(false), .animate(2))
+        XCTAssertEqual(state.request(true), .animate(3))
+        state.complete(2)
+        XCTAssertTrue(state.mounted)
+        XCTAssertFalse(state.settled)
+        state.complete(3)
+        XCTAssertTrue(state.presented)
+        XCTAssertTrue(state.settled)
+    }
+
+    func testClosingDuringPreparationCannotStartTheOldOpen() {
+        var state = PlayerPresentationState()
+        _ = state.request(true)
+        _ = state.request(false)
+        XCTAssertNil(state.beginMountedPresentation())
+        state.complete(1)
+        XCTAssertTrue(state.mounted)
+        state.complete(2)
+        XCTAssertFalse(state.mounted)
+        XCTAssertFalse(state.presented)
+    }
+
     /// Same groupings `LibraryStore.rebuildDerived` keeps on the snapshot.
     /// Re-reading them must stay cheaper than rebuilding from the view, and
     /// must match the filters the pages used before the cache existed.
@@ -1229,6 +1627,62 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
 
 /// Pure format comparisons and scheduling state only: never starts an audio
 /// engine or activates AVAudioSession, including on the CI simulator.
+final class AudioSessionRatePolicyTests: XCTestCase {
+    func testWirelessOutputDoesNotFollowEachTracksSampleRate() {
+        for route in [AudioRouteKind.bluetooth, .airPlay] {
+            for source in [44100.0, 48000, 96000] {
+                XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: source, route: route, currentPreference: 48000))
+            }
+        }
+    }
+
+    func testWiredOutputStillFollowsSourceWithoutRepeatingTheSameRequest() {
+        for route in [AudioRouteKind.wired, .usb, .speaker] {
+            XCTAssertEqual(AudioSessionRatePolicy.preference(sourceRate: 96000, route: route, currentPreference: 44100), 96000)
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: 96000, route: route, currentPreference: 96000))
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: .nan, route: route, currentPreference: 48000))
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: 0, route: route, currentPreference: 48000))
+        }
+    }
+}
+
+@MainActor
+final class EngineSwitchContinuityTests: XCTestCase {
+    func testSameFormatReplacementKeepsTheRenderEngineRunning() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192))
+        buffer.frameLength = 8192
+        for channel in 0..<2 {
+            for frame in 0..<8192 { buffer.floatChannelData![channel][frame] = 0.1 }
+        }
+        let urls = [root.appendingPathComponent("first.wav"), root.appendingPathComponent("second.wav")]
+        for url in urls {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        let engine = AVAudioEngine()
+        let player = EnginePlayer(engine: engine)
+        defer { player.stop() }
+        // load() prepares the engine, so choose offline mode before loading.
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        try player.load(url: urls[0])
+        XCTAssertTrue(try player.play())
+        XCTAssertTrue(engine.isRunning)
+        XCTAssertTrue(try player.preload(url: urls[1], id: UUID()))
+        try player.load(url: urls[1])
+        XCTAssertTrue(engine.isRunning, "Replacing a same-format track must not stop the output render stream")
+        XCTAssertFalse(player.isPlaying, "The replacement is loaded without unexpected autoplay")
+        XCTAssertTrue(try player.play())
+        XCTAssertEqual(player.duration, 8192.0 / 44100, accuracy: 0.0001)
+        XCTAssertThrowsError(try player.load(url: root.appendingPathComponent("missing.wav")))
+        XCTAssertTrue(engine.isRunning)
+        XCTAssertTrue(player.isPlaying, "A failed open must leave the accepted file and render stream intact")
+    }
+}
+
 final class GaplessPlaybackTests: XCTestCase {
     private func format(_ rate: Double = 44100, channels: AVAudioChannelCount = 2) -> AVAudioFormat {
         AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels)!

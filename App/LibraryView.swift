@@ -12,23 +12,25 @@ struct LibraryView: View {
     @State private var detailSource: DetailCardSource?
     @State private var detailTab: AppTab = .library
     @State private var detailPath = NavigationPath()
-    @State private var detailProgress: CGFloat = 0
-    @State private var detailHeaderFrame: CGRect = .zero
-    @State private var detailTransitioning = false
     @State private var detailClosing = false
-    @State private var detailGeneration = 0
+    /// Same close the playlist card's back button runs. A tab tap must not remove the card.
+    @State private var playlistCardDismiss = DetailCardDismiss()
     @State private var searchFieldFocused = false
-    @State private var showPlayer = false
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
-    @State private var playerMounted = false
-    @State private var playerProgress: CGFloat = 0
+    @State private var playerPresentation = PlayerPresentationState()
+    private var showPlayer: Bool { playerPresentation.presented }
+    private var playerMounted: Bool { playerPresentation.mounted }
+    private var playerSettled: Bool { playerPresentation.settled }
     @State private var miniSlot = PlayerMiniSlot()
-    @State private var playerTransition = 0
+    @State private var playerGestures = PlayerGestureBridge()
+    @State private var latestMiniSlot = PlayerMiniSlotCache()
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
     @State private var query = ""
+    @State private var artistQuery = ""
+    @State private var albumQuery = ""
     @State private var playlistName = ""
     @State private var creatingPlaylist = false
     @State private var playlistBatch: TrackBatch?
@@ -43,7 +45,7 @@ struct LibraryView: View {
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
-    /// Frame and both layouts are evaluated from this same animated value.
+    /// Spring for the player card. The shell does not read its progress.
     static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
 
     var body: some View {
@@ -57,26 +59,28 @@ struct LibraryView: View {
                 .accessibilityHidden(showPlayer)
                 .overlay(alignment: .topLeading) {
                     if player.current != nil, playerMounted, miniFrame.width > 0 {
-                        PlayerCard(progress: playerProgress, miniFrame: miniFrame,
-                                   expandedFrame: expandedFrame, reduceMotion: reduceMotion,
-                                   canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
-                            if playerMounted {
-                                NowPlayingBackground(library: library, player: player)
-                            }
+                        PlayerMotionHost(presented: showPlayer,
+                                         generation: playerPresentation.generation,
+                                         miniFrame: miniFrame, expandedFrame: expandedFrame,
+                                         reduceMotion: reduceMotion, animation: playerAnimation,
+                                         canReopen: playerMounted && !showPlayer,
+                                         gestures: playerGestures,
+                                         onReopen: { setPlayer(true) },
+                                         onMounted: { playerPresentation.beginMountedPresentation() },
+                                         onComplete: { playerPresentation.complete($0) }) {
+                            NowPlayingBackground(library: library, player: player)
                         } expanded: {
-                            if playerMounted {
-                                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                                    setPlayer(false)
-                                    pendingDelete = [track]
-                                }, onClose: { setPlayer(false) }, onPull: {
-                                    followPull($0, distance: miniFrame.minY - expandedFrame.minY)
-                                }, onPullCancelled: cancelPull)
-                                .environment(\.colorScheme, .dark)
-                                .padding(.top, geometry.safeAreaInsets.top)
-                                .padding(.bottom, geometry.safeAreaInsets.bottom)
-                                .accessibilityHidden(!showPlayer)
-                                .allowsHitTesting(showPlayer)
-                            }
+                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                                setPlayer(false)
+                                pendingDelete = [track]
+                            }, onClose: { setPlayer(false) }, onPull: { playerGestures.follow($0) },
+                            onPullCancelled: { playerGestures.cancel() },
+                            presentationSettled: playerSettled)
+                            .environment(\.colorScheme, .dark)
+                            .padding(.top, geometry.safeAreaInsets.top)
+                            .padding(.bottom, geometry.safeAreaInsets.bottom)
+                            .accessibilityHidden(!showPlayer)
+                            .allowsHitTesting(showPlayer)
                         } collapsed: {
                             MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
                                 .accessibilityHidden(showPlayer)
@@ -86,6 +90,14 @@ struct LibraryView: View {
                     }
                 }
         }
+            .onChange(of: player.current?.id) { _, currentID in
+                guard currentID == nil else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    playerPresentation.discard()
+                }
+            }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
                     .presentationDetents([.large])
@@ -196,7 +208,7 @@ struct LibraryView: View {
     }
 
     private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
-        guard slot.frame.width > 0, slot.frame.height > 0, slot != miniSlot else { return }
+        guard latestMiniSlot.record(slot), playerMounted, slot != miniSlot else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { miniSlot = slot }
@@ -229,6 +241,7 @@ struct LibraryView: View {
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { searchStack }
         }
         .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var legacyTabs: some View {
@@ -239,6 +252,7 @@ struct LibraryView: View {
             searchStack.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
         }
         .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var libraryStack: some View {
@@ -280,7 +294,7 @@ struct LibraryView: View {
 
     private var searchPage: some View {
         searchResults
-            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑")
+            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑、歌单")
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("搜索")
             .navigationBarTitleDisplayMode(.large)
@@ -297,7 +311,7 @@ struct LibraryView: View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
-                                   description: Text("输入歌曲、艺术家或专辑名称"))
+                                   description: Text("输入歌曲、艺术家、专辑或歌单名称"))
         } else {
             let results = library.searchResults(matching: trimmed)
             if results.isEmpty {
@@ -324,6 +338,28 @@ struct LibraryView: View {
                                           groups: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks))) {
                                     open(.album(album.id))
                                 }
+                            }
+                        }
+                    }
+                    if !results.playlists.isEmpty {
+                        Section("歌单") {
+                            ForEach(results.playlists) { playlist in
+                                Button { open(.playlist(playlist.id)) } label: {
+                                    HStack(spacing: 12) {
+                                        PlaylistCover(playlist: playlist, library: library)
+                                            .frame(width: 48, height: 48)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(playlist.name).foregroundStyle(.primary)
+                                            Text("\(playlist.trackIDs.count) 首歌曲")
+                                                .font(.subheadline).foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(RowPressStyle())
+                                .accessibilityIdentifier("search-playlist-\(playlist.id)")
                             }
                         }
                     }
@@ -508,13 +544,20 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        List(library.artistNames, id: \.self) { artist in
+        let search = LibrarySearchQuery(artistQuery)
+        let artists = library.artistNames.filter { search.matches($0) }
+        return List(artists, id: \.self) { artist in
             let tracks = library.tracks(forArtist: artist)
             browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
                 open(.artist(artist))
             }
         }
         .listStyle(.plain)
+        .searchable(text: $artistQuery, prompt: "搜索艺术家")
+        .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if artists.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: artistQuery) }
+        }
         .navigationTitle("艺术家")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass { libraryMore }
@@ -522,9 +565,11 @@ struct LibraryView: View {
     }
 
     private var albumIndex: some View {
-        ScrollView {
+        let search = LibrarySearchQuery(albumQuery)
+        let albums = library.albumGroups.filter { search.matches([$0.name, $0.artist]) }
+        return ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
-                ForEach(library.albumGroups) { album in
+                ForEach(albums) { album in
                     DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
                         ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
                                     root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
@@ -545,6 +590,11 @@ struct LibraryView: View {
             .padding(22)
         }
         .accessibilityIdentifier("album-grid")
+        .searchable(text: $albumQuery, prompt: "搜索专辑、艺术家")
+        .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if albums.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: albumQuery) }
+        }
         .navigationTitle("专辑")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass { libraryMore }
@@ -606,39 +656,33 @@ struct LibraryView: View {
         reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
     }
 
-    /// The drag and this spring write the same progress. Completion only
-    /// releases expensive expanded controls; it never swaps visible cards.
+    /// Mounts or asks the card to travel. Progress stays inside the card.
     private func setPlayer(_ expanded: Bool) {
-        guard expanded != showPlayer else { return }
-        playerTransition += 1
-        let transition = playerTransition
-        if expanded { playerMounted = true }
-        var transaction = Transaction(animation: playerAnimation)
-        transaction.disablesAnimations = false
+        guard let step = playerPresentation.request(expanded) else { return }
+        guard case .prepare = step else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
         withTransaction(transaction) {
-            withAnimation(playerAnimation, completionCriteria: .removed) {
-                showPlayer = expanded
-                playerProgress = expanded ? 1 : 0
-            } completion: {
-                guard !expanded, !showPlayer, playerTransition == transition else { return }
-                playerMounted = false
-            }
+            miniSlot = latestMiniSlot.latest
         }
     }
 
-    private func followPull(_ translation: CGFloat, distance: CGFloat) {
-        guard showPlayer, !reduceMotion else { return }
-        let next = PlayerCardMetrics.progress(for: translation, distance: distance)
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { playerProgress = next }
-    }
-
-    private func cancelPull() {
-        guard showPlayer else { return }
-        var transaction = Transaction(animation: playerAnimation)
-        transaction.disablesAnimations = false
-        withTransaction(transaction) { playerProgress = 1 }
+    /// Second tap on the playlist tab. Already at the home does nothing.
+    /// An open cover plays the back button's close. A pushed list pops to its root.
+    private func returnToPlaylistHome() {
+        let detailOpen = detailTab == .playlists && detailSource != nil
+        switch PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty, detailOpen: detailOpen) {
+        case .stay:
+            break
+        case .closeCard:
+            playlistCardDismiss.close()
+        case .popPath:
+            var transaction = Transaction()
+            transaction.disablesAnimations = false
+            withTransaction(transaction) {
+                playlistPath = NavigationPath()
+            }
+        }
     }
 
     private func open(_ route: LibraryRoute) {
@@ -664,11 +708,7 @@ struct LibraryView: View {
                 detailTab = owner
                 detailSource = source
                 detailPath = NavigationPath()
-                detailProgress = 0
-                detailHeaderFrame = .zero
                 detailClosing = false
-                detailTransitioning = true
-                detailGeneration += 1
             }
         ), covered: detailSource != nil && detailTab == owner)
     }
@@ -682,59 +722,25 @@ struct LibraryView: View {
                 let expanded = CGRect(origin: .zero, size: geometry.size)
                 let localSource = DetailCardSource(route: source.route,
                     frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
-                DetailZoomCard(progress: detailProgress, source: localSource, expanded: expanded,
-                               headerFrame: detailHeaderFrame.offsetBy(dx: -origin.x, dy: -origin.y),
-                               transitioning: detailTransitioning, reduceMotion: reduceMotion,
-                               detail: NavigationStack(path: $detailPath) {
-                    destination(source.route)
-                        .environment(\.detailCardHeader, DetailCardHeader(
-                            hidden: detailTransitioning && !reduceMotion,
-                            measure: receiveDetailHeader, close: closeDetail))
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button(action: closeDetail) { Image(systemName: "chevron.left") }
-                                    .accessibilityLabel("返回")
-                                    .accessibilityIdentifier("detail-card-back")
+                DetailMotionHost(source: localSource, expanded: expanded, reduceMotion: reduceMotion,
+                                 spaceOrigin: origin,
+                                 onWillClose: { detailClosing = true },
+                                 onClosed: {
+                                    detailSource = nil
+                                    detailClosing = false
+                                    detailPath = NavigationPath()
+                                 },
+                                 dismiss: owner == .playlists ? playlistCardDismiss : nil) {
+                    NavigationStack(path: $detailPath) {
+                        destination(source.route)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) { DetailCardBackButton() }
                             }
-                        }
-                        .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-                })
-                .allowsHitTesting(detailProgress == 1 && !detailTransitioning)
-                .accessibilityIdentifier("detail-card")
+                            .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                    }
+                }
             }
             .ignoresSafeArea(.container)
-        }
-    }
-
-    private func receiveDetailHeader(_ frame: CGRect) {
-        guard frame.width > 0, frame.height > 0, !detailClosing else { return }
-        detailHeaderFrame = frame
-        guard detailProgress == 0, detailTransitioning else { return }
-        let generation = detailGeneration
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
-                      completionCriteria: .removed) {
-            detailProgress = 1
-        } completion: {
-            guard generation == detailGeneration, !detailClosing else { return }
-            detailTransitioning = false
-        }
-    }
-
-    private func closeDetail() {
-        guard detailSource != nil, !detailClosing else { return }
-        detailClosing = true
-        detailTransitioning = true
-        detailGeneration += 1
-        let generation = detailGeneration
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
-                      completionCriteria: .removed) {
-            detailProgress = 0
-        } completion: {
-            guard generation == detailGeneration else { return }
-            // Reveal the untouched source on the exact zero-progress frame.
-            detailSource = nil
-            detailTransitioning = false
-            detailPath = NavigationPath()
         }
     }
 
@@ -813,19 +819,20 @@ struct SearchResults {
     var songs: [Track] = []
     var albums: [AlbumGroup] = []
     var artists: [String] = []
+    var playlists: [Playlist] = []
     /// Songs for each displayed artist, keyed by the artist string. Built once
     /// per query so a row does not scan the song list and re-normalize names.
     var tracksByArtist: [String: [Track]] = [:]
-    var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty }
+    var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty }
 
-    static func group(tracks: [Track], query: String) -> SearchResults {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return SearchResults() }
-        let matched = tracks.filter { $0.matchesSearch(query) }
+    static func group(tracks: [Track], playlists: [Playlist] = [], query: String) -> SearchResults {
+        let search = LibrarySearchQuery(query)
+        guard !search.isEmpty else { return SearchResults() }
+        let matched = tracks.filter { $0.matchesSearch(search) }
         func rank(_ track: Track) -> Int {
-            if track.title.localizedCaseInsensitiveContains(query) { return 0 }
-            if track.artistNames.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return 1 }
-            if track.albumTitle.localizedCaseInsensitiveContains(query) { return 2 }
+            if search.matches(track.title) { return 0 }
+            if search.matches(track.artistNames) { return 1 }
+            if search.matches(track.albumTitle) { return 2 }
             return 3
         }
         let songs = matched.sorted {
@@ -833,8 +840,7 @@ struct SearchResults {
             if a != b { return a < b }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
-        let needle = AudioTags.normalized(query)
-        let artists = Array(Set(matched.flatMap(\.artistNames).filter { AudioTags.normalized($0).contains(needle) }))
+        let artists = Array(Set(matched.flatMap(\.artistNames).filter { search.matches($0) }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         var byNorm: [String: [Track]] = [:]
         for song in songs {
@@ -846,7 +852,9 @@ struct SearchResults {
         }
         var tracksByArtist: [String: [Track]] = [:]
         for artist in artists { tracksByArtist[artist] = byNorm[AudioTags.normalized(artist)] ?? [] }
-        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists, tracksByArtist: tracksByArtist)
+        let matchingPlaylists = playlists.filter { search.matches($0.name) }
+        return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists,
+                             playlists: matchingPlaylists, tracksByArtist: tracksByArtist)
     }
 }
 
@@ -896,17 +904,25 @@ private struct AccessoryMiniPlayer: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ArtworkView(track: track, root: root, size: compact ? 28 : 44)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    .contentTransition(.opacity)
-                if !compact, !artist.isEmpty {
-                    Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Button(action: open) {
+                HStack(spacing: 12) {
+                    ArtworkView(track: track, root: root, size: compact ? 28 : 44)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .contentTransition(.opacity)
+                        if !compact, !artist.isEmpty {
+                            Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                .contentTransition(.opacity)
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .accessibilityHint("展开播放器")
+            .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -928,7 +944,6 @@ private struct AccessoryMiniPlayer: View {
         .padding(.vertical, compact ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
-        .onTapGesture(perform: open)
         .simultaneousGesture(MiniPlayerReopenGesture(onReopen: open))
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
@@ -938,7 +953,30 @@ private struct AccessoryMiniPlayer: View {
 
 private extension View {
     func searchReselect(title: String, onReselect: @escaping () -> Void) -> some View {
+        tabReselect(title: title, onReselect: onReselect)
+    }
+
+    func tabReselect(title: String, onReselect: @escaping () -> Void) -> some View {
         background { SearchTabReselect(title: title, onReselect: onReselect) }
+    }
+}
+
+enum PlaylistTabNavigation {
+    /// Cover cards travel back. Pushed lists pop. The home stays put.
+    enum Step {
+        case stay
+        case closeCard
+        case popPath
+    }
+
+    static func step(pathIsEmpty: Bool, detailOpen: Bool) -> Step {
+        if detailOpen { return .closeCard }
+        if !pathIsEmpty { return .popPath }
+        return .stay
+    }
+
+    static func shouldReturnHome(pathIsEmpty: Bool, detailOpen: Bool) -> Bool {
+        step(pathIsEmpty: pathIsEmpty, detailOpen: detailOpen) != .stay
     }
 }
 

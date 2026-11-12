@@ -80,7 +80,7 @@ final class LibraryStore: ObservableObject {
     func searchResults(matching query: String) -> SearchResults {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if let cachedSearch, cachedSearch.query == trimmed { return cachedSearch.results }
-        let results = SearchResults.group(tracks: tracks, query: trimmed)
+        let results = SearchResults.group(tracks: tracks, playlists: snapshot.playlists, query: trimmed)
         cachedSearch = (trimmed, results)
         return results
     }
@@ -700,6 +700,35 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    /// Drops songs whose source file is already gone. Does not delete files,
+    /// and does not exclude the path, so a file that returns is scanned again.
+    /// Available songs in `tracks` are ignored.
+    func removeMissing(_ tracks: [Track]) {
+        let requested = Set(tracks.filter { !$0.available }.map(\.id))
+        guard !requested.isEmpty else { return }
+        var s = snapshot
+        let removing = Set(s.tracks.filter { requested.contains($0.id) && !$0.available }.map(\.id))
+        guard !removing.isEmpty else { return }
+        s.tracks.removeAll { removing.contains($0.id) }
+        for i in s.playlists.indices {
+            s.playlists[i].trackIDs.removeAll { removing.contains($0) }
+            if let cover = s.playlists[i].coverTrackID, removing.contains(cover) {
+                s.playlists[i].coverTrackID = nil
+            }
+        }
+        playback.queueIDs.removeAll { removing.contains($0) }
+        playback.contextOrder.removeAll { removing.contains($0) }
+        if let current = playback.currentID, removing.contains(current) {
+            playback.currentID = nil
+            playback.position = 0
+        }
+        writePlaybackFile()
+        s.currentID = playback.currentID
+        s.position = playback.position
+        s.queueIDs = playback.queueIDs
+        persist(s)
+    }
+
     func addFolder(_ url: URL) async {
         guard !importing else { return }
         let scoped = url.startAccessingSecurityScopedResource()
@@ -834,7 +863,10 @@ final class LibraryStore: ObservableObject {
             }
             if persist(s) {
                 ArtworkCache.shared.removeAll()
-                scanSummary = "扫描完成：新增 \(added) 首，已存在 \(result.skipped) 首，无法读取 \(result.failures.count) 个"
+                let missingCount = s.tracks.filter { $0.folderID == id && $0.missing == true }.count
+                var summary = "扫描完成：新增 \(added) 首，已存在 \(result.skipped) 首，无法读取 \(result.failures.count) 个"
+                if missingCount > 0 { summary += "，失效 \(missingCount) 首" }
+                scanSummary = summary
                 progress = 1; progressText = scanSummary ?? ""
             }
         } catch is CancellationError { scanSummary = "已取消扫描，资料库保持不变" }

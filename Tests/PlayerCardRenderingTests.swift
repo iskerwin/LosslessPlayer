@@ -503,6 +503,213 @@ final class PlayerCardRenderingTests: XCTestCase {
             }
         }
     }
+
+    func testLibraryShellDoesNotStoreCardProgress() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
+        XCTAssertNil(source.range(of: "playerProgress"))
+        XCTAssertNil(source.range(of: "detailProgress"))
+        XCTAssertNotNil(source.range(of: "PlayerMotionHost"))
+        XCTAssertNotNil(source.range(of: "DetailMotionHost"))
+    }
+
+    func testPlayerProgressWritesDoNotEvaluateTheShell() throws {
+        let probe = TransitionEvaluationProbe()
+        let bridge = PlayerGestureBridge()
+        let ready = expectation(description: "player card appeared")
+        let window = try show(PlayerShellProbe(probe: probe, bridge: bridge, ready: {
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }))
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let shellBaseline = probe.shell
+        let cardBaseline = probe.card
+        for step in 1...30 {
+            let seen = probe.card
+            bridge.follow(CGFloat(step) * 8)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
+        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
+    }
+
+    func testPlaylistTabCloseStartsTheCardReturnWithoutRemovingIt() throws {
+        let dismiss = DetailCardDismiss()
+        var willClose = 0
+        var didClose = 0
+        let drive = DetailProgressDrive()
+        let ready = expectation(description: "detail card appeared")
+        let window = try show(DetailMotionHost(
+            source: DetailCardSource(route: .playlist(UUID()),
+                                     frame: CGRect(x: 20, y: 80, width: 160, height: 160),
+                                     artwork: AnyView(Color.green)),
+            expanded: CGRect(x: 0, y: 0, width: 390, height: 700),
+            reduceMotion: true, spaceOrigin: .zero,
+            onWillClose: { willClose += 1 },
+            onClosed: { didClose += 1 },
+            dismiss: dismiss,
+            progressDrive: drive,
+            onReady: { ready.fulfill() }
+        ) {
+            Color.white
+        })
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        drive.set(1)
+        let committed = expectation(description: "open progress committed")
+        DispatchQueue.main.async { committed.fulfill() }
+        wait(for: [committed], timeout: 1)
+        dismiss.close()
+        XCTAssertEqual(willClose, 1)
+        XCTAssertEqual(didClose, 0, "The card travels back instead of being removed")
+    }
+
+    func testDetailProgressWritesDoNotEvaluateTheShell() throws {
+        let probe = TransitionEvaluationProbe()
+        let drive = DetailProgressDrive()
+        let ready = expectation(description: "detail card appeared")
+        let window = try show(DetailShellProbe(probe: probe, drive: drive, ready: {
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }))
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let shellBaseline = probe.shell
+        let cardBaseline = probe.card
+        for step in 1...30 {
+            let seen = probe.card
+            drive.set(CGFloat(step) / 30)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
+        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
+    }
+
+    func testCoverFrameWritesDoNotEvaluateTheLink() throws {
+        let probe = TransitionEvaluationProbe()
+        let linkProbe = DetailCardLinkProbe()
+        let ready = expectation(description: "cover link appeared")
+        linkProbe.evaluate = { probe.card += 1 }
+        linkProbe.ready = { slot in
+            linkProbe.attached = slot
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }
+        let window = try show(DetailCardLink(route: .albums, fallback: {}, probe: linkProbe) {
+            Color.green.frame(width: 80, height: 80)
+        } label: { artwork in
+            artwork
+        })
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let baseline = probe.card
+        let slot = try XCTUnwrap(linkProbe.attached)
+        for step in 1...10 {
+            let seen = probe.card
+            slot.frame = CGRect(x: 0, y: CGFloat(step) * 12, width: 80, height: 80)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertLessThanOrEqual(probe.card - baseline, 1, "card \(probe.card)")
+        XCTAssertEqual(slot.frame, CGRect(x: 0, y: 120, width: 80, height: 80))
+    }
+
+    private var displacedKey: UIWindow?
+    private var layoutView: UIView?
+
+    private func show<Content: View>(_ root: Content) throws -> UIWindow {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let controller = UIHostingController(rootView: root)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.view.layoutIfNeeded()
+        displacedKey = previous
+        layoutView = controller.view
+        return window
+    }
+
+    private func hide(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+        displacedKey?.makeKeyAndVisible()
+        displacedKey = nil
+        layoutView = nil
+    }
+
+    /// Nested `RunLoop.run` returns without committing SwiftUI, so a progress
+    /// write looked like it never reached the card. `wait` runs the main queue
+    /// the update is scheduled on. The deadline is not the pass condition.
+    private func flushUntil(probe: TransitionEvaluationProbe, changesFrom seen: Int) {
+        let done = expectation(description: "card progress committed")
+        let start = Date()
+        func tick() {
+            CATransaction.flush()
+            layoutView?.layoutIfNeeded()
+            if probe.card != seen || Date().timeIntervalSince(start) >= 0.2 {
+                done.fulfill()
+                return
+            }
+            DispatchQueue.main.async(execute: tick)
+        }
+        DispatchQueue.main.async(execute: tick)
+        wait(for: [done], timeout: 1)
+    }
+}
+
+private final class TransitionEvaluationProbe {
+    var shell = 0
+    var card = 0
+    var didReady = false
+}
+
+private struct PlayerShellProbe: View {
+    var probe: TransitionEvaluationProbe
+    var bridge: PlayerGestureBridge
+    var ready: () -> Void
+
+    var body: some View {
+        let _ = probe.shell += 1
+        PlayerMotionHost(presented: true, generation: 1,
+                         miniFrame: CGRect(x: 0, y: 700, width: 320, height: 56),
+                         expandedFrame: CGRect(x: 0, y: 0, width: 390, height: 844),
+                         reduceMotion: false, animation: .linear(duration: 0.3),
+                         canReopen: false, gestures: bridge, onReopen: {},
+                         onMounted: { ready(); return nil }, onComplete: { _ in },
+                         onEvaluate: { probe.card += 1 }) {
+            Color.black
+        } expanded: {
+            Color.red
+        } collapsed: {
+            Color.blue
+        }
+    }
+}
+
+private struct DetailShellProbe: View {
+    var probe: TransitionEvaluationProbe
+    var drive: DetailProgressDrive
+    var ready: () -> Void
+
+    var body: some View {
+        let _ = probe.shell += 1
+        DetailMotionHost(source: DetailCardSource(route: .albums,
+                                                  frame: CGRect(x: 10, y: 10, width: 40, height: 40),
+                                                  artwork: AnyView(Color.green)),
+                         expanded: CGRect(x: 0, y: 0, width: 200, height: 400),
+                         reduceMotion: true, spaceOrigin: .zero,
+                         onWillClose: {}, onClosed: {}, progressDrive: drive, onReady: ready,
+                         onEvaluate: { probe.card += 1 }) {
+            Color.white
+        }
+    }
 }
 
 @MainActor

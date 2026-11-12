@@ -18,7 +18,16 @@ struct SourcesView: View {
                     Section {
                         Label(folder.name, systemImage: "folder.fill").font(.headline)
                         let songs = library.tracks.filter { $0.folderID == folder.id }
-                        Text("\(songs.count) 首歌曲 · \(songs.filter { !$0.available }.count) 首失效").font(.caption).foregroundStyle(.secondary)
+                        let missing = songs.filter { !$0.available }
+                        Text("\(songs.count) 首歌曲 · \(missing.count) 首失效").font(.caption).foregroundStyle(.secondary)
+                        if !missing.isEmpty {
+                            NavigationLink {
+                                MissingTracksView(library: library, player: player, folderID: folder.id)
+                            } label: {
+                                Label("查看失效歌曲", systemImage: "exclamationmark.triangle")
+                            }
+                            .accessibilityIdentifier("missing-tracks-\(folder.id)")
+                        }
                         if let date = folder.lastScan { Text("上次扫描 \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
                         if let error = folder.scanError { Text(error).font(.caption).foregroundStyle(.red) }
                         Button("按文件夹创建歌单", systemImage: "music.note.list") { library.createPlaylistsFromFolder(folder) }.disabled(library.importing)
@@ -63,5 +72,58 @@ struct SourcesView: View {
                 Button("好") { library.errorMessage = nil }
             } message: { Text(library.errorMessage ?? "") }
         }.tint(MusicTheme.accent)
+    }
+}
+
+struct MissingTracksView: View {
+    @ObservedObject var library: LibraryStore
+    @ObservedObject var player: PlayerStore
+    var folderID: UUID
+    @State private var confirming = false
+
+    private var tracks: [Track] {
+        library.tracks.filter { $0.folderID == folderID && !$0.available }
+    }
+
+    var body: some View {
+        List {
+            if tracks.isEmpty {
+                ContentUnavailableView("没有失效歌曲", systemImage: "checkmark.circle",
+                    description: Text("这个文件夹里的歌曲都能找到源文件。"))
+            } else {
+                Section {
+                    ForEach(tracks) { track in
+                        SongRow(track: track, root: library.root)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("移除", role: .destructive) { remove([track]) }
+                            }
+                    }
+                } footer: {
+                    Text("只从资料库和歌单里去掉，不会删除原文件。文件回到原路径后，重新扫描会再加入。")
+                }
+            }
+        }
+        .navigationTitle("失效歌曲")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !tracks.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("全部移除") { confirming = true }
+                        .accessibilityIdentifier("missing-remove-all")
+                }
+            }
+        }
+        .confirmationDialog("移除这 \(tracks.count) 首失效歌曲？", isPresented: $confirming, titleVisibility: .visible) {
+            Button("移除", role: .destructive) { remove(tracks) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只从资料库和歌单里去掉。不会删除磁盘上的文件。")
+        }
+        .accessibilityIdentifier("missing-tracks")
+    }
+
+    private func remove(_ tracks: [Track]) {
+        for track in tracks { player.stopIfCurrent(track) }
+        library.removeMissing(tracks)
     }
 }
