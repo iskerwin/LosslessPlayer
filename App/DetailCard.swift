@@ -176,6 +176,12 @@ final class DetailCardActions {
     var latestHeader = CGRect.zero
 }
 
+/// Lets the playlist tab run the same close as the card's back button.
+/// Removing the card from the shell skips the travel back to the cover.
+final class DetailCardDismiss {
+    var close: () -> Void = {}
+}
+
 /// Writes detail progress from a test without a display link. Production
 /// leaves it nil. The shell must not observe the writes.
 final class DetailProgressDrive {
@@ -192,6 +198,7 @@ struct DetailMotionHost<Detail: View>: View {
     var spaceOrigin: CGPoint
     var onWillClose: () -> Void
     var onClosed: () -> Void
+    var dismiss: DetailCardDismiss? = nil
     var progressDrive: DetailProgressDrive? = nil
     var onReady: () -> Void = {}
     var onEvaluate: () -> Void = {}
@@ -205,6 +212,7 @@ struct DetailMotionHost<Detail: View>: View {
 
     init(source: DetailCardSource, expanded: CGRect, reduceMotion: Bool, spaceOrigin: CGPoint,
          onWillClose: @escaping () -> Void, onClosed: @escaping () -> Void,
+         dismiss: DetailCardDismiss? = nil,
          progressDrive: DetailProgressDrive? = nil, onReady: @escaping () -> Void = {},
          onEvaluate: @escaping () -> Void = {},
          @ViewBuilder detail: () -> Detail) {
@@ -214,6 +222,7 @@ struct DetailMotionHost<Detail: View>: View {
         self.spaceOrigin = spaceOrigin
         self.onWillClose = onWillClose
         self.onClosed = onClosed
+        self.dismiss = dismiss
         self.progressDrive = progressDrive
         self.onReady = onReady
         self.onEvaluate = onEvaluate
@@ -273,6 +282,7 @@ struct DetailMotionHost<Detail: View>: View {
                 onClosed()
             }
         }
+        dismiss?.close = card.close
         if let progressDrive {
             progressDrive.write = { value in
                 var transaction = Transaction()

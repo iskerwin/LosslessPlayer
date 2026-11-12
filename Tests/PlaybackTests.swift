@@ -989,16 +989,22 @@ final class AudioPathTests: XCTestCase {
 
 final class SearchResultsTests: XCTestCase {
     func testPlaylistTabReturnsHomeOnlyAfterLeavingIt() throws {
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: true, detailOpen: false), .stay)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: false, detailOpen: false), .popPath)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: true, detailOpen: true), .closeCard)
+        XCTAssertEqual(PlaylistTabNavigation.step(pathIsEmpty: false, detailOpen: true), .closeCard)
         XCTAssertFalse(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: true, detailOpen: false))
         XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: false, detailOpen: false))
-        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: true, detailOpen: true))
-        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: false, detailOpen: true))
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
-        XCTAssertNotNil(source.range(of: "tabReselect(title: \"歌单\")"))
-        XCTAssertNotNil(source.range(of: "returnToPlaylistHome"))
+        let start = try XCTUnwrap(source.range(of: "private func returnToPlaylistHome()"))
+        let rest = source[start.lowerBound...]
+        let end = rest.range(of: "\n    private func ")
+        let body = String(rest[..<(end?.lowerBound ?? rest.endIndex)])
+        XCTAssertNotNil(body.range(of: "playlistCardDismiss.close()"))
+        XCTAssertNil(body.range(of: "detailSource = nil"))
     }
 
     @MainActor

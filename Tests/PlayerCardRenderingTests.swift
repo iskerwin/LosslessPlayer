@@ -537,6 +537,37 @@ final class PlayerCardRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
     }
 
+    func testPlaylistTabCloseStartsTheCardReturnWithoutRemovingIt() throws {
+        let dismiss = DetailCardDismiss()
+        var willClose = 0
+        var didClose = 0
+        let drive = DetailProgressDrive()
+        let ready = expectation(description: "detail card appeared")
+        let window = try show(DetailMotionHost(
+            source: DetailCardSource(route: .playlist(UUID()),
+                                     frame: CGRect(x: 20, y: 80, width: 160, height: 160),
+                                     artwork: AnyView(Color.green)),
+            expanded: CGRect(x: 0, y: 0, width: 390, height: 700),
+            reduceMotion: true, spaceOrigin: .zero,
+            onWillClose: { willClose += 1 },
+            onClosed: { didClose += 1 },
+            progressDrive: drive,
+            dismiss: dismiss,
+            onReady: { ready.fulfill() }
+        ) {
+            Color.white
+        })
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        drive.set(1)
+        let committed = expectation(description: "open progress committed")
+        DispatchQueue.main.async { committed.fulfill() }
+        wait(for: [committed], timeout: 1)
+        dismiss.close()
+        XCTAssertEqual(willClose, 1)
+        XCTAssertEqual(didClose, 0, "The card travels back instead of being removed")
+    }
+
     func testDetailProgressWritesDoNotEvaluateTheShell() throws {
         let probe = TransitionEvaluationProbe()
         let drive = DetailProgressDrive()

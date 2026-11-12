@@ -13,6 +13,8 @@ struct LibraryView: View {
     @State private var detailTab: AppTab = .library
     @State private var detailPath = NavigationPath()
     @State private var detailClosing = false
+    /// Same close the playlist card's back button runs. A tab tap must not remove the card.
+    @State private var playlistCardDismiss = DetailCardDismiss()
     @State private var searchFieldFocused = false
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
@@ -666,15 +668,21 @@ struct LibraryView: View {
     }
 
     /// Second tap on the playlist tab. Already at the home does nothing.
+    /// An open cover plays the back button's close. A pushed list pops to its root.
     private func returnToPlaylistHome() {
         let detailOpen = detailTab == .playlists && detailSource != nil
-        guard PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: playlistPath.isEmpty, detailOpen: detailOpen) else { return }
-        if detailOpen {
-            detailSource = nil
-            detailClosing = false
-            detailPath = NavigationPath()
+        switch PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty, detailOpen: detailOpen) {
+        case .stay:
+            break
+        case .closeCard:
+            playlistCardDismiss.close()
+        case .popPath:
+            var transaction = Transaction()
+            transaction.disablesAnimations = false
+            withTransaction(transaction) {
+                playlistPath = NavigationPath()
+            }
         }
-        if !playlistPath.isEmpty { playlistPath = NavigationPath() }
     }
 
     private func open(_ route: LibraryRoute) {
@@ -721,7 +729,8 @@ struct LibraryView: View {
                                     detailSource = nil
                                     detailClosing = false
                                     detailPath = NavigationPath()
-                                 }) {
+                                 },
+                                 dismiss: owner == .playlists ? playlistCardDismiss : nil) {
                     NavigationStack(path: $detailPath) {
                         destination(source.route)
                             .toolbar {
@@ -953,10 +962,21 @@ private extension View {
 }
 
 enum PlaylistTabNavigation {
-    /// A pushed playlist, or a cover card open on the playlist tab, returns home.
-    /// The playlist home itself stays put.
+    /// Cover cards travel back. Pushed lists pop. The home stays put.
+    enum Step {
+        case stay
+        case closeCard
+        case popPath
+    }
+
+    static func step(pathIsEmpty: Bool, detailOpen: Bool) -> Step {
+        if detailOpen { return .closeCard }
+        if !pathIsEmpty { return .popPath }
+        return .stay
+    }
+
     static func shouldReturnHome(pathIsEmpty: Bool, detailOpen: Bool) -> Bool {
-        !pathIsEmpty || detailOpen
+        step(pathIsEmpty: pathIsEmpty, detailOpen: detailOpen) != .stay
     }
 }
 
