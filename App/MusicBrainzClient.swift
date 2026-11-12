@@ -189,8 +189,17 @@ actor MusicBrainzClient {
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
             request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
             request.setValue(missingIsEmpty ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
+            // Stamp after the request is handed off. Stamping before URLSession
+            // starts it lets the next request leave less than a second later
+            // (run 43260993958 recorded 0.967s between starts).
+            let (data, response): (Data, URLResponse)
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                lastStart = ProcessInfo.processInfo.systemUptime
+                throw error
+            }
             lastStart = ProcessInfo.processInfo.systemUptime
-            let (data, response) = try await session.data(for: request)
             guard let response = response as? HTTPURLResponse else { throw MusicBrainzError.invalidResponse }
             if missingIsEmpty && response.statusCode == 404 { return Data() }
             if [429, 503].contains(response.statusCode), attempt < 2 {
