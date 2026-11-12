@@ -21,7 +21,8 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["full"])
         self.assertFalse(result["screenshots"])
         for name in ("PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests",
-                     "FolderScanTests", "FolderPlaylistTests"):
+                     "FolderScanTests", "FolderPlaylistTests",
+                     "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests"):
             self.assertIn(f"-only-testing:LosslessPlayerTests/{name}", result["only_testing"])
 
     def test_now_playing_keeps_lyrics_coverage_and_screenshots(self):
