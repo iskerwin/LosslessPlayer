@@ -230,7 +230,6 @@ struct NowPlayingView: View {
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
-        .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
         // The gesture owns the 90pt dismissal decision; the card owns motion.
         .task(id: panel == .lyrics ? current?.lyrics : nil) {
             guard panel == .lyrics, parsedLyrics.source != current?.lyrics else { return }
@@ -269,6 +268,7 @@ struct NowPlayingView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("收起播放器")
+            .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
             .highPriorityGesture(dismissGesture)
             Group {
                 if panel == .lyrics {

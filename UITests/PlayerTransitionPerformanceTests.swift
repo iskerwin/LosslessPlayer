@@ -12,7 +12,7 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
             title.tap()
             let player = app.descendants(matching: .any)["now-playing"]
             let settled = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player)
+                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player.buttons["收起播放器"])
             wait(for: [settled], timeout: 8)
             XCTAssertTrue(player.descendants(matching: .any)["player-route-picker"].waitForExistence(timeout: 5))
             player.buttons["收起播放器"].tap()
@@ -38,7 +38,7 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
             title.tap()
             let player = app.descendants(matching: .any)["now-playing"]
             let settled = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player)
+                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player.buttons["收起播放器"])
             wait(for: [settled], timeout: 8)
             stopMeasuring()
             app.terminate()

@@ -906,17 +906,25 @@ private struct AccessoryMiniPlayer: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ArtworkView(track: track, root: root, size: compact ? 28 : 44)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    .contentTransition(.opacity)
-                if !compact, !artist.isEmpty {
-                    Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Button(action: open) {
+                HStack(spacing: 12) {
+                    ArtworkView(track: track, root: root, size: compact ? 28 : 44)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .contentTransition(.opacity)
+                        if !compact, !artist.isEmpty {
+                            Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                .contentTransition(.opacity)
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track?.id)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .accessibilityHint("展开播放器")
+            .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -938,7 +946,6 @@ private struct AccessoryMiniPlayer: View {
         .padding(.vertical, compact ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
-        .onTapGesture(perform: open)
         .simultaneousGesture(MiniPlayerReopenGesture(onReopen: open))
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
