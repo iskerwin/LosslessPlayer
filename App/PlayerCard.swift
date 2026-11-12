@@ -279,3 +279,130 @@ private struct PlayerMiniSlotMeasure<Content: View>: View {
         DispatchQueue.main.async { onMeasure(slot) }
     }
 }
+
+/// Pull and snap-back write the card's progress. The library shell holds this
+/// object and does not observe it, so a finger update never rebuilds the tabs.
+final class PlayerGestureBridge {
+    var follow: (CGFloat) -> Void = { _ in }
+    var cancel: () -> Void = {}
+}
+
+/// Owns the spring. `LibraryView` reads only the discrete presentation state;
+/// reading `progress` there rebuilt every tab on each frame.
+struct PlayerMotionHost<Background: View, Expanded: View, Collapsed: View>: View {
+    var presented: Bool
+    var generation: Int
+    var miniFrame: CGRect
+    var expandedFrame: CGRect
+    var reduceMotion: Bool
+    var animation: Animation
+    var canReopen: Bool
+    var gestures: PlayerGestureBridge
+    var onReopen: () -> Void
+    var onMounted: () -> Int?
+    var onComplete: (Int) -> Void
+    var onEvaluate: () -> Void = {}
+    var background: Background
+    var expanded: Expanded
+    var collapsed: Collapsed
+    @State private var progress: CGFloat = 0
+    /// Generation changes before the first appearance belong to `onAppear`,
+    /// which sees the latest request. Later changes are the spring.
+    @State private var appeared = false
+
+    init(presented: Bool, generation: Int, miniFrame: CGRect, expandedFrame: CGRect,
+         reduceMotion: Bool, animation: Animation, canReopen: Bool, gestures: PlayerGestureBridge,
+         onReopen: @escaping () -> Void, onMounted: @escaping () -> Int?, onComplete: @escaping (Int) -> Void,
+         onEvaluate: @escaping () -> Void = {},
+         @ViewBuilder background: () -> Background,
+         @ViewBuilder expanded: () -> Expanded,
+         @ViewBuilder collapsed: () -> Collapsed) {
+        self.presented = presented
+        self.generation = generation
+        self.miniFrame = miniFrame
+        self.expandedFrame = expandedFrame
+        self.reduceMotion = reduceMotion
+        self.animation = animation
+        self.canReopen = canReopen
+        self.gestures = gestures
+        self.onReopen = onReopen
+        self.onMounted = onMounted
+        self.onComplete = onComplete
+        self.onEvaluate = onEvaluate
+        self.background = background()
+        self.expanded = expanded()
+        self.collapsed = collapsed()
+    }
+
+    var body: some View {
+        let _ = onEvaluate()
+        let _ = rebind()
+        PlayerCard(progress: progress, miniFrame: miniFrame, expandedFrame: expandedFrame,
+                   reduceMotion: reduceMotion, canReopen: canReopen, onReopen: onReopen) {
+            background
+        } expanded: {
+            expanded
+        } collapsed: {
+            collapsed
+        }
+        .onAppear {
+            appeared = true
+            if let token = onMounted() {
+                travel(to: 1, token: token)
+            } else if !presented {
+                travel(to: 0, token: generation)
+            }
+        }
+        .onChange(of: generation) { _, token in
+            guard appeared else { return }
+            travel(to: presented ? 1 : 0, token: token)
+        }
+        .onDisappear {
+            gestures.follow = { _ in }
+            gestures.cancel = {}
+        }
+    }
+
+    private func rebind() {
+        let distance = miniFrame.minY - expandedFrame.minY
+        let progress = $progress
+        let presented = presented
+        let reduceMotion = reduceMotion
+        let animation = animation
+        gestures.follow = { translation in
+            guard presented, !reduceMotion else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                progress.wrappedValue = PlayerCardMetrics.progress(for: translation, distance: distance)
+            }
+        }
+        gestures.cancel = {
+            guard presented else { return }
+            var transaction = Transaction(animation: animation)
+            transaction.disablesAnimations = false
+            withTransaction(transaction) {
+                withAnimation(animation) { progress.wrappedValue = 1 }
+            }
+        }
+    }
+
+    /// A value that is already at the target still completes, so a close that
+    /// wins before the cold card appears can unmount it.
+    private func travel(to target: CGFloat, token: Int) {
+        let finish = onComplete
+        if progress == target {
+            DispatchQueue.main.async { finish(token) }
+            return
+        }
+        var transaction = Transaction(animation: animation)
+        transaction.disablesAnimations = false
+        withTransaction(transaction) {
+            withAnimation(animation, completionCriteria: .removed) {
+                progress = target
+            } completion: {
+                finish(token)
+            }
+        }
+    }
+}

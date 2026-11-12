@@ -54,6 +54,9 @@ MAPPING = {
     "App/Track.swift": (CATALOG | {"GaplessPlaybackTests"}, False),
     # AlbumGroup and SearchResults live in LibraryView, used by LibraryStore.
     "App/LibraryView.swift": (CATALOG, True),
+    # Player and detail springs live on these cards, not on the library shell.
+    "App/PlayerCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests"}, True),
+    "App/DetailCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests"}, True),
     # LyricsLine.parse is here, alongside scrubber, swipe and palette helpers.
     "App/NowPlayingView.swift": ({
         "MigrationAndLyricsTests", "PlaybackQueueTests", "ArtworkSwipeTests",

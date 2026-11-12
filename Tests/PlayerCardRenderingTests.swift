@@ -503,6 +503,137 @@ final class PlayerCardRenderingTests: XCTestCase {
             }
         }
     }
+
+    func testLibraryShellDoesNotStoreCardProgress() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
+        XCTAssertNil(source.range(of: "playerProgress"))
+        XCTAssertNil(source.range(of: "detailProgress"))
+        XCTAssertNotNil(source.range(of: "PlayerMotionHost"))
+        XCTAssertNotNil(source.range(of: "DetailMotionHost"))
+    }
+
+    func testPlayerProgressWritesDoNotEvaluateTheShell() throws {
+        let probe = TransitionEvaluationProbe()
+        let bridge = PlayerGestureBridge()
+        let ready = expectation(description: "player card appeared")
+        let window = try show(PlayerShellProbe(probe: probe, bridge: bridge, ready: {
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }))
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let shellBaseline = probe.shell
+        let cardBaseline = probe.card
+        for step in 1...30 {
+            let seen = probe.card
+            bridge.follow(CGFloat(step) * 8)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
+        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
+    }
+
+    func testDetailProgressWritesDoNotEvaluateTheShell() throws {
+        let probe = TransitionEvaluationProbe()
+        let drive = DetailProgressDrive()
+        let ready = expectation(description: "detail card appeared")
+        let window = try show(DetailShellProbe(probe: probe, drive: drive, ready: {
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }))
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let shellBaseline = probe.shell
+        let cardBaseline = probe.card
+        for step in 1...30 {
+            let seen = probe.card
+            drive.set(CGFloat(step) / 30)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
+        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
+    }
+
+    private var displacedKey: UIWindow?
+
+    private func show<Content: View>(_ root: Content) throws -> UIWindow {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = UIHostingController(rootView: root)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        displacedKey = previous
+        return window
+    }
+
+    private func hide(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+        displacedKey?.makeKeyAndVisible()
+        displacedKey = nil
+    }
+
+    private func flushUntil(probe: TransitionEvaluationProbe, changesFrom seen: Int) {
+        let start = Date()
+        while probe.card == seen && Date().timeIntervalSince(start) < 0.2 {
+            RunLoop.current.run(mode: .common, before: Date().addingTimeInterval(0.01))
+        }
+    }
+}
+
+private final class TransitionEvaluationProbe {
+    var shell = 0
+    var card = 0
+    var didReady = false
+}
+
+private struct PlayerShellProbe: View {
+    var probe: TransitionEvaluationProbe
+    var bridge: PlayerGestureBridge
+    var ready: () -> Void
+
+    var body: some View {
+        let _ = probe.shell += 1
+        PlayerMotionHost(presented: true, generation: 1,
+                         miniFrame: CGRect(x: 0, y: 700, width: 320, height: 56),
+                         expandedFrame: CGRect(x: 0, y: 0, width: 390, height: 844),
+                         reduceMotion: false, animation: .linear(duration: 0.3),
+                         canReopen: false, gestures: bridge, onReopen: {},
+                         onMounted: { ready(); return nil }, onComplete: { _ in },
+                         onEvaluate: { probe.card += 1 }) {
+            Color.black
+        } expanded: {
+            Color.red
+        } collapsed: {
+            Color.blue
+        }
+    }
+}
+
+private struct DetailShellProbe: View {
+    var probe: TransitionEvaluationProbe
+    var drive: DetailProgressDrive
+    var ready: () -> Void
+
+    var body: some View {
+        let _ = probe.shell += 1
+        DetailMotionHost(source: DetailCardSource(route: .albums,
+                                                  frame: CGRect(x: 10, y: 10, width: 40, height: 40),
+                                                  artwork: AnyView(Color.green)),
+                         expanded: CGRect(x: 0, y: 0, width: 200, height: 400),
+                         reduceMotion: true, spaceOrigin: .zero,
+                         onWillClose: {}, onClosed: {}, progressDrive: drive, onReady: ready,
+                         onEvaluate: { probe.card += 1 }) {
+            Color.white
+        }
+    }
 }
 
 @MainActor

@@ -138,6 +138,166 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
     }
 }
 
+/// Header measure and close. The card installs these; the shell never sees
+/// the progress those callbacks animate.
+final class DetailCardActions {
+    var measure: (CGRect) -> Void = { _ in }
+    var close: () -> Void = {}
+    /// Latest header, kept off view state so scrolling does not rebuild the card.
+    var latestHeader = CGRect.zero
+}
+
+/// Writes detail progress from a test without a display link. Production
+/// leaves it nil. The shell must not observe the writes.
+final class DetailProgressDrive {
+    var write: (CGFloat) -> Void = { _ in }
+    func set(_ value: CGFloat) { write(value) }
+}
+
+/// Owns detail open and close progress. Album grids stay in the shell and
+/// are not rebuilt on each frame of this spring.
+struct DetailMotionHost<Detail: View>: View {
+    var source: DetailCardSource
+    var expanded: CGRect
+    var reduceMotion: Bool
+    var spaceOrigin: CGPoint
+    var onWillClose: () -> Void
+    var onClosed: () -> Void
+    var progressDrive: DetailProgressDrive? = nil
+    var onReady: () -> Void = {}
+    var onEvaluate: () -> Void = {}
+    var detail: Detail
+    @State private var progress: CGFloat = 0
+    @State private var headerFrame: CGRect = .zero
+    @State private var transitioning = true
+    @State private var closing = false
+    @State private var generation = 0
+    @State private var actions = DetailCardActions()
+
+    init(source: DetailCardSource, expanded: CGRect, reduceMotion: Bool, spaceOrigin: CGPoint,
+         onWillClose: @escaping () -> Void, onClosed: @escaping () -> Void,
+         progressDrive: DetailProgressDrive? = nil, onReady: @escaping () -> Void = {},
+         onEvaluate: @escaping () -> Void = {},
+         @ViewBuilder detail: () -> Detail) {
+        self.source = source
+        self.expanded = expanded
+        self.reduceMotion = reduceMotion
+        self.spaceOrigin = spaceOrigin
+        self.onWillClose = onWillClose
+        self.onClosed = onClosed
+        self.progressDrive = progressDrive
+        self.onReady = onReady
+        self.onEvaluate = onEvaluate
+        self.detail = detail()
+    }
+
+    var body: some View {
+        let _ = onEvaluate()
+        let _ = bind()
+        DetailZoomCard(progress: progress, source: source, expanded: expanded,
+                       headerFrame: headerFrame, transitioning: transitioning,
+                       reduceMotion: reduceMotion,
+                       detail: DetailHeaderScope(hidden: transitioning && !reduceMotion,
+                                                 actions: actions, content: detail))
+            .allowsHitTesting(progress == 1 && !transitioning)
+            .accessibilityIdentifier("detail-card")
+            .onAppear(perform: onReady)
+    }
+
+    private func bind() {
+        let origin = spaceOrigin
+        let headerFrame = $headerFrame
+        let progress = $progress
+        let transitioning = $transitioning
+        let closing = $closing
+        let generation = $generation
+        let reduceMotion = reduceMotion
+        let onWillClose = onWillClose
+        let onClosed = onClosed
+        let card = actions
+        card.measure = { frame in
+            guard frame.width > 0, frame.height > 0, !closing.wrappedValue else { return }
+            let local = frame.offsetBy(dx: -origin.x, dy: -origin.y)
+            card.latestHeader = local
+            // Freeze the target once travel starts. The moving card would
+            // otherwise report a new header frame on every spring tick.
+            guard progress.wrappedValue == 0, transitioning.wrappedValue else { return }
+            headerFrame.wrappedValue = local
+            let token = generation.wrappedValue
+            CardProgressTravel.animate(progress, to: 1, reduceMotion: reduceMotion) {
+                guard token == generation.wrappedValue, !closing.wrappedValue else { return }
+                transitioning.wrappedValue = false
+            }
+        }
+        card.close = {
+            guard !closing.wrappedValue else { return }
+            closing.wrappedValue = true
+            transitioning.wrappedValue = true
+            generation.wrappedValue += 1
+            let token = generation.wrappedValue
+            if card.latestHeader.width > 0, card.latestHeader.height > 0 {
+                headerFrame.wrappedValue = card.latestHeader
+            }
+            onWillClose()
+            CardProgressTravel.animate(progress, to: 0, reduceMotion: reduceMotion) {
+                guard token == generation.wrappedValue else { return }
+                onClosed()
+            }
+        }
+        if let progressDrive {
+            progressDrive.write = { value in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { progress.wrappedValue = value }
+            }
+        }
+    }
+}
+
+private enum CardProgressTravel {
+    static func animate(_ progress: Binding<CGFloat>, to target: CGFloat, reduceMotion: Bool,
+                        completion: @escaping () -> Void) {
+        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48)
+        if progress.wrappedValue == target {
+            DispatchQueue.main.async(execute: completion)
+            return
+        }
+        withAnimation(animation, completionCriteria: .removed) {
+            progress.wrappedValue = target
+        } completion: {
+            completion()
+        }
+    }
+}
+
+/// Applies the header environment. Its inputs stay still while only the
+/// card's progress changes, so the detail page is not rebuilt per frame.
+private struct DetailHeaderScope<Content: View>: View {
+    var hidden: Bool
+    var actions: DetailCardActions
+    var content: Content
+
+    var body: some View {
+        content.environment(\.detailCardHeader, DetailCardHeader(
+            hidden: hidden,
+            measure: { actions.measure($0) },
+            close: { actions.close() }
+        ))
+    }
+}
+
+struct DetailCardBackButton: View {
+    @Environment(\.detailCardHeader) private var header
+
+    var body: some View {
+        Button(action: { header.close?() }) {
+            Image(systemName: "chevron.left")
+        }
+        .accessibilityLabel("返回")
+        .accessibilityIdentifier("detail-card-back")
+    }
+}
+
 struct DetailGridModifier: ViewModifier {
     var context: DetailCardContext
     var covered: Bool

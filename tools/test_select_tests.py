@@ -38,6 +38,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(mixed["only_testing"], sorted(set(engine["only_testing"] + ui["only_testing"])))
         self.assertTrue(mixed["screenshots"])
 
+    def test_card_progress_keeps_rendering_regressions(self):
+        for path in ("App/PlayerCard.swift", "App/DetailCard.swift"):
+            with self.subTest(path=path):
+                result = select_tests([path])
+                self.assertFalse(result["full"])
+                self.assertTrue(result["screenshots"])
+                self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardRenderingTests", result["only_testing"])
+                self.assertIn("-only-testing:LosslessPlayerTests/BrowseAndArtworkPerformanceTests",
+                              result["only_testing"])
+
     def test_search_changes_keep_matching_and_cache_regressions(self):
         for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):
             with self.subTest(path=path):

@@ -12,11 +12,7 @@ struct LibraryView: View {
     @State private var detailSource: DetailCardSource?
     @State private var detailTab: AppTab = .library
     @State private var detailPath = NavigationPath()
-    @State private var detailProgress: CGFloat = 0
-    @State private var detailHeaderFrame: CGRect = .zero
-    @State private var detailTransitioning = false
     @State private var detailClosing = false
-    @State private var detailGeneration = 0
     @State private var searchFieldFocused = false
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
@@ -24,8 +20,8 @@ struct LibraryView: View {
     private var showPlayer: Bool { playerPresentation.presented }
     private var playerMounted: Bool { playerPresentation.mounted }
     private var playerSettled: Bool { playerPresentation.settled }
-    @State private var playerProgress: CGFloat = 0
     @State private var miniSlot = PlayerMiniSlot()
+    @State private var playerGestures = PlayerGestureBridge()
     @State private var latestMiniSlot = PlayerMiniSlotCache()
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
@@ -47,7 +43,7 @@ struct LibraryView: View {
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
-    /// Frame and both layouts are evaluated from this same animated value.
+    /// Spring for the player card. The shell does not read its progress.
     static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
 
     var body: some View {
@@ -61,35 +57,32 @@ struct LibraryView: View {
                 .accessibilityHidden(showPlayer)
                 .overlay(alignment: .topLeading) {
                     if player.current != nil, playerMounted, miniFrame.width > 0 {
-                        PlayerCard(progress: playerProgress, miniFrame: miniFrame,
-                                   expandedFrame: expandedFrame, reduceMotion: reduceMotion,
-                                   canReopen: playerMounted && !showPlayer, onReopen: { setPlayer(true) }) {
-                            if playerMounted {
-                                NowPlayingBackground(library: library, player: player)
-                            }
+                        PlayerMotionHost(presented: showPlayer,
+                                         generation: playerPresentation.generation,
+                                         miniFrame: miniFrame, expandedFrame: expandedFrame,
+                                         reduceMotion: reduceMotion, animation: playerAnimation,
+                                         canReopen: playerMounted && !showPlayer,
+                                         gestures: playerGestures,
+                                         onReopen: { setPlayer(true) },
+                                         onMounted: { playerPresentation.beginMountedPresentation() },
+                                         onComplete: { playerPresentation.complete($0) }) {
+                            NowPlayingBackground(library: library, player: player)
                         } expanded: {
-                            if playerMounted {
-                                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                                    setPlayer(false)
-                                    pendingDelete = [track]
-                                }, onClose: { setPlayer(false) }, onPull: {
-                                    followPull($0, distance: miniFrame.minY - expandedFrame.minY)
-                                }, onPullCancelled: cancelPull, presentationSettled: playerSettled)
-                                .environment(\.colorScheme, .dark)
-                                .padding(.top, geometry.safeAreaInsets.top)
-                                .padding(.bottom, geometry.safeAreaInsets.bottom)
-                                .accessibilityHidden(!showPlayer)
-                                .allowsHitTesting(showPlayer)
-                            }
+                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                                setPlayer(false)
+                                pendingDelete = [track]
+                            }, onClose: { setPlayer(false) }, onPull: { playerGestures.follow($0) },
+                            onPullCancelled: { playerGestures.cancel() },
+                            presentationSettled: playerSettled)
+                            .environment(\.colorScheme, .dark)
+                            .padding(.top, geometry.safeAreaInsets.top)
+                            .padding(.bottom, geometry.safeAreaInsets.bottom)
+                            .accessibilityHidden(!showPlayer)
+                            .allowsHitTesting(showPlayer)
                         } collapsed: {
                             MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
                                 .accessibilityHidden(showPlayer)
                                 .allowsHitTesting(!showPlayer)
-                        }
-                        .onAppear {
-                            if let generation = playerPresentation.beginMountedPresentation() {
-                                animatePlayer(true, generation: generation)
-                            }
                         }
                         .zIndex(1)
                     }
@@ -101,7 +94,6 @@ struct LibraryView: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
                     playerPresentation.discard()
-                    playerProgress = 0
                 }
             }
             .sheet(isPresented: $showSources) {
@@ -660,48 +652,15 @@ struct LibraryView: View {
         reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
     }
 
-    /// The drag and this spring write the same progress. Completion only
-    /// releases expensive expanded controls; it never swaps visible cards.
+    /// Mounts or asks the card to travel. Progress stays inside the card.
     private func setPlayer(_ expanded: Bool) {
         guard let step = playerPresentation.request(expanded) else { return }
-        switch step {
-        case .prepare:
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                miniSlot = latestMiniSlot.latest
-                playerProgress = 0
-            }
-        case .animate(let generation):
-            animatePlayer(expanded, generation: generation)
-        }
-    }
-
-    private func animatePlayer(_ expanded: Bool, generation: Int) {
-        var transaction = Transaction(animation: playerAnimation)
-        transaction.disablesAnimations = false
-        withTransaction(transaction) {
-            withAnimation(playerAnimation, completionCriteria: .removed) {
-                playerProgress = expanded ? 1 : 0
-            } completion: {
-                playerPresentation.complete(generation)
-            }
-        }
-    }
-
-    private func followPull(_ translation: CGFloat, distance: CGFloat) {
-        guard showPlayer, !reduceMotion else { return }
-        let next = PlayerCardMetrics.progress(for: translation, distance: distance)
+        guard case .prepare = step else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { playerProgress = next }
-    }
-
-    private func cancelPull() {
-        guard showPlayer else { return }
-        var transaction = Transaction(animation: playerAnimation)
-        transaction.disablesAnimations = false
-        withTransaction(transaction) { playerProgress = 1 }
+        withTransaction(transaction) {
+            miniSlot = latestMiniSlot.latest
+        }
     }
 
     private func open(_ route: LibraryRoute) {
@@ -727,11 +686,7 @@ struct LibraryView: View {
                 detailTab = owner
                 detailSource = source
                 detailPath = NavigationPath()
-                detailProgress = 0
-                detailHeaderFrame = .zero
                 detailClosing = false
-                detailTransitioning = true
-                detailGeneration += 1
             }
         ), covered: detailSource != nil && detailTab == owner)
     }
@@ -745,59 +700,24 @@ struct LibraryView: View {
                 let expanded = CGRect(origin: .zero, size: geometry.size)
                 let localSource = DetailCardSource(route: source.route,
                     frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
-                DetailZoomCard(progress: detailProgress, source: localSource, expanded: expanded,
-                               headerFrame: detailHeaderFrame.offsetBy(dx: -origin.x, dy: -origin.y),
-                               transitioning: detailTransitioning, reduceMotion: reduceMotion,
-                               detail: NavigationStack(path: $detailPath) {
-                    destination(source.route)
-                        .environment(\.detailCardHeader, DetailCardHeader(
-                            hidden: detailTransitioning && !reduceMotion,
-                            measure: receiveDetailHeader, close: closeDetail))
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button(action: closeDetail) { Image(systemName: "chevron.left") }
-                                    .accessibilityLabel("返回")
-                                    .accessibilityIdentifier("detail-card-back")
+                DetailMotionHost(source: localSource, expanded: expanded, reduceMotion: reduceMotion,
+                                 spaceOrigin: origin,
+                                 onWillClose: { detailClosing = true },
+                                 onClosed: {
+                                    detailSource = nil
+                                    detailClosing = false
+                                    detailPath = NavigationPath()
+                                 }) {
+                    NavigationStack(path: $detailPath) {
+                        destination(source.route)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) { DetailCardBackButton() }
                             }
-                        }
-                        .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-                })
-                .allowsHitTesting(detailProgress == 1 && !detailTransitioning)
-                .accessibilityIdentifier("detail-card")
+                            .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                    }
+                }
             }
             .ignoresSafeArea(.container)
-        }
-    }
-
-    private func receiveDetailHeader(_ frame: CGRect) {
-        guard frame.width > 0, frame.height > 0, !detailClosing else { return }
-        detailHeaderFrame = frame
-        guard detailProgress == 0, detailTransitioning else { return }
-        let generation = detailGeneration
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
-                      completionCriteria: .removed) {
-            detailProgress = 1
-        } completion: {
-            guard generation == detailGeneration, !detailClosing else { return }
-            detailTransitioning = false
-        }
-    }
-
-    private func closeDetail() {
-        guard detailSource != nil, !detailClosing else { return }
-        detailClosing = true
-        detailTransitioning = true
-        detailGeneration += 1
-        let generation = detailGeneration
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48),
-                      completionCriteria: .removed) {
-            detailProgress = 0
-        } completion: {
-            guard generation == detailGeneration else { return }
-            // Reveal the untouched source on the exact zero-progress frame.
-            detailSource = nil
-            detailTransitioning = false
-            detailPath = NavigationPath()
         }
     }
 
