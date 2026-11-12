@@ -559,6 +559,35 @@ final class PlayerCardRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
     }
 
+    func testCoverFrameWritesDoNotEvaluateTheLink() throws {
+        let probe = TransitionEvaluationProbe()
+        let linkProbe = DetailCardLinkProbe()
+        let ready = expectation(description: "cover link appeared")
+        linkProbe.evaluate = { probe.card += 1 }
+        linkProbe.ready = { slot in
+            linkProbe.attached = slot
+            guard !probe.didReady else { return }
+            probe.didReady = true
+            ready.fulfill()
+        }
+        let window = try show(DetailCardLink(route: .albums, fallback: {}, probe: linkProbe) {
+            Color.green.frame(width: 80, height: 80)
+        } label: { artwork in
+            artwork
+        })
+        defer { hide(window) }
+        wait(for: [ready], timeout: 2)
+        let baseline = probe.card
+        let slot = try XCTUnwrap(linkProbe.attached)
+        for step in 1...10 {
+            let seen = probe.card
+            slot.frame = CGRect(x: 0, y: CGFloat(step) * 12, width: 80, height: 80)
+            flushUntil(probe: probe, changesFrom: seen)
+        }
+        XCTAssertLessThanOrEqual(probe.card - baseline, 1, "card \(probe.card)")
+        XCTAssertEqual(slot.frame, CGRect(x: 0, y: 120, width: 80, height: 80))
+    }
+
     private var displacedKey: UIWindow?
     private var layoutView: UIView?
 

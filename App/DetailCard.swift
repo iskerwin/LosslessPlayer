@@ -35,26 +35,55 @@ extension EnvironmentValues {
     }
 }
 
+/// Latest cover frame. A class so scrolling can update it without redrawing the cell.
+final class DetailCardSlot {
+    var frame: CGRect = .zero
+}
+
+/// Test hook. Production links keep the empty default.
+final class DetailCardLinkProbe {
+    var evaluate: () -> Void = {}
+    var ready: (DetailCardSlot) -> Void = { _ in }
+    var attached: DetailCardSlot?
+}
+
 /// Only grid artwork opts in. The button measures its square artwork slot;
 /// source text keeps its normal layout while the grid stays stationary.
 struct DetailCardLink<Artwork: View, Label: View>: View {
     var route: LibraryRoute
     var fallback: () -> Void
-    @ViewBuilder var artwork: () -> Artwork
-    @ViewBuilder var label: (AnyView) -> Label
+    var probe: DetailCardLinkProbe
+    var artwork: () -> Artwork
+    var label: (AnyView) -> Label
     @Environment(\.detailCardContext) private var context
-    @State private var slot: CGRect = .zero
+    /// Not observed: writing `frame` during scroll must not rebuild the cell.
+    @State private var slot = DetailCardSlot()
+
+    init(route: LibraryRoute, fallback: @escaping () -> Void,
+         probe: DetailCardLinkProbe = DetailCardLinkProbe(),
+         @ViewBuilder artwork: @escaping () -> Artwork,
+         @ViewBuilder label: @escaping (AnyView) -> Label) {
+        self.route = route
+        self.fallback = fallback
+        self.probe = probe
+        self.artwork = artwork
+        self.label = label
+    }
 
     var body: some View {
+        let slot = slot
+        let _ = probe.evaluate()
+        let _ = probe.ready(slot)
         Button {
-            if let open = context.open, slot.width > 0, slot.height > 0 {
-                open(DetailCardSource(route: route, frame: slot, artwork: AnyView(artwork())))
+            let frame = slot.frame
+            if let open = context.open, frame.width > 0, frame.height > 0 {
+                open(DetailCardSource(route: route, frame: frame, artwork: AnyView(artwork())))
             } else {
                 fallback()
             }
         } label: {
             label(AnyView(artwork()
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slot = $0 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slot.frame = $0 }
                 .opacity(context.active == route ? 0 : 1)))
         }
     }
