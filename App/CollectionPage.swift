@@ -5,6 +5,9 @@ import SwiftUI
 private final class TrackOrderMemo {
     var key = 0
     var indices: [Int] = []
+    var searchKey: Int?
+    var query = ""
+    var matchingIndices: [Int] = []
 }
 
 private struct PlaylistEditing: ViewModifier {
@@ -95,9 +98,20 @@ struct CollectionPage: View {
 
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
     private var usesArtworkBackground: Bool { kind == .album || kind == .playlist }
-    private var supportsSearch: Bool { kind == .songs || kind == .favorites || kind == .playlist }
+    private var supportsSearch: Bool { kind != .search }
     private var isFiltering: Bool { supportsSearch && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var visibleTracks: [Track] { CollectionSearch.filter(sorted, query: supportsSearch ? query : "") }
+    private var visibleTracks: [Track] {
+        let ordered = sorted
+        guard isFiltering else { return ordered }
+        let key = orderKey
+        if orderMemo.searchKey != key || orderMemo.query != query {
+            let search = LibrarySearchQuery(query)
+            orderMemo.matchingIndices = ordered.indices.filter { ordered[$0].matchesSearch(search) }
+            orderMemo.searchKey = key
+            orderMemo.query = query
+        }
+        return orderMemo.matchingIndices.map { ordered[$0] }
+    }
 
     private var songList: some View {
         let contextID = playbackContextID
@@ -315,6 +329,11 @@ struct CollectionPage: View {
             hasher.combine(track.id)
             hasher.combine(track.title)
             hasher.combine(track.artist)
+            hasher.combine(track.artists)
+            hasher.combine(track.albumTitle)
+            hasher.combine(track.albumArtist)
+            hasher.combine(track.genre)
+            hasher.combine(track.year)
             hasher.combine(track.addedAt?.timeIntervalSinceReferenceDate)
             hasher.combine(track.playCount)
             hasher.combine(track.discNumber)

@@ -11,8 +11,13 @@ struct PlaylistHome: View {
     var onAddToPlaylist: ([Track]) -> Void
     @AppStorage("playlistLayout") private var layoutRaw = PlaylistLayout.grid.rawValue
     @State private var coverTarget: Playlist?
+    @State private var query = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var layout: PlaylistLayout { PlaylistLayout(rawValue: layoutRaw) ?? .grid }
+    private var matchingPlaylists: [Playlist] {
+        let search = LibrarySearchQuery(query)
+        return library.snapshot.playlists.filter { search.matches($0.name) }
+    }
 
     var body: some View {
         Group {
@@ -24,12 +29,16 @@ struct PlaylistHome: View {
                 } actions: {
                     Button("新建歌单", action: onCreate).buttonStyle(.borderedProminent)
                 }
+            } else if matchingPlaylists.isEmpty {
+                ContentUnavailableView.search(text: query)
             } else if layout == .grid {
                 grid
             } else {
                 list
             }
         }
+        .searchable(text: $query, prompt: "搜索歌单")
+        .scrollDismissesKeyboard(.interactively)
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.28), value: layout)
         .safeAreaInset(edge: .top) {
             if library.importing {
@@ -71,7 +80,7 @@ struct PlaylistHome: View {
     private var grid: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 16)], spacing: 22) {
-                ForEach(library.snapshot.playlists) { playlist in
+                ForEach(matchingPlaylists) { playlist in
                     DetailCardLink(route: .playlist(playlist.id), fallback: { onOpen(.playlist(playlist.id)) }) {
                         PlaylistCover(playlist: playlist, library: library)
                     } label: { artwork in
@@ -98,7 +107,7 @@ struct PlaylistHome: View {
 
     private var list: some View {
         List {
-            ForEach(library.snapshot.playlists) { playlist in
+            ForEach(matchingPlaylists) { playlist in
                 HStack(spacing: 0) {
                     Button { onOpen(.playlist(playlist.id)) } label: {
                         HStack(spacing: 12) {
@@ -302,8 +311,9 @@ struct SongPickerSheet: View {
 
     private var candidates: [Track] {
         let existing = Set(playlist.trackIDs)
+        let search = LibrarySearchQuery(query)
         return library.tracks
-            .filter { !existing.contains($0.id) && $0.matchesSearch(query) }
+            .filter { !existing.contains($0.id) && $0.matchesSearch(search) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 

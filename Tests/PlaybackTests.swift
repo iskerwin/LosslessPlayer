@@ -850,6 +850,33 @@ final class AudioPathTests: XCTestCase {
 }
 
 final class SearchResultsTests: XCTestCase {
+    func testFuzzySearchMatchesSeparateKeywordsAcrossTitleAndArtist() {
+        let tracks = library
+        let query = "  SKY\tada \n"
+        XCTAssertEqual(SearchResults.group(tracks: tracks, query: query).songs.map(\.id), [tracks[0].id])
+        XCTAssertEqual(CollectionSearch.filter(tracks, query: query).map(\.id), [tracks[0].id])
+        XCTAssertTrue(SearchResults.group(tracks: tracks, query: "Ada Ocean").songs.isEmpty)
+        XCTAssertTrue(CollectionSearch.filter(Array(tracks.suffix(3)), query: query).isEmpty)
+    }
+
+    func testFuzzySearchIgnoresCaseDiacriticsAndCharacterWidth() {
+        let query = LibrarySearchQuery(" CAFE  ＢＬＵＥ ")
+        XCTAssertTrue(query.matches(["Café", "Blue Sky"]))
+        XCTAssertFalse(query.matches(["Café", "Red Sky"]))
+        XCTAssertTrue(LibrarySearchQuery("\n \t").isEmpty)
+        let song = track("夜曲", artist: "周杰伦", album: "十一月的萧邦", file: "night.flac")
+        XCTAssertTrue(song.matchesSearch("杰  曲"))
+        XCTAssertFalse(song.matchesSearch("杰  晴天"))
+    }
+
+    func testGlobalArtistAndPlaylistSectionsUseTheSameFuzzyRules() {
+        let playlist = Playlist(name: "Blue Night")
+        XCTAssertEqual(SearchResults.group(tracks: library, playlists: [playlist], query: "NIGHT blue").playlists.map(\.id), [playlist.id])
+        let results = SearchResults.group(tracks: library, query: "band BLUE")
+        XCTAssertEqual(results.artists, ["Blue Band"])
+        XCTAssertEqual(results.songs.map(\.title), ["Ocean"])
+    }
+
     private func track(_ title: String, artist: String, album: String, file: String) -> Track {
         Track(id: UUID(), filename: file, title: title, artist: artist, album: album, duration: 1, sampleRate: 44100, bitDepth: 16)
     }

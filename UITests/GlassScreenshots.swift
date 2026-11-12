@@ -14,12 +14,13 @@ final class GlassScreenshots: XCTestCase {
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 8))
         search.tap()
-        search.typeText("Stop")
+        let query = "stare  ONErepublic"
+        search.typeText(query)
         XCTAssertTrue(list.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
         XCTAssertFalse(list.staticTexts["Apologize"].exists)
-        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4))
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: query.count))
         XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 5))
-        search.typeText("Stop\n")
+        search.typeText(query + "\n")
         list.buttons["播放"].tap()
         let mini = try readyMini(in: app)
         XCTAssertTrue(mini.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
@@ -45,7 +46,7 @@ final class GlassScreenshots: XCTestCase {
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 8))
         search.tap()
-        search.typeText("Night")
+        search.typeText("night BLUE")
         let playlist = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-playlist-")).firstMatch
         XCTAssertTrue(playlist.waitForExistence(timeout: 5))
         playlist.tap()

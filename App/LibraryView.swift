@@ -29,6 +29,8 @@ struct LibraryView: View {
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
     @State private var query = ""
+    @State private var artistQuery = ""
+    @State private var albumQuery = ""
     @State private var playlistName = ""
     @State private var creatingPlaylist = false
     @State private var playlistBatch: TrackBatch?
@@ -530,13 +532,20 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        List(library.artistNames, id: \.self) { artist in
+        let search = LibrarySearchQuery(artistQuery)
+        let artists = library.artistNames.filter { search.matches($0) }
+        return List(artists, id: \.self) { artist in
             let tracks = library.tracks(forArtist: artist)
             browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
                 open(.artist(artist))
             }
         }
         .listStyle(.plain)
+        .searchable(text: $artistQuery, prompt: "搜索艺术家")
+        .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if artists.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: artistQuery) }
+        }
         .navigationTitle("艺术家")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass { libraryMore }
@@ -544,9 +553,11 @@ struct LibraryView: View {
     }
 
     private var albumIndex: some View {
-        ScrollView {
+        let search = LibrarySearchQuery(albumQuery)
+        let albums = library.albumGroups.filter { search.matches([$0.name, $0.artist]) }
+        return ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
-                ForEach(library.albumGroups) { album in
+                ForEach(albums) { album in
                     DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
                         ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
                                     root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
@@ -567,6 +578,11 @@ struct LibraryView: View {
             .padding(22)
         }
         .accessibilityIdentifier("album-grid")
+        .searchable(text: $albumQuery, prompt: "搜索专辑、艺术家")
+        .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if albums.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: albumQuery) }
+        }
         .navigationTitle("专辑")
         .navigationBarTitleDisplayMode(.large)
         .trailingGlass { libraryMore }
@@ -842,13 +858,13 @@ struct SearchResults {
     var isEmpty: Bool { songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty }
 
     static func group(tracks: [Track], playlists: [Playlist] = [], query: String) -> SearchResults {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return SearchResults() }
-        let matched = tracks.filter { $0.matchesSearch(query) }
+        let search = LibrarySearchQuery(query)
+        guard !search.isEmpty else { return SearchResults() }
+        let matched = tracks.filter { $0.matchesSearch(search) }
         func rank(_ track: Track) -> Int {
-            if track.title.localizedCaseInsensitiveContains(query) { return 0 }
-            if track.artistNames.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return 1 }
-            if track.albumTitle.localizedCaseInsensitiveContains(query) { return 2 }
+            if search.matches(track.title) { return 0 }
+            if search.matches(track.artistNames) { return 1 }
+            if search.matches(track.albumTitle) { return 2 }
             return 3
         }
         let songs = matched.sorted {
@@ -856,8 +872,7 @@ struct SearchResults {
             if a != b { return a < b }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
-        let needle = AudioTags.normalized(query)
-        let artists = Array(Set(matched.flatMap(\.artistNames).filter { AudioTags.normalized($0).contains(needle) }))
+        let artists = Array(Set(matched.flatMap(\.artistNames).filter { search.matches($0) }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         var byNorm: [String: [Track]] = [:]
         for song in songs {
@@ -869,7 +884,7 @@ struct SearchResults {
         }
         var tracksByArtist: [String: [Track]] = [:]
         for artist in artists { tracksByArtist[artist] = byNorm[AudioTags.normalized(artist)] ?? [] }
-        let matchingPlaylists = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        let matchingPlaylists = playlists.filter { search.matches($0.name) }
         return SearchResults(songs: songs, albums: AlbumGroup.groups(matched), artists: artists,
                              playlists: matchingPlaylists, tracksByArtist: tracksByArtist)
     }

@@ -38,7 +38,7 @@ enum ScreenshotFixture {
         }
         var playlist = Playlist(name: "深夜")
         if ProcessInfo.processInfo.arguments.contains("-searchScreenshotLibrary") {
-            playlist.name = "Night"
+            playlist.name = "Blue Night"
             tracks[0].favorite = true
         }
         playlist.trackIDs = tracks.map(\.id)
