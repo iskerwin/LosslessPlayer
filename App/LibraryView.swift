@@ -93,6 +93,15 @@ struct LibraryView: View {
                     }
                 }
         }
+            .onChange(of: player.current?.id) { _, currentID in
+                guard currentID == nil else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    playerPresentation.discard()
+                    playerProgress = 0
+                }
+            }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
                     .presentationDetents([.large])

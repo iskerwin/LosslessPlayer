@@ -35,6 +35,16 @@ struct PlayerPresentationState {
         if presented { settled = true }
         else { mounted = false }
     }
+
+    /// Removing the current track removes the card itself. Invalidate both
+    /// its pending mount and animation callbacks before another track appears.
+    mutating func discard() {
+        generation += 1
+        presented = false
+        mounted = false
+        settled = false
+        pendingOpen = nil
+    }
 }
 
 /// Shared by the resting mini (in either host) and the closing card overlay.

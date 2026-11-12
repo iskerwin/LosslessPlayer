@@ -31,6 +31,10 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
         options.invocationOptions = [.manuallyStart]
         measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
                 options: options) {
+            // Harvesting happens after the measured closure returns. Keep
+            // this process alive until then; terminate the previous iteration
+            // here so every measured presentation still starts in a fresh app.
+            app.terminate()
             app.launch()
             let title = app.descendants(matching: .any)["mini-player"].staticTexts["Apologize"]
             XCTAssertTrue(title.waitForExistence(timeout: 20))
@@ -41,7 +45,7 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
                 predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player.buttons["收起播放器"])
             wait(for: [settled], timeout: 8)
             stopMeasuring()
-            app.terminate()
         }
+        app.terminate()
     }
 }
