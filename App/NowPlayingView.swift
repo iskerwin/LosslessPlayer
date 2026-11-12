@@ -167,13 +167,14 @@ struct NowPlayingView: View {
     var onClose: () -> Void
     var onPull: (CGFloat) -> Void
     var onPullCancelled: () -> Void
+    var presentationSettled: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
     @ScaledMetric(relativeTo: .headline) private var compactHeaderHeight: CGFloat = PlayerScrollMorph.compactHeight
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, presentationSettled: Bool = true) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
@@ -181,6 +182,7 @@ struct NowPlayingView: View {
         self.onClose = onClose
         self.onPull = onPull
         self.onPullCancelled = onPullCancelled
+        self.presentationSettled = presentationSettled
     }
 
     private enum Panel { case artwork, lyrics }
@@ -226,6 +228,7 @@ struct NowPlayingView: View {
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
+        .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
         // The gesture owns the 90pt dismissal decision; the card owns motion.
         .onAppear {
             reloadLyrics()

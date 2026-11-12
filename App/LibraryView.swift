@@ -25,6 +25,7 @@ struct LibraryView: View {
     @State private var playerProgress: CGFloat = 0
     @State private var miniSlot = PlayerMiniSlot()
     @State private var playerTransition = 0
+    @State private var playerSettled = false
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -70,7 +71,7 @@ struct LibraryView: View {
                                     pendingDelete = [track]
                                 }, onClose: { setPlayer(false) }, onPull: {
                                     followPull($0, distance: miniFrame.minY - expandedFrame.minY)
-                                }, onPullCancelled: cancelPull)
+                                }, onPullCancelled: cancelPull, presentationSettled: playerSettled)
                                 .environment(\.colorScheme, .dark)
                                 .padding(.top, geometry.safeAreaInsets.top)
                                 .padding(.bottom, geometry.safeAreaInsets.bottom)
@@ -612,6 +613,7 @@ struct LibraryView: View {
         guard expanded != showPlayer else { return }
         playerTransition += 1
         let transition = playerTransition
+        playerSettled = false
         if expanded { playerMounted = true }
         var transaction = Transaction(animation: playerAnimation)
         transaction.disablesAnimations = false
@@ -620,8 +622,9 @@ struct LibraryView: View {
                 showPlayer = expanded
                 playerProgress = expanded ? 1 : 0
             } completion: {
-                guard !expanded, !showPlayer, playerTransition == transition else { return }
-                playerMounted = false
+                guard playerTransition == transition else { return }
+                if expanded, showPlayer { playerSettled = true }
+                else if !showPlayer { playerMounted = false }
             }
         }
     }
