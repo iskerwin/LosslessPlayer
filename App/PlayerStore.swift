@@ -243,6 +243,18 @@ final class PlayerStore: NSObject, ObservableObject {
         updateNowPlaying()
     }
 
+    /// Selecting a timed lyric always starts playback, including from pause.
+    func playLyric(in track: Track, at time: Double) {
+        guard time.isFinite else { return }
+        if current?.id == track.id {
+            guard engine.hasFile else { return }
+            seek(time)
+            if !playing { resume() }
+        } else {
+            load(track, at: time, keepTransport: queueIDs.contains(track.id))
+        }
+    }
+
     func setQueue(_ ids: [UUID], replacingContext: Bool = true) {
         var seen = Set<UUID>()
         let filtered = ids.filter { id in

@@ -389,7 +389,92 @@ final class LibraryTests: XCTestCase {
     }
 }
 
+@MainActor
+final class LyricPlaybackTests: XCTestCase {
+    private func fixture() throws -> (URL, LibraryStore, [Track]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 240000))
+        buffer.frameLength = 240000
+        for frame in 0..<Int(buffer.frameLength) { buffer.floatChannelData![0][frame] = 0 }
+        var tracks: [Track] = []
+        for name in ["First", "Second", "Third"] {
+            let filename = name + ".wav"
+            do {
+                let file = try AVAudioFile(forWriting: root.appendingPathComponent(filename), settings: format.settings)
+                try file.write(from: buffer)
+            }
+            tracks.append(Track(id: UUID(), filename: filename, title: name, artist: "Artist", album: "Album",
+                                duration: 30, sampleRate: 8000, bitDepth: 16))
+        }
+        var snapshot = LibrarySnapshot()
+        snapshot.tracks = tracks
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        return (root, LibraryStore(root: root), tracks)
+    }
+
+    func testSelectingCurrentLyricSeeksResumesAndPreservesQueue() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: Array(tracks.prefix(2)))
+        XCTAssertFalse(player.playing)
+        let queue = player.queueIDs, context = player.contextIDs
+        player.playLyric(in: tracks[0], at: 12)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.position, 12, accuracy: 0.1)
+        XCTAssertEqual(player.current?.id, tracks[0].id)
+        XCTAssertEqual(player.queueIDs, queue)
+        XCTAssertEqual(player.contextIDs, context)
+        player.playLyric(in: tracks[0], at: 2)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.position, 2, accuracy: 0.1)
+    }
+
+    func testSelectingAnotherTracksLyricLoadsAtTimeAndKeepsExistingQueue() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: Array(tracks.prefix(2)))
+        let queue = player.queueIDs, context = player.contextIDs
+        player.playLyric(in: tracks[1], at: 9)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[1].id)
+        XCTAssertEqual(player.position, 9, accuracy: 0.1)
+        XCTAssertEqual(player.queueIDs, queue)
+        XCTAssertEqual(player.contextIDs, context)
+        player.playLyric(in: tracks[2], at: 5)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[2].id)
+        XCTAssertEqual(player.position, 5, accuracy: 0.1)
+    }
+
+    func testInvalidLyricTimeDoesNotResumeOrSwitchTracks() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        player.load(tracks[0], autoplay: false, at: 3)
+        player.playLyric(in: tracks[0], at: .nan)
+        player.playLyric(in: tracks[1], at: .infinity)
+        XCTAssertFalse(player.playing)
+        XCTAssertEqual(player.current?.id, tracks[0].id)
+        XCTAssertEqual(player.position, 3, accuracy: 0.1)
+    }
+}
+
 final class MigrationAndLyricsTests: XCTestCase {
+    func testActiveLyricUsesTimedLinesAndUpdatesAfterSeekingBackwards() {
+        let lines = LyricsLine.parse("Plain lyrics\n[00:05.00]First\n[00:15.00]Second")
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: nil))
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: .nan))
+        XCTAssertNil(LyricsLine.activeIndex(in: lines, at: 0))
+        XCTAssertEqual(LyricsLine.activeIndex(in: lines, at: 15), 2)
+        XCTAssertEqual(LyricsLine.activeIndex(in: lines, at: 5), 1)
+        XCTAssertNil(LyricsLine.activeIndex(in: LyricsLine.parse("Plain lyrics"), at: 20))
+    }
     func testOldLibraryWithoutFolderAndPlaylistFieldsMigrates() throws {
         let old = Data(#"{"tracks":[],"position":12.5}"#.utf8)
         let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: old)
