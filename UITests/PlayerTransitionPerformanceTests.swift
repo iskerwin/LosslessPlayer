@@ -20,33 +20,37 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
-        // Hitch harvest reads the process that was running when measurement
-        // started. Launching again inside the block replaces that process.
-        // The simulator still has an empty hitch archive after the animation
-        // finishes (run 43255604064: four opens settled, one process), and
-        // harvest asserts `_data`. Record hitches on device only.
+        // Hitch and CPU harvest read the process that was running when
+        // measurement started. Launching again inside the block replaces it.
+        // On the simulator both archives stay empty after the animation
+        // finishes (runs 43255604064 and 43270141912) and harvest asserts
+        // `_data`. The cold open still runs there. Hitches are recorded on device.
         app.launch()
+        #if targetEnvironment(simulator)
+        for _ in 0..<3 {
+            let player = presentSettledPlayer(in: app)
+            player.buttons["收起播放器"].tap()
+            let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
+            wait(for: [closed], timeout: 8)
+        }
+        #else
         let options = XCTMeasureOptions()
         options.iterationCount = 3
         options.invocationOptions = [.manuallyStart]
-        let iteration = {
-            let frame = self.stableMiniFrame(in: app)
+        measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
+                options: options) {
+            let frame = stableMiniFrame(in: app)
             let player = app.descendants(matching: .any)["now-playing"]
-            self.startMeasuring()
-            let openedAt = self.tapOpening(frame, in: app, player: player)
-            self.waitUntilSettled(player, openedAt: openedAt)
-            self.stopMeasuring()
+            startMeasuring()
+            let openedAt = tapOpening(frame, in: app, player: player)
+            waitUntilSettled(player, openedAt: openedAt)
+            stopMeasuring()
             // A full close unmounts the card, so the next open is cold again.
             // The process stays up until measure returns and harvest finishes.
             player.buttons["收起播放器"].tap()
             let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
-            self.wait(for: [closed], timeout: 8)
+            wait(for: [closed], timeout: 8)
         }
-        #if targetEnvironment(simulator)
-        measure(metrics: [XCTCPUMetric(application: app), XCTClockMetric()], options: options, block: iteration)
-        #else
-        measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
-                options: options, block: iteration)
         #endif
         app.terminate()
     }
