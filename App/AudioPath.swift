@@ -1,6 +1,15 @@
 import Foundation
 import AVFoundation
 
+enum AudioSessionRatePolicy {
+    static func preference(sourceRate: Double, route: AudioRouteKind, currentPreference: Double) -> Double? {
+        guard route != .bluetooth, route != .airPlay,
+              sourceRate.isFinite, sourceRate > 0,
+              !currentPreference.isFinite || abs(sourceRate - currentPreference) > 1 else { return nil }
+        return sourceRate
+    }
+}
+
 /// How the current output route can carry audio. Bluetooth and AirPlay always
 /// re-encode or resample on the way out, so they can never be bit-perfect,
 /// however good the source file is.
