@@ -1028,6 +1028,66 @@ final class SearchResultsTests: XCTestCase {
         XCTAssertEqual(playlists, 1, "A tap that changes tabs does not run the playlist action")
     }
 
+    func testReselectTitleUsesTheGlassTabWhenTheBarItemIsBlank() {
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: nil, tabTitle: "歌单", accessibilityLabel: nil), "歌单")
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: "", tabTitle: "歌单", accessibilityLabel: "歌单"), "歌单")
+        XCTAssertEqual(SearchTabReselect.Match.title(itemTitle: "搜索", tabTitle: "歌单", accessibilityLabel: nil), "歌单")
+        XCTAssertNil(SearchTabReselect.Match.title(itemTitle: nil, tabTitle: nil, accessibilityLabel: nil))
+        XCTAssertNil(SearchTabReselect.Match.title(itemTitle: " ", tabTitle: "", accessibilityLabel: "\n"))
+    }
+
+    @MainActor
+    func testReselectInstallsWhenTheTabControllerIsNotAnAncestor() {
+        let host = UIViewController()
+        let tab = UITabBarController()
+        let probe = SearchTabReselect.Controller()
+        host.addChild(tab)
+        host.addChild(probe)
+        XCTAssertNil(probe.tabBarController)
+        var runs = 0
+        probe.titleToMatch = "歌单"
+        probe.onReselect = { runs += 1 }
+        probe.install(in: [host])
+        let playlist = UIViewController()
+        playlist.tabBarItem = UITabBarItem(title: "歌单", image: nil, tag: 1)
+        tab.viewControllers = [playlist]
+        tab.selectedIndex = 0
+        XCTAssertTrue(tab.delegate?.tabBarController?(tab, shouldSelect: playlist) ?? false)
+        XCTAssertEqual(runs, 1)
+    }
+
+    @MainActor
+    func testGlassTabReselectUsesTheTabTitleAndFiresOnce() {
+        guard #available(iOS 18, *) else { return }
+        let proxy = SearchTabReselect.Proxy(original: nil)
+        var playlists = 0
+        var search = 0
+        proxy.handlers["歌单"] = { playlists += 1 }
+        proxy.handlers["搜索"] = { search += 1 }
+        let tab = UITabBarController()
+        tab.loadViewIfNeeded()
+        let playlist = UITab(title: "歌单", image: nil, identifier: "playlists") { _ in
+            let controller = UIViewController()
+            controller.tabBarItem.title = nil
+            return controller
+        }
+        let searchTab = UITab(title: "搜索", image: nil, identifier: "search") { _ in UIViewController() }
+        tab.tabs = [playlist, searchTab]
+        tab.selectedTab = playlist
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelectTab: playlist))
+        proxy.tabBarController(tab, didSelectTab: playlist, previousTab: playlist)
+        XCTAssertEqual(playlists, 1)
+        XCTAssertEqual(search, 0)
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelectTab: searchTab))
+        XCTAssertEqual(search, 0, "A tap that changes tabs does not run the search action")
+        tab.selectedTab = searchTab
+        proxy.tabBarController(tab, didSelectTab: searchTab, previousTab: playlist)
+        XCTAssertEqual(search, 0)
+        proxy.tabBarController(tab, didSelectTab: searchTab, previousTab: searchTab)
+        XCTAssertEqual(search, 1)
+        XCTAssertEqual(playlists, 1)
+    }
+
     func testFuzzySearchMatchesSeparateKeywordsAcrossTitleAndArtist() {
         let tracks = library
         let query = "  SKY\tada \n"
