@@ -21,26 +21,33 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotMode"]
         // Hitch harvest reads the process that was running when measurement
-        // started. Launching again inside the block replaces that process and
-        // leaves the signpost buffer empty.
+        // started. Launching again inside the block replaces that process.
+        // The simulator still has an empty hitch archive after the animation
+        // finishes (run 43255604064: four opens settled, one process), and
+        // harvest asserts `_data`. Record hitches on device only.
         app.launch()
         let options = XCTMeasureOptions()
         options.iterationCount = 3
         options.invocationOptions = [.manuallyStart]
-        measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
-                options: options) {
-            let frame = stableMiniFrame(in: app)
+        let iteration = {
+            let frame = self.stableMiniFrame(in: app)
             let player = app.descendants(matching: .any)["now-playing"]
-            startMeasuring()
-            let openedAt = tapOpening(frame, in: app, player: player)
-            waitUntilSettled(player, openedAt: openedAt)
-            stopMeasuring()
+            self.startMeasuring()
+            let openedAt = self.tapOpening(frame, in: app, player: player)
+            self.waitUntilSettled(player, openedAt: openedAt)
+            self.stopMeasuring()
             // A full close unmounts the card, so the next open is cold again.
             // The process stays up until measure returns and harvest finishes.
             player.buttons["收起播放器"].tap()
             let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
-            wait(for: [closed], timeout: 8)
+            self.wait(for: [closed], timeout: 8)
         }
+        #if targetEnvironment(simulator)
+        measure(metrics: [XCTCPUMetric(application: app), XCTClockMetric()], options: options, block: iteration)
+        #else
+        measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
+                options: options, block: iteration)
+        #endif
         app.terminate()
     }
 
