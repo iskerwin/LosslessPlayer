@@ -551,8 +551,8 @@ final class PlayerCardRenderingTests: XCTestCase {
             reduceMotion: true, spaceOrigin: .zero,
             onWillClose: { willClose += 1 },
             onClosed: { didClose += 1 },
-            progressDrive: drive,
             dismiss: dismiss,
+            progressDrive: drive,
             onReady: { ready.fulfill() }
         ) {
             Color.white
