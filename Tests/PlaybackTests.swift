@@ -1100,6 +1100,36 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
+    func testDiscardingCurrentTrackClearsEveryPresentationPhase() {
+        for phase in 0..<4 {
+            var state = PlayerPresentationState()
+            _ = state.request(true)
+            if phase > 0 { _ = state.beginMountedPresentation() }
+            if phase > 1 { state.complete(state.generation) }
+            if phase > 2 { _ = state.request(false) }
+            let staleGeneration = state.generation
+
+            state.discard()
+            XCTAssertFalse(state.presented)
+            XCTAssertFalse(state.mounted)
+            XCTAssertFalse(state.settled)
+            XCTAssertNil(state.beginMountedPresentation())
+            state.complete(staleGeneration)
+            XCTAssertFalse(state.mounted)
+            XCTAssertFalse(state.settled)
+
+            // A later song must create a fresh collapsed card, and old
+            // completions must not settle or remove that card.
+            XCTAssertEqual(state.request(true), .prepare(state.generation))
+            XCTAssertEqual(state.beginMountedPresentation(), state.generation)
+            state.complete(staleGeneration)
+            XCTAssertTrue(state.mounted)
+            XCTAssertFalse(state.settled)
+            state.complete(state.generation)
+            XCTAssertTrue(state.settled)
+        }
+    }
+
     func testMiniSlotCacheKeepsLatestNativePositionAndRejectsInvalidGeometry() {
         let cache = PlayerMiniSlotCache()
         let expanded = PlayerMiniSlot(frame: CGRect(x: 21, y: 705, width: 348, height: 56), compact: false)
