@@ -988,6 +988,46 @@ final class AudioPathTests: XCTestCase {
 }
 
 final class SearchResultsTests: XCTestCase {
+    func testPlaylistTabReturnsHomeOnlyAfterLeavingIt() throws {
+        XCTAssertFalse(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: true, detailOpen: false))
+        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: false, detailOpen: false))
+        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: true, detailOpen: true))
+        XCTAssertTrue(PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: false, detailOpen: true))
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
+        XCTAssertNotNil(source.range(of: "tabReselect(title: \"歌单\")"))
+        XCTAssertNotNil(source.range(of: "returnToPlaylistHome"))
+    }
+
+    @MainActor
+    func testReselectKeepsSeparateSearchAndPlaylistActions() {
+        let proxy = SearchTabReselect.Proxy(original: nil)
+        var search = 0
+        var playlists = 0
+        proxy.handlers["搜索"] = { search += 1 }
+        proxy.handlers["歌单"] = { playlists += 1 }
+        let tab = UITabBarController()
+        let libraryTab = UIViewController()
+        libraryTab.tabBarItem = UITabBarItem(title: "资料库", image: nil, tag: 0)
+        let playlistTab = UIViewController()
+        playlistTab.tabBarItem = UITabBarItem(title: "歌单", image: nil, tag: 1)
+        let searchTab = UIViewController()
+        searchTab.tabBarItem = UITabBarItem(title: "搜索", image: nil, tag: 2)
+        tab.viewControllers = [libraryTab, playlistTab, searchTab]
+        tab.selectedIndex = 1
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: playlistTab))
+        XCTAssertEqual(playlists, 1)
+        XCTAssertEqual(search, 0)
+        tab.selectedIndex = 2
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: searchTab))
+        XCTAssertEqual(search, 1)
+        XCTAssertEqual(playlists, 1)
+        XCTAssertTrue(proxy.tabBarController(tab, shouldSelect: playlistTab))
+        XCTAssertEqual(playlists, 1, "A tap that changes tabs does not run the playlist action")
+    }
+
     func testFuzzySearchMatchesSeparateKeywordsAcrossTitleAndArtist() {
         let tracks = library
         let query = "  SKY\tada \n"

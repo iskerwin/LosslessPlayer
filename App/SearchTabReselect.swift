@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Detects a second tap on the already selected search tab. The first tap only changes tabs.
+/// Detects a second tap on an already selected tab. The first tap only changes tabs.
+/// Each title keeps its own action, so search and playlists can both listen.
 struct SearchTabReselect: UIViewControllerRepresentable {
     var title: String
     var onReselect: () -> Void
@@ -35,17 +36,10 @@ struct SearchTabReselect: UIViewControllerRepresentable {
 
         private func install() {
             guard let tab = nearestTabBarController() else { return }
-            if let proxy = tab.delegate as? Proxy {
-                proxy.titleToMatch = titleToMatch
-                proxy.onReselect = { [weak self] in self?.onReselect?() }
-                self.proxy = proxy
-                return
-            }
-            let proxy = Proxy(original: tab.delegate, titleToMatch: titleToMatch) { [weak self] in
-                self?.onReselect?()
-            }
+            let proxy = tab.delegate as? Proxy ?? Proxy(original: tab.delegate)
+            proxy.handlers[titleToMatch] = { [weak self] in self?.onReselect?() }
             self.proxy = proxy
-            tab.delegate = proxy
+            if !(tab.delegate is Proxy) { tab.delegate = proxy }
         }
 
         private func nearestTabBarController() -> UITabBarController? {
@@ -60,19 +54,18 @@ struct SearchTabReselect: UIViewControllerRepresentable {
 
     final class Proxy: NSObject, UITabBarControllerDelegate {
         weak var original: UITabBarControllerDelegate?
-        var titleToMatch: String
-        var onReselect: () -> Void
+        /// One action per tab title. A second tab must not replace the first.
+        var handlers: [String: () -> Void] = [:]
 
-        init(original: UITabBarControllerDelegate?, titleToMatch: String, onReselect: @escaping () -> Void) {
+        init(original: UITabBarControllerDelegate?) {
             self.original = original
-            self.titleToMatch = titleToMatch
-            self.onReselect = onReselect
         }
 
         func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
             if tabBarController.selectedViewController === viewController,
-               viewController.tabBarItem.title == titleToMatch {
-                onReselect()
+               let title = viewController.tabBarItem.title,
+               let action = handlers[title] {
+                action()
             }
             if let original, original.responds(to: #selector(UITabBarControllerDelegate.tabBarController(_:shouldSelect:))) {
                 return original.tabBarController?(tabBarController, shouldSelect: viewController) ?? true

@@ -239,6 +239,7 @@ struct LibraryView: View {
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { searchStack }
         }
         .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var legacyTabs: some View {
@@ -249,6 +250,7 @@ struct LibraryView: View {
             searchStack.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
         }
         .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var libraryStack: some View {
@@ -663,6 +665,18 @@ struct LibraryView: View {
         }
     }
 
+    /// Second tap on the playlist tab. Already at the home does nothing.
+    private func returnToPlaylistHome() {
+        let detailOpen = detailTab == .playlists && detailSource != nil
+        guard PlaylistTabNavigation.shouldReturnHome(pathIsEmpty: playlistPath.isEmpty, detailOpen: detailOpen) else { return }
+        if detailOpen {
+            detailSource = nil
+            detailClosing = false
+            detailPath = NavigationPath()
+        }
+        if !playlistPath.isEmpty { playlistPath = NavigationPath() }
+    }
+
     private func open(_ route: LibraryRoute) {
         setPlayer(false)
         lyricsTrack = nil
@@ -930,7 +944,19 @@ private struct AccessoryMiniPlayer: View {
 
 private extension View {
     func searchReselect(title: String, onReselect: @escaping () -> Void) -> some View {
+        tabReselect(title: title, onReselect: onReselect)
+    }
+
+    func tabReselect(title: String, onReselect: @escaping () -> Void) -> some View {
         background { SearchTabReselect(title: title, onReselect: onReselect) }
+    }
+}
+
+enum PlaylistTabNavigation {
+    /// A pushed playlist, or a cover card open on the playlist tab, returns home.
+    /// The playlist home itself stays put.
+    static func shouldReturnHome(pathIsEmpty: Bool, detailOpen: Bool) -> Bool {
+        !pathIsEmpty || detailOpen
     }
 }
 
