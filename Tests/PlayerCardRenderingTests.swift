@@ -560,16 +560,19 @@ final class PlayerCardRenderingTests: XCTestCase {
     }
 
     private var displacedKey: UIWindow?
+    private var layoutView: UIView?
 
     private func show<Content: View>(_ root: Content) throws -> UIWindow {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
-        window.rootViewController = UIHostingController(rootView: root)
+        let controller = UIHostingController(rootView: root)
+        window.rootViewController = controller
         window.makeKeyAndVisible()
-        window.layoutIfNeeded()
+        controller.view.layoutIfNeeded()
         displacedKey = previous
+        layoutView = controller.view
         return window
     }
 
@@ -578,13 +581,26 @@ final class PlayerCardRenderingTests: XCTestCase {
         window.rootViewController = nil
         displacedKey?.makeKeyAndVisible()
         displacedKey = nil
+        layoutView = nil
     }
 
+    /// Nested `RunLoop.run` returns without committing SwiftUI, so a progress
+    /// write looked like it never reached the card. `wait` runs the main queue
+    /// the update is scheduled on. The deadline is not the pass condition.
     private func flushUntil(probe: TransitionEvaluationProbe, changesFrom seen: Int) {
+        let done = expectation(description: "card progress committed")
         let start = Date()
-        while probe.card == seen && Date().timeIntervalSince(start) < 0.2 {
-            RunLoop.current.run(mode: .common, before: Date().addingTimeInterval(0.01))
+        func tick() {
+            CATransaction.flush()
+            layoutView?.layoutIfNeeded()
+            if probe.card != seen || Date().timeIntervalSince(start) >= 0.2 {
+                done.fulfill()
+                return
+            }
+            DispatchQueue.main.async(execute: tick)
         }
+        DispatchQueue.main.async(execute: tick)
+        wait(for: [done], timeout: 1)
     }
 }
 
