@@ -29,7 +29,7 @@ PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests"}
 LIBRARY = {
     "LibraryTests", "FolderScanTests", "LibraryCatalogTests",
     "PlaylistManagementTests", "FolderPlaylistTests",
-    "LibraryIndexAndPersistenceTests",
+    "LibraryIndexAndPersistenceTests", "PlaylistSearchCacheTests",
 }
 # AudioTags/Track -> album identity, search, derived groups, queue/menu models.
 CATALOG = LIBRARY | {
@@ -61,9 +61,9 @@ MAPPING = {
     "App/MusicChrome.swift": ({"PlaybackQueueTests"}, True),
     # LibraryStore invalidates this cache during removal, rescans and cover edits.
     "App/ArtworkCache.swift": (LIBRARY | {"BrowseAndArtworkPerformanceTests", "ArtworkAnalysisTests"}, True),
-    "App/PlaylistBrowser.swift": ({"LibraryCatalogTests"}, True),
+    "App/PlaylistBrowser.swift": ({"LibraryCatalogTests", "SearchResultsTests"}, True),
     # These views delegate model behavior; retain the relevant model coverage.
-    "App/CollectionPage.swift": (LIBRARY | {"PlaybackQueueTests"}, True),
+    "App/CollectionPage.swift": (LIBRARY | {"PlaybackQueueTests", "SearchResultsTests"}, True),
     "App/PlaylistArtworkEditor.swift": ({"PlaylistManagementTests", "FolderPlaylistTests"}, True),
     "App/SourcesView.swift": ({"FolderScanTests", "FolderPlaylistTests"}, True),
     "App/SearchTabReselect.swift": ({"SearchResultsTests"}, True),

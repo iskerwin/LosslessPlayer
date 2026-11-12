@@ -36,6 +36,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(mixed["only_testing"], sorted(set(engine["only_testing"] + ui["only_testing"])))
         self.assertTrue(mixed["screenshots"])
 
+    def test_search_changes_keep_matching_and_cache_regressions(self):
+        for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):
+            with self.subTest(path=path):
+                self.assertIn("-only-testing:LosslessPlayerTests/PlaylistSearchCacheTests",
+                              select_tests([path])["only_testing"])
+        for path in ("App/CollectionPage.swift", "App/PlaylistBrowser.swift"):
+            with self.subTest(path=path):
+                self.assertIn("-only-testing:LosslessPlayerTests/SearchResultsTests",
+                              select_tests([path])["only_testing"])
+
     def test_uncertain_inputs_never_narrow(self):
         for path in ("App/NewView.swift", "README.md", "project.yml",
                      "Tests/PlaybackTests.swift", "UITests/GlassScreenshots.swift",
