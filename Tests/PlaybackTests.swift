@@ -1100,6 +1100,19 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
+    func testMiniSlotCacheKeepsLatestNativePositionAndRejectsInvalidGeometry() {
+        let cache = PlayerMiniSlotCache()
+        let expanded = PlayerMiniSlot(frame: CGRect(x: 21, y: 705, width: 348, height: 56), compact: false)
+        let inline = PlayerMiniSlot(frame: CGRect(x: 21, y: 761, width: 260, height: 36), compact: true)
+        XCTAssertTrue(cache.record(expanded))
+        XCTAssertFalse(cache.record(expanded))
+        XCTAssertTrue(cache.record(inline))
+        XCTAssertEqual(cache.latest, inline)
+        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: .zero)))
+        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: CGRect(x: CGFloat.infinity, y: 0, width: 300, height: 56))))
+        XCTAssertEqual(cache.latest, inline)
+    }
+
     func testColdPlayerPresentationRequiresAMountedStartingLayout() {
         var state = PlayerPresentationState()
         XCTAssertEqual(state.request(true), .prepare(1))
