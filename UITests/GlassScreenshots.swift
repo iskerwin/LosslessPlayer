@@ -81,6 +81,54 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 5))
     }
 
+    func testSongRowsIdentifyTracksWithLyricsWithoutOpeningThem() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-lyricsScreenshotLibrary"]
+        app.launch()
+        let songs = app.buttons["歌曲"]
+        XCTAssertTrue(songs.waitForExistence(timeout: 20))
+        songs.tap()
+        let list = app.descendants(matching: .any)["songs-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        let withLyrics = list.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ AND value == %@", "Apologize", "有歌词")).firstMatch
+        XCTAssertTrue(withLyrics.waitForExistence(timeout: 5))
+        let withoutLyrics = list.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ AND value == %@", "Stop and Stare", "有歌词")).firstMatch
+        XCTAssertFalse(withoutLyrics.exists)
+        save("songs-with-lyrics-indicator")
+    }
+
+    func testSelectingLyricFromPauseSeeksHighlightsAndStartsPlayback() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode", "-lyricsScreenshotLibrary"]
+        app.launch()
+        try tapMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        XCTAssertTrue(player.waitForExistence(timeout: 8))
+        XCTAssertTrue(player.buttons["播放"].exists, "Fixture starts paused")
+        player.buttons["显示歌词"].tap()
+        let lyrics = player.scrollViews["lyrics-scroll"]
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 5))
+        XCTAssertFalse(lyrics.buttons["Plain introduction"].exists)
+        let middle = lyrics.buttons["Middle line"]
+        XCTAssertTrue(middle.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(middle.frame.height, 44)
+        middle.tap()
+        XCTAssertTrue(player.buttons["暂停"].waitForExistence(timeout: 5))
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: middle)
+        wait(for: [selected], timeout: 5)
+        save("lyrics-centered-selected")
+        player.buttons["暂停"].tap()
+        lyrics.buttons["Opening line"].tap()
+        XCTAssertTrue(player.buttons["暂停"].waitForExistence(timeout: 5))
+        let opening = lyrics.buttons["Opening line"]
+        let selectedOpening = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: opening)
+        wait(for: [selectedOpening], timeout: 5)
+    }
+
     func testMiniPlayerSwipeUpReopens() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

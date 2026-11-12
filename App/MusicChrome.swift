@@ -348,6 +348,12 @@ struct SongRow: View, Equatable {
             }
             .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
+            if track.hasLyrics {
+                Image(systemName: "quote.bubble")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
             if current && playing {
                 Image(systemName: "waveform")
                     .font(.caption.weight(.semibold))
@@ -366,6 +372,7 @@ struct SongRow: View, Equatable {
         .opacity(track.available ? 1 : 0.5)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(current ? "\(track.title)，\(track.artist)，正在播放" : "\(track.title)，\(track.artist)")
+        .accessibilityValue(track.hasLyrics ? "有歌词" : "")
     }
 
     static func separatorInset(showsIndex: Bool) -> CGFloat {
