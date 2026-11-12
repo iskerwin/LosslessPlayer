@@ -1268,8 +1268,9 @@ final class EngineSwitchContinuityTests: XCTestCase {
         let engine = AVAudioEngine()
         let player = EnginePlayer(engine: engine)
         defer { player.stop() }
-        try player.load(url: urls[0])
+        // load() prepares the engine, so choose offline mode before loading.
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        try player.load(url: urls[0])
         XCTAssertTrue(try player.play())
         XCTAssertTrue(engine.isRunning)
         XCTAssertTrue(try player.preload(url: urls[1], id: UUID()))
