@@ -1,8 +1,12 @@
 """Python-only checks of the cloud flow; these do not build or run the iOS app."""
 
 from pathlib import Path
+import plistlib
 import re
+import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
 
 import ci
 
@@ -38,6 +42,40 @@ class BuildNumberTests(unittest.TestCase):
     def test_preview_counts_within_current_dev(self):
         self.assertEqual(ci.preview_build(['dev-155-2'], SOURCE), '155.1')
         self.assertEqual(ci.preview_build(['dev-155-2', 'preview-155.1', 'preview-154.3'], SOURCE), '155.2')
+
+
+class IPAPackagingTests(unittest.TestCase):
+    def test_phone_package_builds_and_copies_the_optimized_product(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / 'build/device/Build/Products/Release-iphoneos/LosslessPlayer.app'
+            product.mkdir(parents=True)
+            info = dict(CFBundleIdentifier=ci.BUNDLE_ID, CFBundleSupportedPlatforms=['iPhoneOS'],
+                        UIBackgroundModes=['audio'],
+                        CFBundleIcons={'CFBundlePrimaryIcon': {'CFBundleIconName': 'AppIcon'}},
+                        DTSDKName='iphoneos26.6', DTXcode='2660', MinimumOSVersion='17.0',
+                        CFBundleVersion='180.1', CFBundleExecutable='LosslessPlayer',
+                        CADisableMinimumFrameDurationOnPhone=True)
+            (product / 'Info.plist').write_bytes(plistlib.dumps(info))
+            (product / 'LosslessPlayer').write_bytes(b'fixture executable')
+            commands = []
+
+            def fake_run(command, **kwargs):
+                commands.append(command)
+                if command[0] == 'xcodebuild':
+                    self.assertEqual(command[command.index('-configuration') + 1], 'Release')
+                elif command[0] == 'ditto':
+                    with zipfile.ZipFile(command[-1], 'w') as archive:
+                        archive.writestr('Payload/LosslessPlayer.app/Info.plist', plistlib.dumps(info))
+
+            with patch.object(ci, 'ROOT', root), patch.object(ci, 'run', side_effect=fake_run):
+                ipa, packaged = ci.build_ipa('180.1')
+            self.assertEqual(packaged, info)
+            self.assertTrue(ipa.exists())
+            self.assertEqual((root / 'build/ipa/Payload/LosslessPlayer.app/LosslessPlayer').read_bytes(),
+                             b'fixture executable')
+            self.assertTrue(any(command[0] == 'lipo' for command in commands))
+            self.assertIn(ci.IPA_NAME, (root / 'dist/SHA256SUMS.txt').read_text())
 
 
 class SourceTests(unittest.TestCase):

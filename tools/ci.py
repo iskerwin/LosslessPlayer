@@ -36,6 +36,7 @@ PROOF = SHIP / 'proof.json'
 REPO = os.environ.get('GITHUB_REPOSITORY', 'iskerwin/LosslessPlayer')
 BUNDLE_ID = 'com.iskerwin.LosslessPlayer'
 IPA_NAME = 'LosslessPlayer-dev-unsigned.ipa'
+IPA_CONFIGURATION = 'Release'
 SCREENSHOTS = ('library.png', 'songs.png', 'playlist.png', 'now-playing.png')
 SELECTOR = re.compile(r'LosslessPlayer(?:UI)?Tests(?:/[A-Za-z_]\w*){0,2}')
 # Phase limits. A limit is a failure, never a pass.
@@ -279,9 +280,9 @@ def execute(plan):
 # ---- packaging and publication --------------------------------------------
 
 def build_ipa(build):
-    """Unsigned arm64 Debug app for re-signing with AltStore/SideStore."""
+    """Optimized unsigned arm64 app for re-signing with AltStore/SideStore."""
     run(['xcodebuild', 'build', '-project', 'LosslessPlayer.xcodeproj', '-scheme', 'LosslessPlayer',
-         '-configuration', 'Debug', '-sdk', 'iphoneos', '-destination', 'generic/platform=iOS',
+         '-configuration', IPA_CONFIGURATION, '-sdk', 'iphoneos', '-destination', 'generic/platform=iOS',
          '-derivedDataPath', 'build/device', 'CODE_SIGNING_ALLOWED=NO',
          f'CURRENT_PROJECT_VERSION={build}'], log=ROOT / 'ipa-build.log', timeout=IPA_MINUTES * 60)
     payload = ROOT / 'build/ipa/Payload'
@@ -289,7 +290,8 @@ def build_ipa(build):
         shutil.rmtree(payload)
     payload.mkdir(parents=True)
     app = payload / 'LosslessPlayer.app'
-    shutil.copytree(ROOT / 'build/device/Build/Products/Debug-iphoneos/LosslessPlayer.app', app, symlinks=True)
+    product = ROOT / f'build/device/Build/Products/{IPA_CONFIGURATION}-iphoneos/LosslessPlayer.app'
+    shutil.copytree(product, app, symlinks=True)
     info = plistlib.loads((app / 'Info.plist').read_bytes())
     checks = {
         'bundle id': info['CFBundleIdentifier'] == BUNDLE_ID,
@@ -300,6 +302,7 @@ def build_ipa(build):
         'Xcode 26': str(info['DTXcode']).startswith('26'),
         'iOS 17': info['MinimumOSVersion'] == '17.0',
         'build': str(info['CFBundleVersion']) == str(build),
+        'ProMotion enabled': info.get('CADisableMinimumFrameDurationOnPhone') is True,
     }
     bad = [name for name, ok in checks.items() if not ok]
     if bad:
@@ -377,7 +380,7 @@ def notes(kind, plan, proof, sha):
     else:
         scope = f'本次运行：单元测试通过 {proof["unit_passed"]} 项，界面测试通过 {proof["ui_passed"]} 项'
     head = ('Lossless 预览包，合并前上手机确认用；下一个开发版会覆盖它。'
-            if kind == 'preview' else 'Lossless 开发版（iOS 17+，arm64，Debug）。')
+            if kind == 'preview' else 'Lossless 开发版（iOS 17+，arm64，Release 优化构建）。')
     return '\n\n'.join([
         head,
         f'源码：{sha}。{scope}',

@@ -390,6 +390,15 @@ final class LibraryTests: XCTestCase {
 }
 
 final class MigrationAndLyricsTests: XCTestCase {
+    func testBackgroundLyricsOnlyExposeLinesForTheMatchingSource() async {
+        let text = "[00:05.00]First\n[00:10.00]Second"
+        let loaded = await ParsedLyrics.load(text)
+        XCTAssertEqual(loaded.lines(matching: text), LyricsLine.parse(text))
+        XCTAssertTrue(loaded.lines(matching: "[00:05.00]Different track").isEmpty)
+        XCTAssertTrue(loaded.lines(matching: nil).isEmpty)
+        let empty = await ParsedLyrics.load(nil)
+        XCTAssertTrue(empty.lines(matching: nil).isEmpty)
+    }
     func testOldLibraryWithoutFolderAndPlaylistFieldsMigrates() throws {
         let old = Data(#"{"tracks":[],"position":12.5}"#.utf8)
         let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: old)
