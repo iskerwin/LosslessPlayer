@@ -18,14 +18,14 @@ struct LibraryView: View {
     @State private var detailClosing = false
     @State private var detailGeneration = 0
     @State private var searchFieldFocused = false
-    @State private var showPlayer = false
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
-    @State private var playerMounted = false
+    @State private var playerPresentation = PlayerPresentationState()
+    private var showPlayer: Bool { playerPresentation.presented }
+    private var playerMounted: Bool { playerPresentation.mounted }
+    private var playerSettled: Bool { playerPresentation.settled }
     @State private var playerProgress: CGFloat = 0
     @State private var miniSlot = PlayerMiniSlot()
-    @State private var playerTransition = 0
-    @State private var playerSettled = false
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -82,6 +82,11 @@ struct LibraryView: View {
                             MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
                                 .accessibilityHidden(showPlayer)
                                 .allowsHitTesting(!showPlayer)
+                        }
+                        .onAppear {
+                            if let generation = playerPresentation.beginMountedPresentation() {
+                                animatePlayer(true, generation: generation)
+                            }
                         }
                         .zIndex(1)
                     }
@@ -610,21 +615,23 @@ struct LibraryView: View {
     /// The drag and this spring write the same progress. Completion only
     /// releases expensive expanded controls; it never swaps visible cards.
     private func setPlayer(_ expanded: Bool) {
-        guard expanded != showPlayer else { return }
-        playerTransition += 1
-        let transition = playerTransition
-        playerSettled = false
-        if expanded { playerMounted = true }
+        guard let step = playerPresentation.request(expanded) else { return }
+        switch step {
+        case .prepare:
+            playerProgress = 0
+        case .animate(let generation):
+            animatePlayer(expanded, generation: generation)
+        }
+    }
+
+    private func animatePlayer(_ expanded: Bool, generation: Int) {
         var transaction = Transaction(animation: playerAnimation)
         transaction.disablesAnimations = false
         withTransaction(transaction) {
             withAnimation(playerAnimation, completionCriteria: .removed) {
-                showPlayer = expanded
                 playerProgress = expanded ? 1 : 0
             } completion: {
-                guard playerTransition == transition else { return }
-                if expanded, showPlayer { playerSettled = true }
-                else if !showPlayer { playerMounted = false }
+                playerPresentation.complete(generation)
             }
         }
     }
