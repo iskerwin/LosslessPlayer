@@ -26,6 +26,7 @@ struct LibraryView: View {
     private var playerSettled: Bool { playerPresentation.settled }
     @State private var playerProgress: CGFloat = 0
     @State private var miniSlot = PlayerMiniSlot()
+    @State private var latestMiniSlot = PlayerMiniSlotCache()
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -202,7 +203,7 @@ struct LibraryView: View {
     }
 
     private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
-        guard slot.frame.width > 0, slot.frame.height > 0, slot != miniSlot else { return }
+        guard latestMiniSlot.record(slot), playerMounted, slot != miniSlot else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { miniSlot = slot }
@@ -618,7 +619,12 @@ struct LibraryView: View {
         guard let step = playerPresentation.request(expanded) else { return }
         switch step {
         case .prepare:
-            playerProgress = 0
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                miniSlot = latestMiniSlot.latest
+                playerProgress = 0
+            }
         case .animate(let generation):
             animatePlayer(expanded, generation: generation)
         }

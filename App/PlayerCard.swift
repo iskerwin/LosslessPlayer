@@ -198,6 +198,22 @@ struct PlayerMiniSlot: Equatable {
     var compact = false
 }
 
+/// Record native accessory motion without publishing a root-view update for
+/// every frame. The presenter copies this value when it needs an overlay.
+final class PlayerMiniSlotCache {
+    private(set) var latest = PlayerMiniSlot()
+
+    @discardableResult
+    func record(_ slot: PlayerMiniSlot) -> Bool {
+        let frame = slot.frame
+        guard frame.minX.isFinite, frame.minY.isFinite,
+              frame.width.isFinite, frame.height.isFinite,
+              frame.width > 0, frame.height > 0, slot != latest else { return false }
+        latest = slot
+        return true
+    }
+}
+
 /// Native accessory ownership keeps placement and content in the same animation.
 struct PlayerMiniSlotView<Content: View>: View {
     var onMeasure: (PlayerMiniSlot) -> Void
