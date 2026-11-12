@@ -25,7 +25,7 @@ TARGET = "LosslessPlayerTests"
 PLAYBACK = {"PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests"}
 # These integration classes instantiate PlayerStore -> EnginePlayer, not just
 # LibraryStore (testToggleStartsFirstAvailableTrack / upcoming queue mutations).
-PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests"}
+PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests", "LyricPlaybackTests"}
 LIBRARY = {
     "LibraryTests", "FolderScanTests", "LibraryCatalogTests",
     "PlaylistManagementTests", "FolderPlaylistTests",
@@ -56,7 +56,7 @@ MAPPING = {
     # LyricsLine.parse is here, alongside scrubber, swipe and palette helpers.
     "App/NowPlayingView.swift": ({
         "MigrationAndLyricsTests", "PlaybackQueueTests", "ArtworkSwipeTests",
-        "ArtworkAnalysisTests", "BrowseAndArtworkPerformanceTests",
+        "ArtworkAnalysisTests", "BrowseAndArtworkPerformanceTests", "LyricPlaybackTests",
     }, True),
     "App/MusicChrome.swift": ({"PlaybackQueueTests"}, True),
     # LibraryStore invalidates this cache during removal, rescans and cover edits.
