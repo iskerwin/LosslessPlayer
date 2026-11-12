@@ -7,11 +7,7 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
         app.launchArguments = ["-screenshotMode"]
         app.launch()
         for _ in 0..<2 {
-            tapMini(in: app)
-            let player = app.descendants(matching: .any)["now-playing"]
-            let settled = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player.buttons["收起播放器"])
-            wait(for: [settled], timeout: 8)
+            let player = presentSettledPlayer(in: app)
             XCTAssertTrue(player.descendants(matching: .any)["player-route-picker"].waitForExistence(timeout: 5))
             player.buttons["收起播放器"].tap()
             let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
@@ -34,12 +30,10 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
         measure(metrics: [XCTHitchMetric(application: app), XCTCPUMetric(application: app), XCTClockMetric()],
                 options: options) {
             let frame = stableMiniFrame(in: app)
-            startMeasuring()
-            tap(frame, in: app)
             let player = app.descendants(matching: .any)["now-playing"]
-            let settled = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"), object: player.buttons["收起播放器"])
-            wait(for: [settled], timeout: 8)
+            startMeasuring()
+            let openedAt = tapOpening(frame, in: app, player: player)
+            waitUntilSettled(player, openedAt: openedAt)
             stopMeasuring()
             // A full close unmounts the card, so the next open is cold again.
             // The process stays up until measure returns and harvest finishes.
@@ -53,8 +47,38 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
     /// The accessory reports a title before its screen frame is usable, and
     /// that title's accessibility activation point misses the open control.
     /// Screenshot coverage taps the stable frame's center for the same reason.
-    private func tapMini(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        tap(stableMiniFrame(in: app, file: file, line: line), in: app)
+    /// That center tap is sometimes dropped outright (run 43248405785: the
+    /// library never changed). A dropped tap leaves now-playing absent and is
+    /// repeated once. It does not spend the 8s settle budget; that budget
+    /// still starts at the tap the wait follows.
+    private func presentSettledPlayer(in app: XCUIApplication, file: StaticString = #filePath,
+                                      line: UInt = #line) -> XCUIElement {
+        let player = app.descendants(matching: .any)["now-playing"]
+        let openedAt = tapOpening(stableMiniFrame(in: app, file: file, line: line), in: app, player: player,
+                                  file: file, line: line)
+        waitUntilSettled(player, openedAt: openedAt)
+        return player
+    }
+
+    private func tapOpening(_ frame: CGRect, in app: XCUIApplication, player: XCUIElement,
+                            file: StaticString = #filePath, line: UInt = #line) -> Date {
+        let first = sendTap(frame, in: app)
+        if player.waitForExistence(timeout: 2) { return first }
+        return sendTap(stableMiniFrame(in: app, file: file, line: line), in: app)
+    }
+
+    private func sendTap(_ frame: CGRect, in app: XCUIApplication) -> Date {
+        let openedAt = Date()
+        tap(frame, in: app)
+        return openedAt
+    }
+
+    private func waitUntilSettled(_ player: XCUIElement, openedAt: Date) {
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND value == %@", "已展开"),
+            object: player.buttons["收起播放器"])
+        let remaining = 8 - Date().timeIntervalSince(openedAt)
+        wait(for: [settled], timeout: max(0, remaining))
     }
 
     private func tap(_ frame: CGRect, in app: XCUIApplication) {
