@@ -167,13 +167,14 @@ struct NowPlayingView: View {
     var onClose: () -> Void
     var onPull: (CGFloat) -> Void
     var onPullCancelled: () -> Void
+    var presentationSettled: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
     @ScaledMetric(relativeTo: .headline) private var compactHeaderHeight: CGFloat = PlayerScrollMorph.compactHeight
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, presentationSettled: Bool = true) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
@@ -181,6 +182,7 @@ struct NowPlayingView: View {
         self.onClose = onClose
         self.onPull = onPull
         self.onPullCancelled = onPullCancelled
+        self.presentationSettled = presentationSettled
     }
 
     private enum Panel { case artwork, lyrics }
@@ -198,10 +200,12 @@ struct NowPlayingView: View {
     /// Direction of the most recent track change, so the artwork/title slide
     /// the way Music does: next slides in from the right, previous from the left.
     @State private var skipDirection: ArtworkSwipe.Direction = .next
-    /// Parsed once per track. The playback clock must not re-run the regex
+    /// Parsed off the main thread when the lyrics panel needs new text.
+    /// The playback clock must not re-run the regex
     /// on every tick, and the clock is observed only by the scrubber and
     /// the lyrics list so a position update does not rebuild the player.
-    @State private var lyricLines: [LyricsLine] = []
+    @State private var parsedLyrics = ParsedLyrics(source: nil, lines: [])
+    private var lyricLines: [LyricsLine] { parsedLyrics.lines(matching: current?.lyrics) }
     private var current: Track? { library.track(player.current?.id) }
     private var duration: Double {
         let duration = current?.duration ?? 0
@@ -226,12 +230,14 @@ struct NowPlayingView: View {
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
+        .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
         // The gesture owns the 90pt dismissal decision; the card owns motion.
-        .onAppear {
-            reloadLyrics()
+        .task(id: panel == .lyrics ? current?.lyrics : nil) {
+            guard panel == .lyrics, parsedLyrics.source != current?.lyrics else { return }
+            let result = await ParsedLyrics.load(current?.lyrics)
+            guard !Task.isCancelled else { return }
+            parsedLyrics = result
         }
-        .onChange(of: current?.id) { _, _ in reloadLyrics() }
-        .onChange(of: current?.lyrics) { _, _ in reloadLyrics() }
         .onChange(of: player.upcomingTracks.map(\.id)) { _, _ in queueDrag = nil }
         .onChange(of: panel) { _, _ in queueDrag = nil }
         .onChange(of: scenePhase) { _, phase in
@@ -241,8 +247,8 @@ struct NowPlayingView: View {
             if !interactive { queueDrag = nil }
         }
         .onDisappear { queueDrag = nil }
-        .task {
-            try? await Task.sleep(for: .milliseconds(350))
+        .task(id: presentationSettled) {
+            guard presentationSettled else { return }
             chromeReady = true
         }
         .accessibilityAction(.escape) { onClose() }
@@ -576,6 +582,7 @@ struct NowPlayingView: View {
                 if chromeReady {
                     RoutePicker()
                         .accessibilityLabel("选择音频输出")
+                        .accessibilityIdentifier("player-route-picker")
                         .transition(.opacity)
                 }
             }
@@ -752,21 +759,15 @@ struct NowPlayingView: View {
     }
 
     @ViewBuilder private var lyricsPanel: some View {
-        if lyricLines.isEmpty {
+        if current?.hasLyrics == true, parsedLyrics.source != current?.lyrics {
+            ProgressView().tint(.white)
+        } else if lyricLines.isEmpty {
             ContentUnavailableView("暂无本地歌词", systemImage: "quote.bubble", description: Text("将同名 UTF-8 .lrc 文件放在音乐旁，重新扫描后显示。"))
         } else {
             PlaybackLyrics(clock: player.clock, lines: lyricLines) { time in
                 if let current = player.current { player.playLyric(in: current, at: time) }
             }
         }
-    }
-
-    private func reloadLyrics() {
-        guard let text = current?.lyrics, current?.hasLyrics == true else {
-            lyricLines = []
-            return
-        }
-        lyricLines = LyricsLine.parse(text)
     }
 
     private var detailsSheet: some View {
@@ -1324,6 +1325,7 @@ struct SystemVolumeBar: View {
             Group {
                 if ready {
                     NativeVolumeView()
+                        .accessibilityIdentifier("player-system-volume")
                         .transition(.opacity)
                 } else {
                     Color.clear
@@ -1406,6 +1408,26 @@ private struct RoutePicker: UIViewRepresentable {
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
         uiView.tintColor = .white
         uiView.activeTintColor = .white
+    }
+}
+
+struct ParsedLyrics {
+    let source: String?
+    private let parsedLines: [LyricsLine]
+
+    init(source: String?, lines: [LyricsLine]) {
+        self.source = source
+        parsedLines = lines
+    }
+
+    func lines(matching text: String?) -> [LyricsLine] {
+        source == text ? parsedLines : []
+    }
+
+    static func load(_ source: String?) async -> Self {
+        guard let source, !source.isEmpty else { return Self(source: source, lines: []) }
+        let lines = await Task.detached(priority: .utility) { LyricsLine.parse(source) }.value
+        return Self(source: source, lines: lines)
     }
 }
 

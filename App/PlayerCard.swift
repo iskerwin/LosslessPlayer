@@ -1,5 +1,42 @@
 import SwiftUI
 
+/// A cold presentation first creates a zero-progress card. Its mount event
+/// starts travel only after that starting layout exists in the view tree.
+struct PlayerPresentationState {
+    enum Step: Equatable { case prepare(Int), animate(Int) }
+    private(set) var presented = false
+    private(set) var mounted = false
+    private(set) var settled = false
+    private(set) var generation = 0
+    private var pendingOpen: Int?
+
+    mutating func request(_ expanded: Bool) -> Step? {
+        guard expanded != presented else { return nil }
+        generation += 1
+        presented = expanded
+        settled = false
+        if expanded && !mounted {
+            mounted = true
+            pendingOpen = generation
+            return .prepare(generation)
+        }
+        pendingOpen = nil
+        return .animate(generation)
+    }
+
+    mutating func beginMountedPresentation() -> Int? {
+        guard let pendingOpen, pendingOpen == generation, presented else { return nil }
+        self.pendingOpen = nil
+        return pendingOpen
+    }
+
+    mutating func complete(_ token: Int) {
+        guard token == generation, pendingOpen == nil else { return }
+        if presented { settled = true }
+        else { mounted = false }
+    }
+}
+
 /// Shared by the resting mini (in either host) and the closing card overlay.
 /// Ordinary drag priority preserves taps on the mini's transport buttons.
 struct MiniPlayerReopenGesture: Gesture {

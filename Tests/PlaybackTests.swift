@@ -475,6 +475,16 @@ final class MigrationAndLyricsTests: XCTestCase {
         XCTAssertEqual(LyricsLine.activeIndex(in: lines, at: 5), 1)
         XCTAssertNil(LyricsLine.activeIndex(in: LyricsLine.parse("Plain lyrics"), at: 20))
     }
+
+    func testBackgroundLyricsOnlyExposeLinesForTheMatchingSource() async {
+        let text = "[00:05.00]First\n[00:10.00]Second"
+        let loaded = await ParsedLyrics.load(text)
+        XCTAssertEqual(loaded.lines(matching: text), LyricsLine.parse(text))
+        XCTAssertTrue(loaded.lines(matching: "[00:05.00]Different track").isEmpty)
+        XCTAssertTrue(loaded.lines(matching: nil).isEmpty)
+        let empty = await ParsedLyrics.load(nil)
+        XCTAssertTrue(empty.lines(matching: nil).isEmpty)
+    }
     func testOldLibraryWithoutFolderAndPlaylistFieldsMigrates() throws {
         let old = Data(#"{"tracks":[],"position":12.5}"#.utf8)
         let snapshot = try JSONDecoder().decode(LibrarySnapshot.self, from: old)
@@ -1090,6 +1100,50 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
+    func testColdPlayerPresentationRequiresAMountedStartingLayout() {
+        var state = PlayerPresentationState()
+        XCTAssertEqual(state.request(true), .prepare(1))
+        XCTAssertTrue(state.mounted)
+        XCTAssertFalse(state.settled)
+        state.complete(1)
+        XCTAssertFalse(state.settled, "Completion cannot bypass the cold card's starting layout")
+        XCTAssertEqual(state.beginMountedPresentation(), 1)
+        XCTAssertNil(state.beginMountedPresentation())
+        state.complete(1)
+        XCTAssertTrue(state.settled)
+        XCTAssertEqual(state.request(false), .animate(2))
+        XCTAssertTrue(state.mounted)
+        state.complete(2)
+        XCTAssertFalse(state.mounted)
+    }
+
+    func testReopeningRejectsStaleCloseCompletion() {
+        var state = PlayerPresentationState()
+        _ = state.request(true)
+        _ = state.beginMountedPresentation()
+        state.complete(1)
+        XCTAssertEqual(state.request(false), .animate(2))
+        XCTAssertEqual(state.request(true), .animate(3))
+        state.complete(2)
+        XCTAssertTrue(state.mounted)
+        XCTAssertFalse(state.settled)
+        state.complete(3)
+        XCTAssertTrue(state.presented)
+        XCTAssertTrue(state.settled)
+    }
+
+    func testClosingDuringPreparationCannotStartTheOldOpen() {
+        var state = PlayerPresentationState()
+        _ = state.request(true)
+        _ = state.request(false)
+        XCTAssertNil(state.beginMountedPresentation())
+        state.complete(1)
+        XCTAssertTrue(state.mounted)
+        state.complete(2)
+        XCTAssertFalse(state.mounted)
+        XCTAssertFalse(state.presented)
+    }
+
     /// Same groupings `LibraryStore.rebuildDerived` keeps on the snapshot.
     /// Re-reading them must stay cheaper than rebuilding from the view, and
     /// must match the filters the pages used before the cache existed.
