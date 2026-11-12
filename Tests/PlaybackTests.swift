@@ -1229,6 +1229,61 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
 
 /// Pure format comparisons and scheduling state only: never starts an audio
 /// engine or activates AVAudioSession, including on the CI simulator.
+final class AudioSessionRatePolicyTests: XCTestCase {
+    func testWirelessOutputDoesNotFollowEachTracksSampleRate() {
+        for route in [AudioRouteKind.bluetooth, .airPlay] {
+            for source in [44100.0, 48000, 96000] {
+                XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: source, route: route, currentPreference: 48000))
+            }
+        }
+    }
+
+    func testWiredOutputStillFollowsSourceWithoutRepeatingTheSameRequest() {
+        for route in [AudioRouteKind.wired, .usb, .speaker] {
+            XCTAssertEqual(AudioSessionRatePolicy.preference(sourceRate: 96000, route: route, currentPreference: 44100), 96000)
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: 96000, route: route, currentPreference: 96000))
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: .nan, route: route, currentPreference: 48000))
+            XCTAssertNil(AudioSessionRatePolicy.preference(sourceRate: 0, route: route, currentPreference: 48000))
+        }
+    }
+}
+
+@MainActor
+final class EngineSwitchContinuityTests: XCTestCase {
+    func testSameFormatReplacementKeepsTheRenderEngineRunning() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192))
+        buffer.frameLength = 8192
+        for channel in 0..<2 {
+            for frame in 0..<8192 { buffer.floatChannelData![channel][frame] = 0.1 }
+        }
+        let urls = [root.appendingPathComponent("first.wav"), root.appendingPathComponent("second.wav")]
+        for url in urls {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        let engine = AVAudioEngine()
+        let player = EnginePlayer(engine: engine)
+        defer { player.stop() }
+        try player.load(url: urls[0])
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        XCTAssertTrue(try player.play())
+        XCTAssertTrue(engine.isRunning)
+        XCTAssertTrue(try player.preload(url: urls[1], id: UUID()))
+        try player.load(url: urls[1])
+        XCTAssertTrue(engine.isRunning, "Replacing a same-format track must not stop the output render stream")
+        XCTAssertFalse(player.isPlaying, "The replacement is loaded without unexpected autoplay")
+        XCTAssertTrue(try player.play())
+        XCTAssertEqual(player.duration, 8192.0 / 44100, accuracy: 0.0001)
+        XCTAssertThrowsError(try player.load(url: root.appendingPathComponent("missing.wav")))
+        XCTAssertTrue(engine.isRunning)
+        XCTAssertTrue(player.isPlaying, "A failed open must leave the accepted file and render stream intact")
+    }
+}
+
 final class GaplessPlaybackTests: XCTestCase {
     private func format(_ rate: Double = 44100, channels: AVAudioChannelCount = 2) -> AVAudioFormat {
         AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels)!

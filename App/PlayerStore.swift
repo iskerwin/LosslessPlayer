@@ -117,8 +117,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func load(_ track: Track, autoplay: Bool = true, at time: Double = 0, context: [Track]? = nil, keepTransport: Bool = false) {
         guard track.available else { errorMessage = "文件已移动或删除，请重新扫描文件夹"; return }
-        invalidatePreload(.trackChange)
-        pause()
+        pause(discardingPreload: false)
         do {
             let newAccess: URL?
             if let id = track.folderID {
@@ -130,14 +129,14 @@ final class PlayerStore: NSObject, ObservableObject {
             let scoped = newAccess?.startAccessingSecurityScopedResource() == true
             var accepted = false
             defer { if scoped && !accepted { newAccess?.stopAccessingSecurityScopedResource() } }
-            // Ask the session for this track's own sample rate before the
-            // engine connects, so the mixer does not have to resample a
-            // 44.1 kHz file to 48 kHz (or a 96 kHz file down) by default.
+            // Wired outputs can follow the source rate before connection.
+            // Wireless outputs retain their system-selected rate across tracks.
             // The request is only a preference; `updateOutput` re-reads the
             // actual rate afterwards and the path assessment judges that.
             if autoplay { try prepareSession(for: track, activate: true) }
             else { prepareSessionPassively(for: track) }
             try engine.load(url: library.url(for: track), at: time)
+            releaseNextAccess()
             accessRoot?.stopAccessingSecurityScopedResource()
             accessRoot = scoped ? newAccess : nil
             accepted = true
@@ -160,7 +159,10 @@ final class PlayerStore: NSObject, ObservableObject {
                 resume()
                 if playing { library.recordPlay(id: track.id) }
             }
-        } catch { errorMessage = "播放失败：\(error.localizedDescription)" }
+        } catch {
+            invalidatePreload(.trackChange)
+            errorMessage = "播放失败：\(error.localizedDescription)"
+        }
     }
 
     func toggle() {
@@ -171,7 +173,6 @@ final class PlayerStore: NSObject, ObservableObject {
 
     /// Plays `tracks` in list order, or shuffled. Shuffle on remembers the list order so it can be restored.
     func play(_ tracks: [Track], shuffled: Bool) {
-        invalidatePreload(.trackChange)
         let available = tracks.filter(\.available)
         guard !available.isEmpty else { return }
         let ordered = available.map(\.id)
@@ -197,14 +198,20 @@ final class PlayerStore: NSObject, ObservableObject {
         } catch { errorMessage = "音频会话启动失败：\(error.localizedDescription)" }
     }
 
-    /// Points the session at the track's sample rate. With `activate` the
+    /// Requests the source rate on wired outputs. With `activate` the
     /// session is (re)activated so the preference can take effect; the
     /// passive variant only records the preference, so restoring a paused
     /// track at launch does not interrupt other apps' audio.
     private func prepareSession(for track: Track, activate: Bool) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default)
-        if track.sampleRate > 0 { try session.setPreferredSampleRate(track.sampleRate) }
+        if session.category != .playback || session.mode != .default {
+            try session.setCategory(.playback, mode: .default)
+        }
+        let route = session.currentRoute.outputs.first.map { AudioRouteKind.from($0.portType) } ?? .other
+        if let rate = AudioSessionRatePolicy.preference(sourceRate: track.sampleRate, route: route,
+                                                       currentPreference: session.preferredSampleRate) {
+            try session.setPreferredSampleRate(rate)
+        }
         if activate { try session.setActive(true) }
     }
 
@@ -213,9 +220,13 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func pause() {
+        pause(discardingPreload: true)
+    }
+
+    private func pause(discardingPreload: Bool) {
         position = engine.hasFile ? engine.currentTime : position
         engine.pause()
-        invalidatePreload(.pause)
+        if discardingPreload { invalidatePreload(.pause) }
         playing = false
         if let current { library.remember(id: current.id, position: position) }
         updateNowPlaying()
@@ -223,8 +234,8 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func stopIfCurrent(_ track: Track) {
         guard current?.id == track.id else { return }
-        invalidatePreload(.trackChange)
         engine.stop()
+        releaseNextAccess()
         playing = false
         accessRoot?.stopAccessingSecurityScopedResource(); accessRoot = nil
         current = nil
@@ -236,9 +247,9 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func seek(_ time: Double) {
         guard engine.hasFile, time.isFinite else { return }
-        invalidatePreload(.seek)
         position = min(max(0, time), engine.duration)
         engine.seek(to: position)
+        releaseNextAccess()
         library.remember(id: current?.id, position: position)
         updateNowPlaying()
     }
@@ -363,6 +374,10 @@ final class PlayerStore: NSObject, ObservableObject {
 
     private func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
         engine.invalidatePreload(reason)
+        releaseNextAccess()
+    }
+
+    private func releaseNextAccess() {
         nextAccessRoot?.stopAccessingSecurityScopedResource()
         nextAccessRoot = nil
     }

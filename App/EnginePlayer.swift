@@ -17,7 +17,7 @@ final class EnginePlayer {
     /// Stale scheduling tokens never reach this handler.
     var onFinish: (() -> Void)?
 
-    private let engine = AVAudioEngine()
+    private let engine: AVAudioEngine
     private let node = AVAudioPlayerNode()
     private var file: AVAudioFile?
     private var segmentStartFrame: AVAudioFramePosition = 0
@@ -32,7 +32,8 @@ final class EnginePlayer {
     var hasFile: Bool { file != nil }
     var isPlaying: Bool { node.isPlaying }
 
-    init() {
+    init(engine: AVAudioEngine = AVAudioEngine()) {
+        self.engine = engine
         engine.attach(node)
         node.volume = 1.0
         engine.mainMixerNode.outputVolume = 1.0
@@ -49,16 +50,20 @@ final class EnginePlayer {
         }
         queue.invalidate(.trackChange)
         nextFile = nil
-        node.stop()
-        engine.stop()
-        engine.disconnectNodeOutput(node)
-        engine.connect(node, to: engine.mainMixerNode, format: next.processingFormat)
+        // The mixer/output stream stays running when the decoded format is
+        // unchanged. Stopping it also tears down the Bluetooth render stream.
+        if file == nil || !GaplessCompatibility.canJoin(node.outputFormat(forBus: 0), next.processingFormat) {
+            node.stop()
+            engine.stop()
+            engine.disconnectNodeOutput(node)
+            engine.connect(node, to: engine.mainMixerNode, format: next.processingFormat)
+        }
         node.volume = 1.0
         engine.mainMixerNode.outputVolume = 1.0
         file = next
         duration = Double(next.length) / next.fileFormat.sampleRate
         schedule(from: frame(for: time), allowPreload: true)
-        engine.prepare()
+        if !engine.isRunning { engine.prepare() }
     }
 
     /// Starts or resumes playback. Returns whether the node is playing.
