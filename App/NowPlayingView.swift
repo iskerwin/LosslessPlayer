@@ -874,13 +874,15 @@ struct ArtworkBackgroundSurface: View {
     var analysis: ArtworkAnalysis?
     var imageKey: String? = nil
     var followsAppearance = false
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
             Group {
                 if followsAppearance {
-                    let color = analysis?.dominant ?? ArtworkColors.fallback[0]
+                    let color = ArtworkColors.pageColor(analysis?.dominant ?? ArtworkColors.fallback[0],
+                                                        light: scheme == .light)
                     Color(uiColor: color)
                         .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: Color(uiColor: color))
                 } else {
@@ -897,8 +899,6 @@ struct ArtworkBackgroundSurface: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
         }
-        .preference(key: ArtworkWashColorKey.self,
-                    value: followsAppearance ? (analysis?.dominant ?? ArtworkColors.fallback[0]) : nil)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -1092,11 +1092,18 @@ enum ArtworkColors {
         return color
     }
 
-    /// Light covers take dark text. Dark covers take light text.
-    static func isLight(_ color: UIColor) -> Bool {
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return false }
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.62
+    /// Same hue, one flat plate. Light mode stays light enough for dark text,
+    /// dark mode stays dark enough for light text. The page does not switch schemes.
+    static func pageColor(_ color: UIColor, light: Bool) -> UIColor {
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha),
+              saturation > 0.01 else {
+            return light ? UIColor(white: 0.96, alpha: 1) : UIColor(white: 0.08, alpha: 1)
+        }
+        if light {
+            return UIColor(hue: hue, saturation: min(0.28, saturation), brightness: 0.94, alpha: 1)
+        }
+        return UIColor(hue: hue, saturation: min(0.45, max(saturation, 0.2)), brightness: 0.22, alpha: 1)
     }
 
     static func darkened(_ color: UIColor) -> UIColor {
@@ -1135,13 +1142,6 @@ enum ArtworkColors {
 /// the full-screen mesh gradient, whose per-frame rendering made the
 /// presentation drop frames; a textured backdrop is also what Music
 /// composites behind its player.
-struct ArtworkWashColorKey: PreferenceKey {
-    static var defaultValue: UIColor? { nil }
-    static func reduce(value: inout UIColor?, nextValue: () -> UIColor?) {
-        value = nextValue() ?? value
-    }
-}
-
 struct ArtworkAnalysis {
     var palette: [UIColor]
     var backdrop: UIImage?

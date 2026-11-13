@@ -255,27 +255,35 @@ final class PlayerCardRenderingTests: XCTestCase {
             ("neutral", washFixture(top: .black, bottom: .white)),
             ("missing", nil)
         ]
-        for (name, texture) in fixtures {
-            let renderer = ImageRenderer(content: ArtworkBackgroundSurface(
-                analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
-                .frame(width: 360, height: 720))
-            renderer.scale = 1
-            let image = try XCTUnwrap(renderer.cgImage)
-            let pixels = try rgbaPixels(in: image)
-            var samples: [[UInt8]] = []
-            for y in [0, 180, 540, 719] {
-                let offset = (y * image.width + 180) * 4
-                let rgb = Array(pixels[offset..<(offset + 3)])
-                XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(y)")
-                if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
-                if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
-                if name == "neutral" { XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 8) }
-                samples.append(rgb)
+        for scheme in [ColorScheme.light, .dark] {
+            for (name, texture) in fixtures {
+                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(
+                    analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
+                    .frame(width: 360, height: 720)
+                    .environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.cgImage)
+                let pixels = try rgbaPixels(in: image)
+                var samples: [[UInt8]] = []
+                for y in [0, 180, 540, 719] {
+                    let offset = (y * image.width + 180) * 4
+                    let rgb = Array(pixels[offset..<(offset + 3)])
+                    XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(scheme), \(y)")
+                    if scheme == .light {
+                        XCTAssertGreaterThanOrEqual(rgb.min() ?? 0, 160, "Light plate is too dark")
+                    } else {
+                        XCTAssertLessThanOrEqual(rgb.max() ?? 255, 90, "Dark plate is too bright")
+                    }
+                    if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
+                    if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
+                    if name == "neutral" { XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 8) }
+                    samples.append(rgb)
+                }
+                let variation = (0..<3).map { channel in
+                    Int(samples.map { $0[channel] }.max()!) - Int(samples.map { $0[channel] }.min()!)
+                }.max()!
+                XCTAssertLessThanOrEqual(variation, 2, "Collection wash is not a flat color: \(name), \(scheme)")
             }
-            let variation = (0..<3).map { channel in
-                Int(samples.map { $0[channel] }.max()!) - Int(samples.map { $0[channel] }.min()!)
-            }.max()!
-            XCTAssertLessThanOrEqual(variation, 2, "Collection wash is not a flat color: \(name)")
         }
         let player = ImageRenderer(content: ArtworkBackgroundSurface(
             analysis: ArtworkAnalysis.make(from: washFixture(top: .red, bottom: .yellow)))
