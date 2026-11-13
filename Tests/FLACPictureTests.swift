@@ -437,7 +437,8 @@ final class FLACPictureTests: XCTestCase {
             track.relativePath = "track.flac"
             track.fileSize = Int64(try XCTUnwrap(values.fileSize))
             track.modifiedAt = values.contentModificationDate
-            track.catalogVersion = AudioTags.catalogVersion
+            // Leave the catalog version unset. A matching version with no stored
+            // cover does not open the file, and this rescan has to read the picture.
             let folder = MusicFolder(id: UUID(), name: "Source", bookmark: Data())
             let scanner = AudioScanner(root: cache)
             let result = try await scanner.scan(url: source, folder: folder, existing: [track]) { _, _, _ in }
