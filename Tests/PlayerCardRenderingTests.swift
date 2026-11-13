@@ -217,7 +217,38 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testSharedArtworkBackgroundPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
+    func testCollectionArtworkWashCoversTheSearchDrawer() throws {
+        let surface = ArtworkBackgroundSurface(
+            analysis: ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)),
+            followsAppearance: true)
+        let root = NavigationStack {
+            Color.clear
+                .searchable(text: .constant(""), placement: .navigationBarDrawer(displayMode: .always))
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .background { surface.fullScreenArtworkWash() }
+        }
+        .environment(\.colorScheme, .dark)
+        let window = try show(root)
+        defer { hide(window) }
+        let view = try XCTUnwrap(layoutView)
+        let shot = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let image = try XCTUnwrap(shot.cgImage)
+        let pixels = try rgbaPixels(in: image)
+        let scale = CGFloat(image.width) / view.bounds.width
+        // The search drawer and the bar above it. A wash clipped below the
+        // field leaves the system background here, which is not blue.
+        for pointY in [CGFloat(16), 48, 88] {
+            let x = Int(view.bounds.midX * scale)
+            let y = Int(pointY * scale)
+            let offset = (y * image.width + x) * 4
+            XCTAssertGreaterThan(Int(pixels[offset + 2]) - Int(pixels[offset]), 15,
+                                 "Wash stops below the search field at y \(pointY)")
+        }
+    }
+
+    func testCollectionAndPlayerWashesAreFlatCoverColor() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),
             ("cool", washFixture(top: .blue, bottom: .cyan)),
@@ -226,37 +257,54 @@ final class PlayerCardRenderingTests: XCTestCase {
         ]
         for scheme in [ColorScheme.light, .dark] {
             for (name, texture) in fixtures {
-                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
-                    .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
+                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(
+                    analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
+                    .frame(width: 360, height: 720)
+                    .environment(\.colorScheme, scheme))
                 renderer.scale = 1
                 let image = try XCTUnwrap(renderer.cgImage)
                 let pixels = try rgbaPixels(in: image)
                 var samples: [[UInt8]] = []
-                // Top/bottom edges and list region must all be opaque wash.
                 for y in [0, 180, 540, 719] {
                     let offset = (y * image.width + 180) * 4
                     let rgb = Array(pixels[offset..<(offset + 3)])
                     XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(scheme), \(y)")
-                    for channel in rgb {
-                        if scheme == .light {
-                            XCTAssertGreaterThanOrEqual(channel, 205, "Light wash became dark")
-                        } else {
-                            XCTAssertLessThanOrEqual(channel, 75, "Dark wash is too bright")
-                        }
+                    if scheme == .light {
+                        XCTAssertGreaterThanOrEqual(rgb.min() ?? 0, 160, "Light plate is too dark")
+                    } else {
+                        XCTAssertLessThanOrEqual(rgb.max() ?? 255, 90, "Dark plate is too bright")
                     }
                     if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
                     if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
-                    if name == "neutral" {
-                        XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 2)
-                    }
+                    if name == "neutral" { XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 8) }
                     samples.append(rgb)
                 }
                 let variation = (0..<3).map { channel in
                     Int(samples.map { $0[channel] }.max()!) - Int(samples.map { $0[channel] }.min()!)
                 }.max()!
-                XCTAssertGreaterThan(variation, 5, "Flat plate instead of texture: \(name), \(scheme)")
+                XCTAssertLessThanOrEqual(variation, 2, "Collection wash is not a flat color: \(name), \(scheme)")
             }
         }
+        // Playback uses the default surface: the same plate, kept dark under white controls.
+        let player = ImageRenderer(content: ArtworkBackgroundSurface(
+            analysis: ArtworkAnalysis.make(from: washFixture(top: .red, bottom: .yellow)))
+            .frame(width: 120, height: 240))
+        player.scale = 1
+        let played = try rgbaPixels(in: try XCTUnwrap(player.cgImage))
+        let width = 120
+        var playerSamples: [[UInt8]] = []
+        for y in [20, 80, 160, 220] {
+            let offset = (y * width + 60) * 4
+            let rgb = Array(played[offset..<(offset + 3)])
+            XCTAssertEqual(played[offset + 3], 255, "Player plate is translucent at \(y)")
+            XCTAssertLessThanOrEqual(rgb.max() ?? 255, 90, "Player plate is too bright")
+            XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15, "Player plate lost the cover hue")
+            playerSamples.append(rgb)
+        }
+        let playerVariation = (0..<3).map { channel in
+            Int(playerSamples.map { $0[channel] }.max()!) - Int(playerSamples.map { $0[channel] }.min()!)
+        }.max()!
+        XCTAssertLessThanOrEqual(playerVariation, 2, "Player backdrop is not a flat color")
     }
 
     func testLandedPlayerAddsNoBackingOverAccessorySurface() throws {

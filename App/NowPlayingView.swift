@@ -810,6 +810,7 @@ struct NowPlayingView: View {
 }
 
 /// Playback supplies its artwork; collection pages supply their own cover URL.
+/// Playback leaves the default plate: controls are white, so the color stays dark.
 struct NowPlayingBackground: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -821,7 +822,15 @@ struct NowPlayingBackground: View {
     }
 }
 
-/// One palette/texture loader for playback and collection covers. Key both the
+extension View {
+    /// Flatten the wash, then let it cover the status bar and the search field.
+    /// `drawingGroup` outside `ignoresSafeArea` keeps only the area under the search field.
+    func fullScreenArtworkWash() -> some View {
+        drawingGroup(opaque: false).ignoresSafeArea()
+    }
+}
+
+/// One cover-color loader for playback and collection pages. Key both the
 /// cache and displayed result by URL so another collection cannot show stale art.
 struct ArtworkBackground: View {
     var url: URL?
@@ -835,8 +844,7 @@ struct ArtworkBackground: View {
     }
 
     var body: some View {
-        ArtworkBackgroundSurface(analysis: displayed,
-                                 imageKey: url?.absoluteString, followsAppearance: followsAppearance)
+        ArtworkBackgroundSurface(analysis: displayed, followsAppearance: followsAppearance)
             .task(id: url) {
                 analysis = nil
                 resolvedURL = nil
@@ -860,31 +868,21 @@ struct ArtworkBackground: View {
     }
 }
 
-/// Shared opaque full-size surface. Details inherit the window appearance and
-/// add a legibility veil; playback retains its existing dark presentation.
+/// One flat cover color for every full-screen wash.
+/// Collection pages follow the window. Playback does not: its controls are white,
+/// so that plate stays the dark variant of the same color.
 struct ArtworkBackgroundSurface: View {
     var analysis: ArtworkAnalysis?
-    var imageKey: String? = nil
     var followsAppearance = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
-            Color(white: 0.08)
-                .overlay {
-                    ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
-                                    image: analysis?.backdrop, imageKey: imageKey,
-                                    extendsIntoSafeArea: false)
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.5),
-                                   value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
-                }
-                .overlay {
-                    if followsAppearance {
-                        if scheme == .light { Color.white.opacity(0.82) }
-                        else { Color.black.opacity(0.72) }
-                    }
-                }
+            let color = ArtworkColors.pageColor(analysis?.dominant ?? ArtworkColors.fallback[0],
+                                                light: followsAppearance && scheme == .light)
+            Color(uiColor: color)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: Color(uiColor: color))
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped()
         }
@@ -1072,6 +1070,28 @@ enum ArtworkColors {
         return colors.count == 4 ? colors : fallback
     }
 
+    /// One color for a full-screen wash. The whole cover is averaged, then used flat.
+    static func dominant(from image: UIImage?) -> UIColor {
+        guard let image, let ci = CIImage(image: image) else { return fallback[0] }
+        let extent = ci.extent.integral
+        guard extent.width > 1, extent.height > 1, let color = average(ci, rect: extent) else { return fallback[0] }
+        return color
+    }
+
+    /// Same hue, one flat plate. Light mode stays light enough for dark text,
+    /// dark mode stays dark enough for light text. The page does not switch schemes.
+    static func pageColor(_ color: UIColor, light: Bool) -> UIColor {
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha),
+              saturation > 0.01 else {
+            return light ? UIColor(white: 0.96, alpha: 1) : UIColor(white: 0.08, alpha: 1)
+        }
+        if light {
+            return UIColor(hue: hue, saturation: min(0.28, saturation), brightness: 0.94, alpha: 1)
+        }
+        return UIColor(hue: hue, saturation: min(0.45, max(saturation, 0.2)), brightness: 0.22, alpha: 1)
+    }
+
     static func darkened(_ color: UIColor) -> UIColor {
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
         guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
@@ -1102,20 +1122,19 @@ enum ArtworkColors {
     }
 }
 
-/// Everything the backdrop needs from one artwork, computed once per file
-/// off the main thread: the four-quadrant palette and a small texture that
-/// reads as a blur once stretched full-screen. A static texture replaces
-/// the full-screen mesh gradient, whose per-frame rendering made the
-/// presentation drop frames; a textured backdrop is also what Music
-/// composites behind its player.
+/// Cover samples computed once per file, off the main thread.
+/// Pages paint `dominant`. The quadrant palette and small texture are not
+/// drawn behind a page; the card-clip fixture still builds its own backdrop.
 struct ArtworkAnalysis {
     var palette: [UIColor]
     var backdrop: UIImage?
+    var dominant: UIColor = ArtworkColors.fallback[0]
 
     static func make(from image: UIImage) -> ArtworkAnalysis {
         let small = image.downscaled(maxPixel: 96)
         return ArtworkAnalysis(palette: ArtworkColors.palette(from: small),
-                               backdrop: small.downscaled(maxPixel: 40))
+                               backdrop: small.downscaled(maxPixel: 40),
+                               dominant: ArtworkColors.dominant(from: small))
     }
 }
 

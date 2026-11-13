@@ -1614,6 +1614,22 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(size.height, 100, accuracy: 0.5)
     }
 
+    /// The baked shadow must not grow the cover. Grid cells and the album
+    /// header use this modifier, and a larger frame would change the page.
+    func testRasterizedCoverShadowKeepsTheCoverSize() {
+        let proposed = CGSize(width: 240, height: 480)
+        for (radius, y) in [(CGFloat(10), CGFloat(6)), (16, 8)] {
+            let plain = UIHostingController(rootView: Color.clear.aspectRatio(1, contentMode: .fit).frame(width: 120))
+            let shadowed = UIHostingController(rootView:
+                Color.clear.aspectRatio(1, contentMode: .fit).frame(width: 120)
+                    .modifier(RasterizedCoverShadow(color: .black.opacity(0.12), radius: radius, y: y)))
+            let plainSize = plain.sizeThatFits(in: proposed)
+            let shadowedSize = shadowed.sizeThatFits(in: proposed)
+            XCTAssertEqual(shadowedSize.width, plainSize.width, accuracy: 0.5)
+            XCTAssertEqual(shadowedSize.height, plainSize.height, accuracy: 0.5)
+        }
+    }
+
     /// The mini player reuses one artwork view across tracks. Once a cover is
     /// cached, the old view used to keep its stored bitmap and skip the new
     /// file. The displayed image must follow the current file instead.
