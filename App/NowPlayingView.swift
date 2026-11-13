@@ -810,6 +810,7 @@ struct NowPlayingView: View {
 }
 
 /// Playback supplies its artwork; collection pages supply their own cover URL.
+/// Playback leaves the default plate: controls are white, so the color stays dark.
 struct NowPlayingBackground: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
@@ -829,7 +830,7 @@ extension View {
     }
 }
 
-/// One palette/texture loader for playback and collection covers. Key both the
+/// One cover-color loader for playback and collection pages. Key both the
 /// cache and displayed result by URL so another collection cannot show stale art.
 struct ArtworkBackground: View {
     var url: URL?
@@ -843,8 +844,7 @@ struct ArtworkBackground: View {
     }
 
     var body: some View {
-        ArtworkBackgroundSurface(analysis: displayed,
-                                 imageKey: url?.absoluteString, followsAppearance: followsAppearance)
+        ArtworkBackgroundSurface(analysis: displayed, followsAppearance: followsAppearance)
             .task(id: url) {
                 analysis = nil
                 resolvedURL = nil
@@ -868,36 +868,23 @@ struct ArtworkBackground: View {
     }
 }
 
-/// Shared opaque full-size surface. Details inherit the window appearance and
-/// add a legibility veil; playback retains its existing dark presentation.
+/// One flat cover color for every full-screen wash.
+/// Collection pages follow the window. Playback does not: its controls are white,
+/// so that plate stays the dark variant of the same color.
 struct ArtworkBackgroundSurface: View {
     var analysis: ArtworkAnalysis?
-    var imageKey: String? = nil
     var followsAppearance = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
-            Group {
-                if followsAppearance {
-                    let color = ArtworkColors.pageColor(analysis?.dominant ?? ArtworkColors.fallback[0],
-                                                        light: scheme == .light)
-                    Color(uiColor: color)
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: Color(uiColor: color))
-                } else {
-                    Color(white: 0.08)
-                        .overlay {
-                            ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
-                                            image: analysis?.backdrop, imageKey: imageKey,
-                                            extendsIntoSafeArea: false)
-                                .animation(reduceMotion ? nil : .smooth(duration: 0.5),
-                                           value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
-                        }
-                }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipped()
+            let color = ArtworkColors.pageColor(analysis?.dominant ?? ArtworkColors.fallback[0],
+                                                light: followsAppearance && scheme == .light)
+            Color(uiColor: color)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: Color(uiColor: color))
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -1083,8 +1070,7 @@ enum ArtworkColors {
         return colors.count == 4 ? colors : fallback
     }
 
-    /// One color for an album or playlist page. The whole cover is averaged,
-    /// then used flat. The player still uses the quadrant palette and texture.
+    /// One color for a full-screen wash. The whole cover is averaged, then used flat.
     static func dominant(from image: UIImage?) -> UIColor {
         guard let image, let ci = CIImage(image: image) else { return fallback[0] }
         let extent = ci.extent.integral
@@ -1136,16 +1122,12 @@ enum ArtworkColors {
     }
 }
 
-/// Everything the backdrop needs from one artwork, computed once per file
-/// off the main thread: the four-quadrant palette and a small texture that
-/// reads as a blur once stretched full-screen. A static texture replaces
-/// the full-screen mesh gradient, whose per-frame rendering made the
-/// presentation drop frames; a textured backdrop is also what Music
-/// composites behind its player.
+/// Cover samples computed once per file, off the main thread.
+/// Pages paint `dominant`. The quadrant palette and small texture are not
+/// drawn behind a page; the card-clip fixture still builds its own backdrop.
 struct ArtworkAnalysis {
     var palette: [UIColor]
     var backdrop: UIImage?
-    /// Flat page color for albums and playlists. Playback does not use it.
     var dominant: UIColor = ArtworkColors.fallback[0]
 
     static func make(from image: UIImage) -> ArtworkAnalysis {

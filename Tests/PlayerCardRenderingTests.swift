@@ -248,7 +248,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testCollectionWashIsSolidAndPlayerKeepsTheCoverTexture() throws {
+    func testCollectionAndPlayerWashesAreFlatCoverColor() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),
             ("cool", washFixture(top: .blue, bottom: .cyan)),
@@ -285,15 +285,26 @@ final class PlayerCardRenderingTests: XCTestCase {
                 XCTAssertLessThanOrEqual(variation, 2, "Collection wash is not a flat color: \(name), \(scheme)")
             }
         }
+        // Playback uses the default surface: the same plate, kept dark under white controls.
         let player = ImageRenderer(content: ArtworkBackgroundSurface(
             analysis: ArtworkAnalysis.make(from: washFixture(top: .red, bottom: .yellow)))
             .frame(width: 120, height: 240))
         player.scale = 1
         let played = try rgbaPixels(in: try XCTUnwrap(player.cgImage))
         let width = 120
-        let top = Int(played[(20 * width + 60) * 4 + 1])
-        let bottom = Int(played[(200 * width + 60) * 4 + 1])
-        XCTAssertGreaterThan(abs(top - bottom), 5, "Player backdrop lost the cover texture")
+        var playerSamples: [[UInt8]] = []
+        for y in [20, 80, 160, 220] {
+            let offset = (y * width + 60) * 4
+            let rgb = Array(played[offset..<(offset + 3)])
+            XCTAssertEqual(played[offset + 3], 255, "Player plate is translucent at \(y)")
+            XCTAssertLessThanOrEqual(rgb.max() ?? 255, 90, "Player plate is too bright")
+            XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15, "Player plate lost the cover hue")
+            playerSamples.append(rgb)
+        }
+        let playerVariation = (0..<3).map { channel in
+            Int(playerSamples.map { $0[channel] }.max()!) - Int(playerSamples.map { $0[channel] }.min()!)
+        }.max()!
+        XCTAssertLessThanOrEqual(playerVariation, 2, "Player backdrop is not a flat color")
     }
 
     func testLandedPlayerAddsNoBackingOverAccessorySurface() throws {
