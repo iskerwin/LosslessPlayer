@@ -193,6 +193,41 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), data)
     }
 
+    /// An unchanged coverless FLAC used to be opened for an embedded picture.
+    /// A file that cannot be read must still come back unchanged, which only
+    /// happens when that open is gone.
+    func testUnchangedCoverlessFLACIsNotOpenedOnRescan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("song.flac")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try playableFLAC(["TITLE=Song", "ALBUM=Record"]).write(to: file)
+        let folder = MusicFolder(id: UUID(), name: "Music", bookmark: Data())
+        let scanner = AudioScanner(root: root)
+        let first = try await scanner.scan(url: root, folder: folder, existing: []) { _, _, _ in }
+        XCTAssertTrue(first.failures.isEmpty, "\(first.failures)")
+        let track = try XCTUnwrap(first.tracks.first)
+        XCTAssertNil(track.artworkFilename)
+        XCTAssertEqual(track.catalogVersion, AudioTags.catalogVersion)
+        XCTAssertEqual(track.title, "Song")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        XCTAssertEqual(Int64(values.fileSize ?? -1), track.fileSize)
+        XCTAssertEqual(values.contentModificationDate, track.modifiedAt)
+        XCTAssertThrowsError(try FileHandle(forReadingFrom: file))
+        let second = try await scanner.scan(url: root, folder: folder, existing: first.tracks) { _, _, _ in }
+        XCTAssertTrue(second.failures.isEmpty, "\(second.failures)")
+        XCTAssertEqual(second.skipped, 1)
+        XCTAssertEqual(second.tracks.count, 1)
+        XCTAssertEqual(second.tracks.first?.id, track.id)
+        XCTAssertEqual(second.tracks.first?.title, "Song")
+        XCTAssertEqual(second.tracks.first?.album, "Record")
+        XCTAssertNil(second.tracks.first?.artworkFilename)
+    }
+
     func testScannerSkipsEmptyFirstFLACCommentValues() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

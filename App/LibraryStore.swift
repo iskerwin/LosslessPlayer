@@ -862,7 +862,8 @@ final class LibraryStore: ObservableObject {
                 if scoped { url.stopAccessingSecurityScopedResource() }
             }
             if persist(s) {
-                ArtworkCache.shared.removeAll()
+                let written = result.writtenArtwork.map { root.appendingPathComponent($0) }
+                if !written.isEmpty { ArtworkCache.shared.remove(at: written) }
                 let missingCount = s.tracks.filter { $0.folderID == id && $0.missing == true }.count
                 var summary = "扫描完成：新增 \(added) 首，已存在 \(result.skipped) 首，无法读取 \(result.failures.count) 个"
                 if missingCount > 0 { summary += "，失效 \(missingCount) 首" }
