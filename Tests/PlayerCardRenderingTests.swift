@@ -217,6 +217,37 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
+    func testCollectionArtworkWashCoversTheSearchDrawer() throws {
+        let surface = ArtworkBackgroundSurface(
+            analysis: ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)),
+            followsAppearance: true)
+        let root = NavigationStack {
+            Color.clear
+                .searchable(text: .constant(""), placement: .navigationBarDrawer(displayMode: .always))
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .background { surface.fullScreenArtworkWash() }
+        }
+        .environment(\.colorScheme, .dark)
+        let window = try show(root)
+        defer { hide(window) }
+        let view = try XCTUnwrap(layoutView)
+        let shot = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let image = try XCTUnwrap(shot.cgImage)
+        let pixels = try rgbaPixels(in: image)
+        let scale = CGFloat(image.width) / view.bounds.width
+        // The search drawer and the bar above it. A wash clipped below the
+        // field leaves the system background here, which is not blue.
+        for pointY in [CGFloat(16), 48, 88] {
+            let x = Int(view.bounds.midX * scale)
+            let y = Int(pointY * scale)
+            let offset = (y * image.width + x) * 4
+            XCTAssertGreaterThan(Int(pixels[offset + 2]) - Int(pixels[offset]), 15,
+                                 "Wash stops below the search field at y \(pointY)")
+        }
+    }
+
     func testSharedArtworkBackgroundPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),

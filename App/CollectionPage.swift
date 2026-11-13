@@ -77,8 +77,7 @@ struct CollectionPage: View {
             .background {
                 if usesArtworkBackground {
                     ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
-                        .ignoresSafeArea()
-                        .drawingGroup(opaque: false)
+                        .fullScreenArtworkWash()
                 }
             }
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)

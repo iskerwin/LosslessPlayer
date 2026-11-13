@@ -821,6 +821,14 @@ struct NowPlayingBackground: View {
     }
 }
 
+extension View {
+    /// Flatten the wash, then let it cover the status bar and the search field.
+    /// `drawingGroup` outside `ignoresSafeArea` keeps only the area under the search field.
+    func fullScreenArtworkWash() -> some View {
+        drawingGroup(opaque: false).ignoresSafeArea()
+    }
+}
+
 /// One palette/texture loader for playback and collection covers. Key both the
 /// cache and displayed result by URL so another collection cannot show stale art.
 struct ArtworkBackground: View {
