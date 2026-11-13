@@ -18,6 +18,9 @@ final class LibraryStore: ObservableObject {
     let root: URL
     private let scanner: AudioScanner
     private var job: Task<Void, Never>?
+    /// Automatic check of folders the user already added. Separate from `job`
+    /// so a finished manual scan does not block the next return to the app.
+    private(set) var foregroundJob: Task<Void, Never>?
     private var attemptedCatalogMigration = false
     private(set) var catalogMigrationJob: Task<Void, Never>?
     private(set) var albumLookupJob: Task<Void, Never>?
@@ -816,17 +819,58 @@ final class LibraryStore: ObservableObject {
     }
 
     func startScan(_ id: UUID) { guard !importing else { return }; job = Task { await scanFolder(id); startAlbumLookup() } }
+
+    /// When the app opens or returns from the background, check folders the
+    /// user already authorized. Unchanged files stay on the cheap skip.
+    /// A scan that is already running is left alone. Notification shade and
+    /// the app switcher do not count as leaving.
+    func startForegroundRescan() {
+        guard !ScreenshotFixture.enabled, !snapshot.folders.isEmpty, foregroundJob == nil else { return }
+        foregroundJob = Task {
+            defer { foregroundJob = nil }
+            while importing {
+                do { try await Task.sleep(for: .milliseconds(100)) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            await rescanAuthorizedFolders()
+            startAlbumLookup()
+        }
+    }
+
+    /// One pass over the authorized folders. Nothing new leaves the previous
+    /// scan summary in place, so returning to the app does not replace it
+    /// with "新增 0 首".
+    func rescanAuthorizedFolders() async {
+        guard !importing else { return }
+        let ids = snapshot.folders.map(\.id)
+        guard !ids.isEmpty else { return }
+        importing = true
+        defer { importing = false }
+        for id in ids {
+            if Task.isCancelled { return }
+            guard let folder = snapshot.folders.first(where: { $0.id == id }) else { continue }
+            progress = 0
+            progressText = "正在读取 \(folder.name)…"
+            await runScan(id, folder: folder, announcing: false)
+        }
+    }
     func startImport(_ urls: [URL]) { guard !importing else { return }; job = Task { await importFiles(urls); startAlbumLookup() } }
     func startAddFolders(_ urls: [URL]) {
         guard !importing else { return }
         job = Task { for url in urls { if Task.isCancelled { break }; await addFolder(url) }; startAlbumLookup() }
     }
-    func cancelScan() { job?.cancel(); catalogMigrationJob?.cancel() }
+    func cancelScan() { job?.cancel(); foregroundJob?.cancel(); catalogMigrationJob?.cancel() }
 
     func scanFolder(_ id: UUID) async {
         guard !importing, let folder = snapshot.folders.first(where: { $0.id == id }) else { return }
         importing = true; progress = 0; progressText = "正在读取 \(folder.name)…"
         defer { importing = false }
+        await runScan(id, folder: folder, announcing: true)
+    }
+
+    private func runScan(_ id: UUID, folder: MusicFolder, announcing: Bool) async {
+        let missingBefore = snapshot.tracks.filter { $0.folderID == id && $0.missing == true }.count
         do {
             let url = try resolve(folder)
             let result = try await scanner.scan(url: url, folder: folder,
@@ -865,6 +909,8 @@ final class LibraryStore: ObservableObject {
                 let written = result.writtenArtwork.map { root.appendingPathComponent($0) }
                 if !written.isEmpty { ArtworkCache.shared.remove(at: written) }
                 let missingCount = s.tracks.filter { $0.folderID == id && $0.missing == true }.count
+                let changed = added > 0 || !result.failures.isEmpty || missingCount != missingBefore || !written.isEmpty
+                guard announcing || changed else { return }
                 var summary = "扫描完成：新增 \(added) 首，已存在 \(result.skipped) 首，无法读取 \(result.failures.count) 个"
                 if missingCount > 0 { summary += "，失效 \(missingCount) 首" }
                 scanSummary = summary

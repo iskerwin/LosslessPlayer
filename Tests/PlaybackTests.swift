@@ -831,6 +831,37 @@ final class FolderScanTests: XCTestCase {
         XCTAssertNotEqual(returned.missing, true)
         XCTAssertEqual(library.tracks.filter { $0.relativePath == "edited.wav" }.count, 1)
     }
+
+    func testForegroundRescanMarksADeletedFileAndKeepsTheSummaryWhenNothingElseChanges() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        let stay = folder.appendingPathComponent("stay.wav")
+        let gone = folder.appendingPathComponent("gone.wav")
+        try wav(stay)
+        try wav(gone)
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let kept = try XCTUnwrap(library.tracks.first { $0.relativePath == "stay.wav" })
+        try FileManager.default.removeItem(at: gone)
+        await library.rescanAuthorizedFolders()
+        XCTAssertFalse(library.importing)
+        XCTAssertEqual(library.tracks.first { $0.id == kept.id }?.id, kept.id)
+        XCTAssertNotEqual(library.tracks.first { $0.id == kept.id }?.missing, true)
+        let missing = try XCTUnwrap(library.tracks.first { $0.relativePath == "gone.wav" })
+        XCTAssertEqual(missing.missing, true)
+        let summary = try XCTUnwrap(library.scanSummary)
+        XCTAssertTrue(summary.contains("失效 1 首"))
+        await library.rescanAuthorizedFolders()
+        XCTAssertEqual(library.scanSummary, summary, "An unchanged return must not replace the last result with 新增 0 首")
+        XCTAssertEqual(library.tracks.first { $0.id == kept.id }?.id, kept.id)
+        XCTAssertEqual(library.tracks.first { $0.id == missing.id }?.missing, true)
+        library.startForegroundRescan()
+        await library.foregroundJob?.value
+        XCTAssertNil(library.foregroundJob)
+        XCTAssertFalse(library.importing)
+        XCTAssertEqual(library.scanSummary, summary)
+    }
 }
 
 final class LibraryCatalogTests: XCTestCase {
