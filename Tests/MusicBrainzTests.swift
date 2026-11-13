@@ -513,10 +513,9 @@ final class MusicBrainzTests: XCTestCase {
         for index in 1..<times.count {
             XCTAssertGreaterThanOrEqual(times[index] - times[index - 1], 1)
         }
+        let compilation = search([release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"])])
         MusicBrainzProtocol.configure { request in
-            request.url!.host == "musicbrainz.org"
-                ? .init(data: search([release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"])]))
-                : .init(status: 404)
+            request.url!.host == "musicbrainz.org" ? .init(data: compilation) : .init(status: 404)
         }
         await library.fillBatch([first, second], client: client)
         XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host },
