@@ -874,28 +874,31 @@ struct ArtworkBackgroundSurface: View {
     var analysis: ArtworkAnalysis?
     var imageKey: String? = nil
     var followsAppearance = false
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
-            Color(white: 0.08)
-                .overlay {
-                    ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
-                                    image: analysis?.backdrop, imageKey: imageKey,
-                                    extendsIntoSafeArea: false)
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.5),
-                                   value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
+            Group {
+                if followsAppearance {
+                    let color = analysis?.dominant ?? ArtworkColors.fallback[0]
+                    Color(uiColor: color)
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: Color(uiColor: color))
+                } else {
+                    Color(white: 0.08)
+                        .overlay {
+                            ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
+                                            image: analysis?.backdrop, imageKey: imageKey,
+                                            extendsIntoSafeArea: false)
+                                .animation(reduceMotion ? nil : .smooth(duration: 0.5),
+                                           value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
+                        }
                 }
-                .overlay {
-                    if followsAppearance {
-                        if scheme == .light { Color.white.opacity(0.82) }
-                        else { Color.black.opacity(0.72) }
-                    }
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped()
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
+        .preference(key: ArtworkWashColorKey.self,
+                    value: followsAppearance ? (analysis?.dominant ?? ArtworkColors.fallback[0]) : nil)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -1080,6 +1083,22 @@ enum ArtworkColors {
         return colors.count == 4 ? colors : fallback
     }
 
+    /// One color for an album or playlist page. The whole cover is averaged,
+    /// then used flat. The player still uses the quadrant palette and texture.
+    static func dominant(from image: UIImage?) -> UIColor {
+        guard let image, let ci = CIImage(image: image) else { return fallback[0] }
+        let extent = ci.extent.integral
+        guard extent.width > 1, extent.height > 1, let color = average(ci, rect: extent) else { return fallback[0] }
+        return color
+    }
+
+    /// Light covers take dark text. Dark covers take light text.
+    static func isLight(_ color: UIColor) -> Bool {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return false }
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.62
+    }
+
     static func darkened(_ color: UIColor) -> UIColor {
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
         guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
@@ -1116,14 +1135,24 @@ enum ArtworkColors {
 /// the full-screen mesh gradient, whose per-frame rendering made the
 /// presentation drop frames; a textured backdrop is also what Music
 /// composites behind its player.
+struct ArtworkWashColorKey: PreferenceKey {
+    static var defaultValue: UIColor? { nil }
+    static func reduce(value: inout UIColor?, nextValue: () -> UIColor?) {
+        value = nextValue() ?? value
+    }
+}
+
 struct ArtworkAnalysis {
     var palette: [UIColor]
     var backdrop: UIImage?
+    /// Flat page color for albums and playlists. Playback does not use it.
+    var dominant: UIColor = ArtworkColors.fallback[0]
 
     static func make(from image: UIImage) -> ArtworkAnalysis {
         let small = image.downscaled(maxPixel: 96)
         return ArtworkAnalysis(palette: ArtworkColors.palette(from: small),
-                               backdrop: small.downscaled(maxPixel: 40))
+                               backdrop: small.downscaled(maxPixel: 40),
+                               dominant: ArtworkColors.dominant(from: small))
     }
 }
 

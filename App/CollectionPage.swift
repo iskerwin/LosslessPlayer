@@ -64,6 +64,7 @@ struct CollectionPage: View {
     @State private var coverTarget: Playlist?
     @State private var matchingTrack: Track?
     @State private var orderMemo = TrackOrderMemo()
+    @State private var washScheme: ColorScheme?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.detailCardHeader) private var detailHeader
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -81,6 +82,10 @@ struct CollectionPage: View {
                 }
             }
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
+            .onPreferenceChange(ArtworkWashColorKey.self) { color in
+                washScheme = color.map { ArtworkColors.isLight($0) ? .light : .dark }
+            }
+            .preferredColorScheme(usesArtworkBackground ? washScheme : nil)
             .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
             .sheet(item: $coverTarget) { PlaylistArtworkEditor(library: library, playlist: $0) }
         if editing {
