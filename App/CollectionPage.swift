@@ -78,6 +78,7 @@ struct CollectionPage: View {
                 if usesArtworkBackground {
                     ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
                         .ignoresSafeArea()
+                        .drawingGroup(opaque: false)
                 }
             }
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
@@ -203,8 +204,7 @@ struct CollectionPage: View {
             VStack(spacing: 14) {
                 ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
                     .modifier(DetailHeaderArtwork())
-                    .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
-                    .compositingGroup()
+                    .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
                     .padding(.top, 8)
                 Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
