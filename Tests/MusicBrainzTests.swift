@@ -494,6 +494,43 @@ final class MusicBrainzTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchFillStopsWhenOfflineAndContinuesAfterOneMiss() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var first = localTrack(); first.album = "未知专辑"; first.title = "One"
+        var second = localTrack(); second.album = "未知专辑"; second.title = "Two"
+        let library = try makeLibrary(tracks: [first, second], root: root)
+        MusicBrainzProtocol.configure { _ in .init(status: 500) }
+        await library.fillBatch([first, second], client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host },
+                       ["musicbrainz.org", "itunes.apple.com", "music.163.com"],
+                       "Offline still asks the cover catalogs, then stops before the next song")
+        XCTAssertEqual(library.coverReport?.items.map(\.title), ["One"])
+        XCTAssertNil(library.tracks.first { $0.id == first.id }?.albumLookedUp)
+        XCTAssertNil(library.tracks.first { $0.id == second.id }?.albumLookedUp)
+        let times = MusicBrainzProtocol.requests.map(\.1)
+        XCTAssertGreaterThanOrEqual(times.count, 2)
+        for index in 1..<times.count {
+            XCTAssertGreaterThanOrEqual(times[index] - times[index - 1], 1)
+        }
+        MusicBrainzProtocol.configure { request in
+            request.url!.host == "musicbrainz.org"
+                ? .init(data: search([release(Self.compilationID, "Hits", date: "1999", secondary: ["Compilation"])]))
+                : .init(status: 404)
+        }
+        await library.fillBatch([first, second], client: client)
+        XCTAssertEqual(MusicBrainzProtocol.requests.map { $0.0.url!.host },
+                       ["musicbrainz.org", "itunes.apple.com", "music.163.com",
+                        "musicbrainz.org", "itunes.apple.com", "music.163.com"],
+                       "A cover miss is not offline, so the next song is still asked")
+        XCTAssertEqual(library.coverReport?.items.map(\.title), ["One", "Two"])
+        XCTAssertNil(library.tracks.first { $0.id == first.id }?.albumLookedUp,
+                     "A cover service that does not answer leaves the song unmarked")
+        XCTAssertNil(library.tracks.first { $0.id == second.id }?.albumLookedUp)
+        XCTAssertEqual(library.tracks.first { $0.id == first.id }?.album, "未知专辑")
+    }
+
+    @MainActor
     func testLookupNamesUntaggedSongAndFallsBackToReleaseGroupCover() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

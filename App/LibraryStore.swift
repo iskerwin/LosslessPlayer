@@ -424,6 +424,45 @@ final class LibraryStore: ObservableObject {
         return .saved
     }
 
+    /// Songs that can be checked and looked up together: a missing album name
+    /// or a missing cover, with a title and artist to search on.
+    var batchFillTargets: [Track] {
+        tracks.filter {
+            $0.available && ReleaseMatching.known($0.title) && ReleaseMatching.known($0.artist)
+                && (!$0.hasAlbum || $0.artworkFilename == nil)
+        }
+    }
+
+    /// Looks up the checked songs one after another on the shared client.
+    /// An offline pass stops; one unanswered song does not.
+    func startBatchFill(_ targets: [Track], client: MusicBrainzClient = .shared) {
+        guard coverJob == nil, !targets.isEmpty else { return }
+        coverProgress = CoverProgress(done: 0, total: targets.count, label: "正在补全")
+        coverJob = Task {
+            await fillBatch(targets, client: client)
+            coverProgress = nil
+            coverJob = nil
+        }
+    }
+
+    func fillBatch(_ targets: [Track], client: MusicBrainzClient = .shared) async {
+        var items: [CoverReportItem] = []
+        for target in targets {
+            if Task.isCancelled { break }
+            let track = trackByID[target.id] ?? target
+            let lookup = await lookUp(track, client: client, skipping: [])
+            let updated = lookup.updated
+            items.append(CoverReportItem(id: track.id.uuidString, title: updated.hasAlbum ? updated.album : track.title,
+                                         artist: updated.hasAlbum ? updated.albumArtistName : track.artist,
+                                         result: lookup.result(subject: updated.hasAlbum ? updated.album : "\(track.title) - \(track.artist)",
+                                                               artist: updated.hasAlbum ? updated.albumArtistName : track.artist)))
+            if lookup.offline { break }
+            if save(lookup, for: track) == .failed { break }
+            coverProgress?.done += 1
+        }
+        if !items.isEmpty { coverReport = CoverReport(title: "补全结果", items: items) }
+    }
+
     /// One song per album, and each song with no album, that still shows the
     /// placeholder: what 更新缺失封面 asks about.
     var coverTargets: [Track] {

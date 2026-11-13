@@ -67,6 +67,7 @@ enum CoverUpdate: Equatable {
 struct CoverProgress: Equatable {
     var done: Int
     var total: Int
+    var label = "正在更新封面"
 }
 
 /// One line of 更新封面's report: an album, or a song with no album.
@@ -79,6 +80,7 @@ struct CoverReportItem: Identifiable, Equatable {
 
 struct CoverReport: Identifiable, Equatable {
     let id = UUID()
+    var title = "更新封面"
     var items: [CoverReportItem]
 }
 
