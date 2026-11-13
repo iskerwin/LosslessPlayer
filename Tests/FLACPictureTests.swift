@@ -412,6 +412,11 @@ final class FLACPictureTests: XCTestCase {
 
     @MainActor
     func testRescanUsesFolderBeforeEmbeddedAndPersistsThumbnail() async throws {
+        // Real STREAMINFO and one audio frame. A picture block alone is not a
+        // file the scanner can open, and an unchanged rescan no longer opens
+        // a FLAC just to look for an embedded picture.
+        let stream = try XCTUnwrap(Data(base64Encoded: "EgASAAAADQAADQrEQPAAAANytSO6L0Q+sIuEhLoiI0mWaA=="))
+        let frame = try XCTUnwrap(Data(base64Encoded: "//h5CAADcQ4AAAAB4A=="))
         for hasFolderCover in [false, true] {
             let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: base) }
@@ -426,23 +431,20 @@ final class FLACPictureTests: XCTestCase {
                 return try XCTUnwrap(rendered.pngData())
             }
             let file = source.appendingPathComponent("track.flac")
-            let data = flac([(6, picture(3, try image(CGSize(width: 16, height: 32))))])
+            let embedded = picture(3, try image(CGSize(width: 16, height: 32)))
+            let data = flac([
+                (0, stream),
+                (6, embedded),
+                (4, comments(["TITLE=Song", "ARTIST=Ada", "ALBUM=Record"]))
+            ], audio: frame)
             try data.write(to: file)
             if hasFolderCover {
                 try image(CGSize(width: 32, height: 16)).write(to: source.appendingPathComponent("folder.png"))
             }
-            let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            var track = Track(id: UUID(), filename: "track.flac", title: "Song", artist: "Ada", album: "Record",
-                              duration: 1, sampleRate: 44100, bitDepth: 16)
-            track.relativePath = "track.flac"
-            track.fileSize = Int64(try XCTUnwrap(values.fileSize))
-            track.modifiedAt = values.contentModificationDate
-            // Leave the catalog version unset. A matching version with no stored
-            // cover does not open the file, and this rescan has to read the picture.
             let folder = MusicFolder(id: UUID(), name: "Source", bookmark: Data())
             let scanner = AudioScanner(root: cache)
-            let result = try await scanner.scan(url: source, folder: folder, existing: [track]) { _, _, _ in }
-            XCTAssertTrue(result.failures.isEmpty)
+            let result = try await scanner.scan(url: source, folder: folder, existing: []) { _, _, _ in }
+            XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
             let updated = try XCTUnwrap(result.tracks.first)
             let filename = try XCTUnwrap(updated.artworkFilename)
             let thumbnail = try XCTUnwrap(UIImage(contentsOfFile: cache.appendingPathComponent(filename).path))
@@ -452,6 +454,8 @@ final class FLACPictureTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: file), data)
             let restarted = AudioScanner(root: cache)
             let second = try await restarted.scan(url: source, folder: folder, existing: [restored]) { _, _, _ in }
+            XCTAssertTrue(second.failures.isEmpty, "\(second.failures)")
+            XCTAssertEqual(second.skipped, 1)
             XCTAssertEqual(second.tracks.first?.artworkFilename, filename)
         }
     }
