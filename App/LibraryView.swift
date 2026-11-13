@@ -38,6 +38,7 @@ struct LibraryView: View {
     @State private var pendingDelete: [Track] = []
     @State private var lyricsTrack: Track?
     @State private var matchingTrack: Track?
+    @State private var batchFill = false
     @State private var renamingPlaylist: Playlist?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var exportPresented = false
@@ -133,6 +134,7 @@ struct LibraryView: View {
                 SongPickerSheet(library: library, playlist: playlist)
             }
             .sheet(item: $matchingTrack) { ReleaseMatchingView(library: library, track: $0) }
+            .sheet(isPresented: $batchFill) { BatchFillView(library: library) }
             .sheet(item: $lyricsTrack) { track in
                 LyricsReader(player: player, track: track)
             }
@@ -168,7 +170,7 @@ struct LibraryView: View {
                     if let progress = library.coverProgress {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text(progress.total == 1 ? "正在更新封面…" : "正在更新封面 \(progress.done + 1)/\(progress.total)")
+                            Text(progress.total == 1 ? "\(progress.label)…" : "\(progress.label) \(progress.done + 1)/\(progress.total)")
                                 .font(.subheadline).monospacedDigit()
                             if progress.total > 1 {
                                 Button("停止") { library.stopCoverUpdate() }.font(.subheadline.weight(.semibold))
@@ -182,7 +184,7 @@ struct LibraryView: View {
                 }
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: library.coverProgress == nil)
             }
-            .alert("更新封面", isPresented: Binding(
+            .alert(library.coverReport?.title ?? "更新封面", isPresented: Binding(
                 get: { !showSources && library.coverReport?.items.count == 1 },
                 set: { if !$0 { library.coverReport = nil } }
             )) { Button("好") { library.coverReport = nil } }
@@ -419,15 +421,23 @@ struct LibraryView: View {
         .modifier(ToolbarChrome())
     }
 
-    /// 更新缺失封面 while some song still shows the placeholder.
+    /// 更新缺失封面 while some song still shows the placeholder, and a checked
+    /// batch for songs that are also missing an album name.
     private var coverMenuGroup: [MenuGroup] {
+        var entries: [MenuAction] = []
         let missing = library.tracks.filter { $0.available && $0.artworkFilename == nil }.count
-        guard missing > 0 else { return [] }
-        return [MenuGroup(id: "covers", entries: [
-            MenuAction(id: "update-covers", title: "更新缺失封面（\(missing) 首）", symbol: "photo.badge.arrow.down") {
+        if missing > 0 {
+            entries.append(MenuAction(id: "update-covers", title: "更新缺失封面（\(missing) 首）", symbol: "photo.badge.arrow.down") {
                 library.startCoverUpdate(library.coverTargets)
-            }
-        ])]
+            })
+        }
+        let batch = library.batchFillTargets.count
+        if batch > 0 {
+            entries.append(MenuAction(id: "batch-fill", title: "勾选补全（\(batch) 首）", symbol: "checklist") {
+                batchFill = true
+            })
+        }
+        return entries.isEmpty ? [] : [MenuGroup(id: "covers", entries: entries)]
     }
 
     private var imports: ImportCommands {
