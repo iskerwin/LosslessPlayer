@@ -712,6 +712,83 @@ final class FolderScanTests: XCTestCase {
         XCTAssertEqual(again.id, track.id)
     }
 
+    func testLaterFolderArtworkAttachesWithoutChangingTheAudio() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Album")
+        try wav(folder.appendingPathComponent("01.wav"))
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let track = try XCTUnwrap(library.tracks.first)
+        XCTAssertNil(track.artworkFilename)
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        try png.write(to: folder.appendingPathComponent("cover.png"))
+        await library.scanFolder(try XCTUnwrap(library.snapshot.folders.first?.id))
+        let again = try XCTUnwrap(library.tracks.first)
+        XCTAssertEqual(again.id, track.id)
+        let artwork = try XCTUnwrap(again.artworkFilename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.root.appendingPathComponent(artwork).path))
+        XCTAssertNil(library.snapshot.folders.first?.scanError)
+    }
+
+    func testUnchangedRescanKeepsCachedCoversAndDropsOnlyRewrittenOnes() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Album")
+        try wav(folder.appendingPathComponent("01.wav"))
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        try png.write(to: folder.appendingPathComponent("cover.png"))
+        let library = LibraryStore(root: base.appendingPathComponent("Index"))
+        await library.addFolder(folder)
+        let track = try XCTUnwrap(library.tracks.first)
+        let artworkName = try XCTUnwrap(track.artworkFilename)
+        let artworkURL = library.root.appendingPathComponent(artworkName)
+        let other = library.root.appendingPathComponent("other.jpg")
+        let jpeg = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        try XCTUnwrap(jpeg.jpegData(compressionQuality: 0.8)).write(to: other)
+        ArtworkCache.shared.removeAll()
+        let cover = try XCTUnwrap(ArtworkCache.shared.image(at: artworkURL, maxPixel: 64))
+        let unrelated = try XCTUnwrap(ArtworkCache.shared.image(at: other, maxPixel: 80))
+        let folderID = try XCTUnwrap(library.snapshot.folders.first?.id)
+        await library.scanFolder(folderID)
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: artworkURL, maxPixel: 64) === cover)
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: other, maxPixel: 80) === unrelated)
+        XCTAssertNil(library.snapshot.folders.first?.scanError)
+        try wav(folder.appendingPathComponent("01.wav"))
+        await library.scanFolder(folderID)
+        XCTAssertNil(ArtworkCache.shared.cachedImage(at: artworkURL, maxPixel: 64))
+        XCTAssertNil(ArtworkCache.shared.bestCachedImage(at: artworkURL, maxPixel: 240))
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: other, maxPixel: 80) === unrelated)
+        XCTAssertEqual(library.tracks.first?.id, track.id)
+        XCTAssertEqual(library.tracks.first?.artworkFilename, artworkName)
+    }
+
+    func testScanReportsProgressEveryThirtyTwoFilesAndOnTheLastFile() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Music")
+        for index in 0..<33 {
+            try wav(folder.appendingPathComponent(String(format: "%02d.wav", index)))
+        }
+        final class ProgressReports: @unchecked Sendable { var done: [Int] = [] }
+        let reports = ProgressReports()
+        let result = try await AudioScanner(root: base.appendingPathComponent("Index")).scan(
+            url: folder,
+            folder: MusicFolder(id: UUID(), name: "Music", bookmark: Data()),
+            existing: []) { done, total, _ in
+                XCTAssertEqual(total, 33)
+                reports.done.append(done)
+            }
+        XCTAssertEqual(reports.done, [1, 33])
+        XCTAssertEqual(result.tracks.count, 33)
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(result.skipped, 0)
+        XCTAssertTrue(result.writtenArtwork.isEmpty)
+    }
+
     func testChangedFileStaysAndMissingFileCanBeDroppedWithoutExcludingIt() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
@@ -1465,6 +1542,38 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         _ = ArtworkCache.shared.image(at: url, maxPixel: 64)
         let hit = Date().timeIntervalSince(started)
         print(String(format: "ARTWORK_BENCH cacheHit=%.4fs smallBytes=%d fullBytes=%d ratio=%.1f", hit, smallCost, fullCost, Double(fullCost) / Double(max(smallCost, 1))))
+    }
+
+    func testRemovingOneArtworkLeavesTheOtherCachedTiers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func jpeg(_ name: String, color: UIColor) throws -> URL {
+            let url = root.appendingPathComponent(name)
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40)).image { context in
+                color.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+            }
+            try XCTUnwrap(image.jpegData(compressionQuality: 0.8)).write(to: url)
+            return url
+        }
+        let first = try jpeg("first.jpg", color: .systemRed)
+        let second = try jpeg("second.jpg", color: .systemBlue)
+        ArtworkCache.shared.removeAll()
+        let small = try XCTUnwrap(ArtworkCache.shared.image(at: first, maxPixel: 64))
+        let large = try XCTUnwrap(ArtworkCache.shared.image(at: first, maxPixel: 240))
+        let kept = try XCTUnwrap(ArtworkCache.shared.image(at: second, maxPixel: 80))
+        ArtworkCache.shared.remove(at: [])
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: second, maxPixel: 80) === kept)
+        ArtworkCache.shared.remove(at: [first])
+        XCTAssertNil(ArtworkCache.shared.cachedImage(at: first, maxPixel: 64))
+        XCTAssertNil(ArtworkCache.shared.cachedImage(at: first, maxPixel: 240))
+        XCTAssertNil(ArtworkCache.shared.bestCachedImage(at: first, maxPixel: 700))
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: second, maxPixel: 80) === kept)
+        let again = try XCTUnwrap(ArtworkCache.shared.image(at: first, maxPixel: 64))
+        XCTAssertFalse(again === small)
+        XCTAssertFalse(again === large)
+        XCTAssertTrue(ArtworkCache.shared.cachedImage(at: first, maxPixel: 64) === again)
     }
 
     func testArtworkCacheLoadAgreesWithTheSynchronousDecode() async throws {

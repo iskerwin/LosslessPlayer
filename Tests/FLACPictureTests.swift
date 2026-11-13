@@ -193,6 +193,41 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), data)
     }
 
+    /// An unchanged coverless FLAC used to be opened for an embedded picture.
+    /// A file that cannot be read must still come back unchanged, which only
+    /// happens when that open is gone.
+    func testUnchangedCoverlessFLACIsNotOpenedOnRescan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("song.flac")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try playableFLAC(["TITLE=Song", "ALBUM=Record"]).write(to: file)
+        let folder = MusicFolder(id: UUID(), name: "Music", bookmark: Data())
+        let scanner = AudioScanner(root: root)
+        let first = try await scanner.scan(url: root, folder: folder, existing: []) { _, _, _ in }
+        XCTAssertTrue(first.failures.isEmpty, "\(first.failures)")
+        let track = try XCTUnwrap(first.tracks.first)
+        XCTAssertNil(track.artworkFilename)
+        XCTAssertEqual(track.catalogVersion, AudioTags.catalogVersion)
+        XCTAssertEqual(track.title, "Song")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        XCTAssertEqual(Int64(values.fileSize ?? -1), track.fileSize)
+        XCTAssertEqual(values.contentModificationDate, track.modifiedAt)
+        XCTAssertThrowsError(try FileHandle(forReadingFrom: file))
+        let second = try await scanner.scan(url: root, folder: folder, existing: first.tracks) { _, _, _ in }
+        XCTAssertTrue(second.failures.isEmpty, "\(second.failures)")
+        XCTAssertEqual(second.skipped, 1)
+        XCTAssertEqual(second.tracks.count, 1)
+        XCTAssertEqual(second.tracks.first?.id, track.id)
+        XCTAssertEqual(second.tracks.first?.title, "Song")
+        XCTAssertEqual(second.tracks.first?.album, "Record")
+        XCTAssertNil(second.tracks.first?.artworkFilename)
+    }
+
     func testScannerSkipsEmptyFirstFLACCommentValues() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -373,50 +408,5 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertNil(try read(flac(blocks)).picture)
         let withinLimit = Array(repeating: (1, Data()), count: 127) + [(6, picture(3, Data([9])))]
         XCTAssertEqual(try read(flac(withinLimit)).picture, Data([9]))
-    }
-
-    @MainActor
-    func testRescanUsesFolderBeforeEmbeddedAndPersistsThumbnail() async throws {
-        for hasFolderCover in [false, true] {
-            let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: base) }
-            let source = base.appendingPathComponent("Source")
-            let cache = base.appendingPathComponent("Cache")
-            try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-            func image(_ size: CGSize) throws -> Data {
-                let rendered = UIGraphicsImageRenderer(size: size).image { _ in
-                    UIColor.red.setFill(); UIRectFill(CGRect(origin: .zero, size: size))
-                }
-                return try XCTUnwrap(rendered.pngData())
-            }
-            let file = source.appendingPathComponent("track.flac")
-            let data = flac([(6, picture(3, try image(CGSize(width: 16, height: 32))))])
-            try data.write(to: file)
-            if hasFolderCover {
-                try image(CGSize(width: 32, height: 16)).write(to: source.appendingPathComponent("folder.png"))
-            }
-            let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            var track = Track(id: UUID(), filename: "track.flac", title: "Song", artist: "Ada", album: "Record",
-                              duration: 1, sampleRate: 44100, bitDepth: 16)
-            track.relativePath = "track.flac"
-            track.fileSize = Int64(try XCTUnwrap(values.fileSize))
-            track.modifiedAt = values.contentModificationDate
-            track.catalogVersion = AudioTags.catalogVersion
-            let folder = MusicFolder(id: UUID(), name: "Source", bookmark: Data())
-            let scanner = AudioScanner(root: cache)
-            let result = try await scanner.scan(url: source, folder: folder, existing: [track]) { _, _, _ in }
-            XCTAssertTrue(result.failures.isEmpty)
-            let updated = try XCTUnwrap(result.tracks.first)
-            let filename = try XCTUnwrap(updated.artworkFilename)
-            let thumbnail = try XCTUnwrap(UIImage(contentsOfFile: cache.appendingPathComponent(filename).path))
-            XCTAssertEqual(thumbnail.size.width > thumbnail.size.height, hasFolderCover)
-            let restored = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(updated))
-            XCTAssertEqual(restored.artworkFilename, filename)
-            XCTAssertEqual(try Data(contentsOf: file), data)
-            let restarted = AudioScanner(root: cache)
-            let second = try await restarted.scan(url: source, folder: folder, existing: [restored]) { _, _, _ in }
-            XCTAssertEqual(second.tracks.first?.artworkFilename, filename)
-        }
     }
 }

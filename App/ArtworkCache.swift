@@ -19,6 +19,12 @@ final class ArtworkCache: @unchecked Sendable {
     private let decodeQueue = DispatchQueue(label: "lossless.artwork-decode", qos: .userInitiated, attributes: .concurrent)
     private var bestPixel: [String: CGFloat] = [:]
     private var inflight: [String: LoadBox] = [:]
+    /// Cache keys written for each file, so one rewritten cover can be dropped
+    /// without listing every display tier.
+    private var keysByPath: [String: Set<String>] = [:]
+    /// Bumped for a path when that file's thumbnails are dropped. An in-flight
+    /// decode of the same file must not put the old bitmap back.
+    private var epochs: [String: Int] = [:]
     /// Bumped by `removeAll` so an in-flight decode cannot refill the cache
     /// after a scan drops every thumbnail.
     private var generation = 0
@@ -65,9 +71,9 @@ final class ArtworkCache: @unchecked Sendable {
         let pixel = max(1, maxPixel.rounded())
         if let cached = cachedImage(at: url, maxPixel: pixel) { return cached }
         let token = currentGeneration
+        let epoch = epoch(for: url.path)
         guard let image = Self.decode(url: url, maxPixel: pixel) else { return nil }
-        guard token == currentGeneration else { return image }
-        store(image, path: url.path, pixel: pixel)
+        _ = storeIfCurrent(image, path: url.path, pixel: pixel, generation: token, epoch: epoch)
         return image
     }
 
@@ -76,6 +82,7 @@ final class ArtworkCache: @unchecked Sendable {
         let key = Self.cacheKey(path: url.path, pixel: pixel)
         if let cached = images.object(forKey: key as NSString) { return cached }
         let token = currentGeneration
+        let epoch = epoch(for: url.path)
         let (box, isOwner): (LoadBox, Bool) = {
             lock.lock()
             defer { lock.unlock() }
@@ -92,23 +99,45 @@ final class ArtworkCache: @unchecked Sendable {
         }()
         let image = await box.task.value
         if isOwner {
-            let live = token == currentGeneration
-            if live, let image { store(image, path: url.path, pixel: pixel) }
+            let live = image.map { storeIfCurrent($0, path: url.path, pixel: pixel, generation: token, epoch: epoch) } ?? false
             lock.lock()
             if inflight[key] === box { inflight[key] = nil }
             lock.unlock()
             return live ? image : nil
         }
-        return token == currentGeneration ? image : nil
+        return stillCurrent(generation: token, path: url.path, epoch: epoch) ? image : nil
+    }
+
+    /// Drop decoded bitmaps for these files only. Other covers stay cached.
+    func remove(at urls: [URL]) {
+        let paths = Set(urls.map(\.path))
+        guard !paths.isEmpty else { return }
+        lock.lock()
+        var keys: [String] = []
+        for path in paths {
+            epochs[path, default: 0] += 1
+            if let recorded = keysByPath.removeValue(forKey: path) {
+                keys.append(contentsOf: recorded)
+            }
+            bestPixel[path] = nil
+        }
+        let stale = inflight.keys.filter { Self.belongs($0, to: paths) }
+        for key in stale { inflight[key] = nil }
+        lock.unlock()
+        for key in keys {
+            images.removeObject(forKey: key as NSString)
+        }
     }
 
     func removeAll() {
-        images.removeAllObjects()
         lock.lock()
         generation += 1
         bestPixel.removeAll()
         inflight.removeAll()
+        epochs.removeAll()
+        keysByPath.removeAll()
         lock.unlock()
+        images.removeAllObjects()
     }
 
     private var currentGeneration: Int {
@@ -117,16 +146,40 @@ final class ArtworkCache: @unchecked Sendable {
         return generation
     }
 
-    private func store(_ image: UIImage, path: String, pixel: CGFloat) {
-        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-        images.setObject(image, forKey: Self.cacheKey(path: path, pixel: pixel) as NSString, cost: cost)
+    private func epoch(for path: String) -> Int {
         lock.lock()
+        defer { lock.unlock() }
+        return epochs[path] ?? 0
+    }
+
+    private func stillCurrent(generation: Int, path: String, epoch: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation == self.generation && (epochs[path] ?? 0) == epoch
+    }
+
+    /// Store only when this file has not been dropped since decoding started.
+    private func storeIfCurrent(_ image: UIImage, path: String, pixel: CGFloat, generation: Int, epoch: Int) -> Bool {
+        let key = Self.cacheKey(path: path, pixel: pixel)
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == self.generation, (epochs[path] ?? 0) == epoch else { return false }
+        images.setObject(image, forKey: key as NSString, cost: cost)
+        keysByPath[path, default: []].insert(key)
         if (bestPixel[path] ?? 0) < pixel { bestPixel[path] = pixel }
-        lock.unlock()
+        return true
     }
 
     private static func cacheKey(path: String, pixel: CGFloat) -> String {
         path + "#" + String(Int(pixel.rounded()))
+    }
+
+    private static func belongs(_ key: String, to paths: Set<String>) -> Bool {
+        guard let hash = key.lastIndex(of: "#") else { return false }
+        let path = String(key[..<hash])
+        let pixel = key[key.index(after: hash)...]
+        return paths.contains(path) && !pixel.isEmpty && pixel.allSatisfy(\.isNumber)
     }
 
     /// ImageIO thumbnail options skip the full-size intermediate bitmap.
