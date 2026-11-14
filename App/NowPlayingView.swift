@@ -899,6 +899,7 @@ private struct PlaybackScrubber: View {
     var trackID: UUID?
     var seek: (Double) -> Void
     @State private var scrubbing = false
+    @GestureState private var touchScrubbing = false
     @State private var draft: Double = 0
 
     private var shown: Double { scrubbing ? draft : min(playbackClock.position, duration) }
@@ -921,11 +922,31 @@ private struct PlaybackScrubber: View {
                     scrubbing = false
                 }
             })
-            .id(trackID)
             .frame(height: PlayerControlMetrics.minimumHitHeight)
-            // Apply the full 44pt shape to the interactive slider itself so
-            // touch hit testing and AX bounds use the same rectangle.
             .contentShape(.interaction, Rectangle())
+            .overlay {
+                // The native slider's tracking region does not fill its 44pt
+                // SwiftUI frame. Keep its rendering and AX, but own this touch surface.
+                GeometryReader { geometry in
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0)
+                            .updating($touchScrubbing) { _, active, _ in active = true }
+                            .onChanged { value in
+                                guard duration > 0, geometry.size.width > 0 else { return }
+                                scrubbing = true
+                                draft = position(at: value.location.x, width: geometry.size.width)
+                            }
+                            .onEnded { value in
+                                if duration > 0, geometry.size.width > 0 {
+                                    seek(position(at: value.location.x, width: geometry.size.width))
+                                }
+                                scrubbing = false
+                            })
+                        .accessibilityHidden(true)
+                }
+            }
+            .id(trackID)
             .disabled(duration == 0)
             .accessibilityLabel("播放进度")
             .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
@@ -939,11 +960,19 @@ private struct PlaybackScrubber: View {
             .foregroundStyle(.white.opacity(0.6))
             .allowsHitTesting(false)
         }
+        .onChange(of: touchScrubbing) { _, active in
+            // Gesture cancellation drops the draft without committing a seek.
+            if !active { scrubbing = false }
+        }
         .onChange(of: trackID) { _, _ in
             scrubbing = false
             draft = 0
         }
         .onDisappear { scrubbing = false }
+    }
+
+    private func position(at x: CGFloat, width: CGFloat) -> Double {
+        min(duration, max(0, Double(x / width) * duration))
     }
 }
 
