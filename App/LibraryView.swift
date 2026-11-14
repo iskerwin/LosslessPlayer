@@ -9,12 +9,10 @@ struct LibraryView: View {
     @State private var playlistPath = NavigationPath()
     @State private var favoritesPath = NavigationPath()
     @State private var searchPath = NavigationPath()
-    @State private var detailSource: DetailCardSource?
-    @State private var detailTab: AppTab = .library
-    @State private var detailPath = NavigationPath()
-    @State private var detailClosing = false
-    /// Same close the playlist card's back button runs. A tab tap must not remove the card.
-    @State private var playlistCardDismiss = DetailCardDismiss()
+    @Namespace private var libraryZoom
+    @Namespace private var playlistZoom
+    @Namespace private var favoritesZoom
+    @Namespace private var searchZoom
     @State private var searchFieldFocused = false
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
@@ -264,9 +262,12 @@ struct LibraryView: View {
                 .navigationBarTitleDisplayMode(.large)
                 .trailingGlass { libraryMore }
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                .navigationDestination(for: DetailZoomRoute.self) { detail in
+                    destination(detail.route)
+                        .modifier(DetailZoomDestination(id: detail, namespace: libraryZoom))
+                }
         }
-        .modifier(detailGridContext(for: .library))
-        .overlay { detailOverlay(for: .library) }
+        .environment(\.detailZoomNamespace, libraryZoom)
     }
 
     private var playlistStack: some View {
@@ -275,23 +276,36 @@ struct LibraryView: View {
                 creatingPlaylist = true
             }, onAddSongs: { songPicker = $0 }, onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) })
             .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+            .navigationDestination(for: DetailZoomRoute.self) { detail in
+                destination(detail.route)
+                    .modifier(DetailZoomDestination(id: detail, namespace: playlistZoom))
+            }
         }
-        .modifier(detailGridContext(for: .playlists))
-        .overlay { detailOverlay(for: .playlists) }
+        .environment(\.detailZoomNamespace, playlistZoom)
     }
 
     private var favoritesStack: some View {
         NavigationStack(path: $favoritesPath) {
             page(library.favoriteTracks, title: "收藏", kind: .favorites, showsBack: false)
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                .navigationDestination(for: DetailZoomRoute.self) { detail in
+                    destination(detail.route)
+                        .modifier(DetailZoomDestination(id: detail, namespace: favoritesZoom))
+                }
         }
+        .environment(\.detailZoomNamespace, favoritesZoom)
     }
 
     private var searchStack: some View {
         NavigationStack(path: $searchPath) {
             searchPage
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
+                .navigationDestination(for: DetailZoomRoute.self) { detail in
+                    destination(detail.route)
+                        .modifier(DetailZoomDestination(id: detail, namespace: searchZoom))
+                }
         }
+        .environment(\.detailZoomNamespace, searchZoom)
     }
 
     private var searchPage: some View {
@@ -479,7 +493,7 @@ struct LibraryView: View {
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
                         ForEach(library.recentAlbums, id: \.id) { album in
-                            DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
+                            DetailZoomLink(route: .album(album.id), grid: .recentAlbums) {
                                 ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
                                             root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
                             } label: { artwork in
@@ -580,7 +594,7 @@ struct LibraryView: View {
         return ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
                 ForEach(albums) { album in
-                    DetailCardLink(route: .album(album.id), fallback: { open(.album(album.id)) }) {
+                    DetailZoomLink(route: .album(album.id), grid: .albumIndex) {
                         ArtworkView(track: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
                                     root: library.root, size: nil).aspectRatio(1, contentMode: .fit)
                     } label: { artwork in
@@ -678,14 +692,11 @@ struct LibraryView: View {
     }
 
     /// Second tap on the playlist tab. Already at the home does nothing.
-    /// An open cover plays the back button's close. A pushed list pops to its root.
+    /// Every pushed page, including album and playlist detail, pops to the root.
     private func returnToPlaylistHome() {
-        let detailOpen = detailTab == .playlists && detailSource != nil
-        switch PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty, detailOpen: detailOpen) {
+        switch PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty) {
         case .stay:
             break
-        case .closeCard:
-            playlistCardDismiss.close()
         case .popPath:
             var transaction = Transaction()
             transaction.disablesAnimations = false
@@ -698,59 +709,11 @@ struct LibraryView: View {
     private func open(_ route: LibraryRoute) {
         setPlayer(false)
         lyricsTrack = nil
-        if detailSource != nil, detailTab == tab, !detailClosing {
-            detailPath.append(route)
-            return
-        }
         switch tab {
         case .library: libraryPath.append(route)
         case .playlists: playlistPath.append(route)
         case .favorites: favoritesPath.append(route)
         case .search: searchPath.append(route)
-        }
-    }
-
-    private func detailGridContext(for owner: AppTab) -> DetailGridModifier {
-        DetailGridModifier(context: DetailCardContext(
-            active: detailTab == owner ? detailSource?.route : nil,
-            open: { source in
-                guard detailSource == nil || detailTab != owner else { return }
-                detailTab = owner
-                detailSource = source
-                detailPath = NavigationPath()
-                detailClosing = false
-            }
-        ), covered: detailSource != nil && detailTab == owner)
-    }
-
-    @ViewBuilder private func detailOverlay(for owner: AppTab) -> some View {
-        if let source = detailSource, detailTab == owner {
-            GeometryReader { geometry in
-                let origin = geometry.frame(in: .global).origin
-                // This reader includes the safe areas: the card clip must cover
-                // the status bar and translucent bottom chrome as well as the list.
-                let expanded = CGRect(origin: .zero, size: geometry.size)
-                let localSource = DetailCardSource(route: source.route,
-                    frame: source.frame.offsetBy(dx: -origin.x, dy: -origin.y), artwork: source.artwork)
-                DetailMotionHost(source: localSource, expanded: expanded, reduceMotion: reduceMotion,
-                                 spaceOrigin: origin,
-                                 onWillClose: { detailClosing = true },
-                                 onClosed: {
-                                    detailSource = nil
-                                    detailClosing = false
-                                    detailPath = NavigationPath()
-                                 },
-                                 dismiss: owner == .playlists ? playlistCardDismiss : nil) {
-                    NavigationStack(path: $detailPath) {
-                        destination(source.route)
-                            .toolbar {
-                                ToolbarItem(placement: .topBarLeading) { DetailCardBackButton() }
-                            }
-                            .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-                    }
-                }
-            }
-            .ignoresSafeArea(.container)
         }
     }
 
@@ -972,21 +935,19 @@ private extension View {
 }
 
 enum PlaylistTabNavigation {
-    /// Cover cards travel back. Pushed lists pop. The home stays put.
+    /// All detail pages are path entries. The home stays put.
     enum Step {
         case stay
-        case closeCard
         case popPath
     }
 
-    static func step(pathIsEmpty: Bool, detailOpen: Bool) -> Step {
-        if detailOpen { return .closeCard }
+    static func step(pathIsEmpty: Bool) -> Step {
         if !pathIsEmpty { return .popPath }
         return .stay
     }
 
-    static func shouldReturnHome(pathIsEmpty: Bool, detailOpen: Bool) -> Bool {
-        step(pathIsEmpty: pathIsEmpty, detailOpen: detailOpen) != .stay
+    static func shouldReturnHome(pathIsEmpty: Bool) -> Bool {
+        step(pathIsEmpty: pathIsEmpty) != .stay
     }
 }
 

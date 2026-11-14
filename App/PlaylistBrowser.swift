@@ -81,7 +81,7 @@ struct PlaylistHome: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 16)], spacing: 22) {
                 ForEach(matchingPlaylists) { playlist in
-                    DetailCardLink(route: .playlist(playlist.id), fallback: { onOpen(.playlist(playlist.id)) }) {
+                    DetailZoomLink(route: .playlist(playlist.id), grid: .playlists) {
                         PlaylistCover(playlist: playlist, library: library)
                     } label: { artwork in
                         VStack(alignment: .leading, spacing: 8) {
