@@ -917,7 +917,11 @@ private struct AccessoryMiniPlayer: View {
         .padding(.vertical, compact ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
-        .simultaneousGesture(MiniPlayerReopenGesture(onReopen: open))
+        // Let the transport buttons win stationary touches. A simultaneous
+        // ancestor drag can consume their activation in the native accessory
+        // (run 43653020178: touch feedback, but no PlayerStore.toggle call).
+        // Ordinary priority still recognizes an upward drag across the row.
+        .gesture(MiniPlayerReopenGesture(onReopen: open))
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("mini-player")
