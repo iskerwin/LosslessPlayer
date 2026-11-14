@@ -900,7 +900,7 @@ private struct AccessoryMiniPlayer: View {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.title3).frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .tint(.primary)
             .accessibilityLabel(playing ? "暂停" : "播放")
             if !compact {
@@ -908,7 +908,7 @@ private struct AccessoryMiniPlayer: View {
                     Image(systemName: "forward.fill").frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .tint(.primary)
                 .accessibilityLabel("下一首")
             }
@@ -917,11 +917,7 @@ private struct AccessoryMiniPlayer: View {
         .padding(.vertical, compact ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: compact ? 36 : 56)
         .contentShape(Rectangle())
-        // Let the transport buttons win stationary touches. A simultaneous
-        // ancestor drag can consume their activation in the native accessory
-        // (run 43653020178: touch feedback, but no PlayerStore.toggle call).
-        // Ordinary priority still recognizes an upward drag across the row.
-        .gesture(MiniPlayerReopenGesture(onReopen: open))
+        .simultaneousGesture(MiniPlayerReopenGesture(onReopen: open))
         .foregroundStyle(.primary)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("mini-player")
