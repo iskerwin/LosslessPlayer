@@ -191,6 +191,33 @@ final class TransportFaderTests: XCTestCase {
         }
     }
 
+    func testStartedButStillZeroTransportReusesPreparedSilence() {
+        var fader = TransportFader()
+        _ = fader.request(.load, audible: false)
+        fader.performed()
+        XCTAssertEqual(fader.request(.play, audible: false), [.gain(0), .perform(.play)])
+        fader.performed()
+        // The node is now playing, but no positive gain has been written.
+        XCTAssertEqual(fader.request(.load, audible: true), [.gain(0), .perform(.load)])
+        fader.performed()
+        for _ in 0..<11 { _ = fader.step() }
+        XCTAssertGreaterThan(fader.gain, 0)
+        XCTAssertTrue(fader.request(.pause, audible: true).isEmpty)
+        for _ in 0..<54 { XCTAssertFalse(fader.step().contains(.perform(.pause))) }
+        XCTAssertEqual(fader.step(), [.perform(.pause)])
+    }
+
+    func testResumeAtUndrainedZeroDoesNotMakeNextOperationSkipSilentHold() {
+        var fader = TransportFader()
+        _ = fader.request(.pause, audible: true)
+        for _ in 0..<30 { _ = fader.step() }
+        fader.resumeRendering()
+        XCTAssertEqual(fader.gain, 0)
+        XCTAssertTrue(fader.request(.stop, audible: true).isEmpty)
+        for _ in 0..<24 { XCTAssertTrue(fader.step().isEmpty) }
+        XCTAssertEqual(fader.step(), [.perform(.stop)])
+    }
+
     func testNestedLoadAndPlayReuseSilentPerformWindow() {
         var fader = TransportFader()
         _ = fader.request(.load, audible: true)

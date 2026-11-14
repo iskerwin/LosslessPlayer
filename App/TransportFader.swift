@@ -21,13 +21,15 @@ struct TransportFader {
     private(set) var phase = Phase.steady
     private var elapsed: Double = 0
     private var rampStart: Float = 1
+    private var silenceReady = false
     var isActive: Bool { phase != .steady }
 
     /// Replace unfinished work without a gain jump. An already stopped node
     /// needs an explicit zero write but no new drain period. Nested load work
-    /// can reuse the silent window whose perform callback is still executing.
+    /// can reuse a drained silent window, including a render restart that has
+    /// not emitted its first positive gain yet.
     mutating func request(_ operation: Operation, audible: Bool) -> [Event] {
-        let alreadySilent = !audible || phase == .performing
+        let alreadySilent = !audible || (gain == 0 && silenceReady)
         pending = operation
         elapsed = 0
         rampStart = gain
@@ -72,6 +74,7 @@ struct TransportFader {
                 gain = finished ? 1 : rampStart + (1 - rampStart) * Float(fraction)
                 if finished { phase = .steady; elapsed = 0 }
             }
+            if gain > 0 { silenceReady = false }
             return [.gain(gain)]
         case .holdSilent:
             elapsed += elapsedSeconds
@@ -93,12 +96,14 @@ struct TransportFader {
         phase = .steady
         elapsed = 0
         gain = 1
+        silenceReady = false
         return [.gain(1)]
     }
 
     private mutating func perform() -> [Event] {
         guard let operation = pending else { return [] }
         pending = nil
+        silenceReady = true
         phase = .performing
         elapsed = 0
         return [.perform(operation)]
