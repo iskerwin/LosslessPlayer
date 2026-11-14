@@ -577,7 +577,7 @@ struct LibraryView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $artistQuery, prompt: "搜索艺术家")
+        .searchable(text: $artistQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索艺术家")
         .scrollDismissesKeyboard(.interactively)
         .overlay {
             if artists.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: artistQuery) }
@@ -614,7 +614,7 @@ struct LibraryView: View {
             .padding(22)
         }
         .accessibilityIdentifier("album-grid")
-        .searchable(text: $albumQuery, prompt: "搜索专辑、艺术家")
+        .searchable(text: $albumQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索专辑、艺术家")
         .scrollDismissesKeyboard(.interactively)
         .overlay {
             if albums.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: albumQuery) }
