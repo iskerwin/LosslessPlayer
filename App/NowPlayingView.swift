@@ -924,6 +924,9 @@ private struct PlaybackScrubber: View {
             })
             .frame(height: PlayerControlMetrics.minimumHitHeight)
             .contentShape(.interaction, Rectangle())
+            .accessibilityLabel("播放进度")
+            .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
+            .accessibilityIdentifier("playback-progress")
             .overlay {
                 // The native slider's tracking region does not fill its 44pt
                 // SwiftUI frame. Keep its rendering and AX, but own this touch surface.
@@ -943,14 +946,11 @@ private struct PlaybackScrubber: View {
                                 }
                                 scrubbing = false
                             })
-                        .accessibilityHidden(true)
                 }
+                .accessibilityHidden(true)
             }
             .id(trackID)
             .disabled(duration == 0)
-            .accessibilityLabel("播放进度")
-            .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
-            .accessibilityIdentifier("playback-progress")
             HStack {
                 Text(duration > 0 ? clock(shown) : "--:--")
                 Spacer()
