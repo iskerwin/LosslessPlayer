@@ -12,8 +12,6 @@ enum PlayerControlMetrics {
     static let volumeIconWidth: CGFloat = 28
     static let volumeIconSpacing: CGFloat = 10
     static let timestampGap: CGFloat = 6
-    // Let timestamps overlap only the invisible lower portion of the hit area.
-    static let timestampOverlap = (minimumHitHeight - activeTrackHeight) / 2 - timestampGap
 }
 
 /// Horizontal artwork swipe, the way Music changes tracks: swipe left for
@@ -906,11 +904,15 @@ private struct PlaybackScrubber: View {
     private var shown: Double { scrubbing ? draft : min(playbackClock.position, duration) }
 
     var body: some View {
-        VStack(spacing: -PlayerControlMetrics.timestampOverlap) {
-            ThinScrubber(value: Binding(
+        VStack(spacing: PlayerControlMetrics.timestampGap) {
+            Slider(value: Binding(
                 get: { shown },
-                set: { draft = $0 }
-            ), range: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
+                set: {
+                    draft = $0
+                    // Native accessibility adjustments can write without a drag.
+                    if !scrubbing, duration > 0 { seek($0) }
+                }
+            ), in: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
                 if editing {
                     draft = playbackClock.position
                     scrubbing = true
@@ -918,8 +920,9 @@ private struct PlaybackScrubber: View {
                     if scrubbing, duration > 0 { seek(draft) }
                     scrubbing = false
                 }
-            }, onCancel: { scrubbing = false })
+            })
             .id(trackID)
+            .frame(minHeight: PlayerControlMetrics.minimumHitHeight)
             .disabled(duration == 0)
             .accessibilityLabel("播放进度")
             .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
@@ -933,7 +936,11 @@ private struct PlaybackScrubber: View {
             .foregroundStyle(.white.opacity(0.6))
             .allowsHitTesting(false)
         }
-        .onChange(of: trackID) { _, _ in scrubbing = false }
+        .onChange(of: trackID) { _, _ in
+            scrubbing = false
+            draft = 0
+        }
+        .onDisappear { scrubbing = false }
     }
 }
 
@@ -955,98 +962,6 @@ struct PressScaleStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
             .opacity(configuration.isPressed ? 0.75 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
-    }
-}
-
-enum ScrubberMap {
-    static func fraction(value: Double, in range: ClosedRange<Double>) -> Double {
-        let span = range.upperBound - range.lowerBound
-        guard span.isFinite, span > 0, range.lowerBound.isFinite, value.isFinite else { return 0 }
-        return min(1, max(0, (value - range.lowerBound) / span))
-    }
-
-    static func value(x: CGFloat, width: CGFloat, in range: ClosedRange<Double>) -> Double {
-        let span = range.upperBound - range.lowerBound
-        guard width.isFinite, x.isFinite, width > 0, span.isFinite, span > 0 else { return range.lowerBound }
-        let fraction = min(1, max(0, Double(x / width)))
-        return range.lowerBound + fraction * span
-    }
-}
-
-struct ThinScrubber: View {
-    @Binding var value: Double
-    var range: ClosedRange<Double> = 0...1
-    var onEditingChanged: (Bool) -> Void = { _ in }
-    var onCancel: () -> Void = {}
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorSchemeContrast) private var contrast
-    @GestureState private var fingerDown = false
-    @State private var dragging = false
-
-    var body: some View {
-        GeometryReader { geo in
-            let width = max(geo.size.width, 1)
-            let fraction = ScrubberMap.fraction(value: value, in: range)
-            let thickness = dragging ? PlayerControlMetrics.activeTrackHeight : PlayerControlMetrics.restingTrackHeight
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
-                Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($fingerDown) { _, state, _ in state = true }
-                    .onChanged { gesture in
-                        guard isEnabled else { return }
-                        if !dragging {
-                            dragging = true
-                            onEditingChanged(true)
-                        }
-                        value = ScrubberMap.value(x: gesture.location.x, width: width, in: range)
-                    }
-                    .onEnded { _ in
-                        guard dragging else { return }
-                        dragging = false
-                        if isEnabled { onEditingChanged(false) }
-                        else { onCancel() }
-                    }
-            )
-        }
-        .frame(height: PlayerControlMetrics.minimumHitHeight)
-        .opacity(isEnabled ? 1 : 0.45)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: dragging)
-        .accessibilityElement(children: .ignore)
-        .accessibilityAdjustableAction { direction in
-            guard isEnabled else { return }
-            let step = min(10, range.upperBound - range.lowerBound)
-            let delta: Double
-            switch direction {
-            case .increment: delta = step
-            case .decrement: delta = -step
-            @unknown default: return
-            }
-            let next = min(range.upperBound, max(range.lowerBound, value + delta))
-            onEditingChanged(true)
-            value = next
-            onEditingChanged(false)
-        }
-        .onChange(of: fingerDown) { _, active in
-            if !active && dragging {
-                dragging = false
-                onCancel()
-            }
-        }
-        .onChange(of: isEnabled) { _, enabled in
-            if !enabled && dragging {
-                dragging = false
-                onCancel()
-            }
-        }
-        .onDisappear {
-            if dragging { onCancel() }
-        }
     }
 }
 

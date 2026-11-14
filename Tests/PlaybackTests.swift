@@ -122,8 +122,6 @@ final class PlaybackQueueTests: XCTestCase {
         let dark = ArtworkColors.darkened(UIColor(hue: 0.6, saturation: 0.9, brightness: 1, alpha: 1))
         XCTAssertTrue(dark.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil))
         XCTAssertLessThanOrEqual(brightness, 0.36)
-        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...211), 4 / 211, accuracy: 0.0001)
-        XCTAssertEqual(ScrubberMap.value(x: 50, width: 100, in: 0...10), 5, accuracy: 0.0001)
     }
 
     func testBlankRowAreaPlaysAndEllipsisStaysMenu() {
@@ -136,19 +134,6 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(RowHitMap.zone(x: width - 1, width: width, menuWidth: menu), .menu)
         XCTAssertEqual(RowHitMap.zone(x: 12, width: 0, menuWidth: menu), .play)
         XCTAssertEqual(RowHitMap.zone(x: width - 4, width: width, menuWidth: 0), .play)
-    }
-
-    func testScrubberClampsEndpointsAndRejectsNonFiniteGeometry() {
-        XCTAssertEqual(ScrubberMap.fraction(value: -1, in: 0...211), 0)
-        XCTAssertEqual(ScrubberMap.fraction(value: 300, in: 0...211), 1)
-        XCTAssertEqual(ScrubberMap.fraction(value: .nan, in: 0...211), 0)
-        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...0), 0)
-        XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...Double.infinity), 0)
-        XCTAssertEqual(ScrubberMap.value(x: -20, width: 100, in: 5...15), 5)
-        XCTAssertEqual(ScrubberMap.value(x: 120, width: 100, in: 5...15), 15)
-        XCTAssertEqual(ScrubberMap.value(x: 50, width: 0, in: 5...15), 5)
-        XCTAssertEqual(ScrubberMap.value(x: .nan, width: 100, in: 5...15), 5)
-        XCTAssertEqual(ScrubberMap.value(x: 50, width: .infinity, in: 5...15), 5)
     }
 
     func testPlayNextInsertsAfterCurrentAndAddToQueueAppends() {
