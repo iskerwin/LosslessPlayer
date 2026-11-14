@@ -19,7 +19,9 @@ private struct DetailPullTarget<Pull: Gesture>: ViewModifier {
             content
                 .contentShape(Rectangle())
                 .highPriorityGesture(gesture)
+                .accessibilityElement(children: .ignore)
                 .accessibilityIdentifier("detail-pull-header")
+                .accessibilityLabel("下拉返回")
         } else {
             content
         }
@@ -231,6 +233,7 @@ struct CollectionPage: View {
                     .modifier(DetailHeaderArtwork())
                     .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
                     .padding(.top, 8)
+                    .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
                 Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
                     Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
@@ -239,7 +242,6 @@ struct CollectionPage: View {
                 Text(lengthText(sorted)).font(.subheadline).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
-            .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
@@ -251,6 +253,7 @@ struct CollectionPage: View {
                     .modifier(DetailHeaderArtwork())
                     .padding(.top, 16)
                     .padding(.bottom, 24)
+                    .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
                 Text(playlist.name)
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
@@ -260,7 +263,6 @@ struct CollectionPage: View {
                     .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
-            .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
