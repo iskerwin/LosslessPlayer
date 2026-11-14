@@ -925,9 +925,10 @@ private struct PlaybackScrubber: View {
                 .id(trackID)
             }
             .frame(height: PlayerControlMetrics.minimumHitHeight)
+            // AX geometry follows the full container, not the native slider's
+            // 31pt content bounds. Touch handling and rendering stay native.
+            .contentShape(.accessibility, Rectangle())
             .disabled(duration == 0)
-            // The native slider exposes its own 31pt AX bounds. Give the
-            // 44pt layout container a separate element, without changing touch handling.
             .accessibilityElement(children: .ignore)
             .accessibilityAdjustableAction { direction in
                 guard duration > 0 else { return }
