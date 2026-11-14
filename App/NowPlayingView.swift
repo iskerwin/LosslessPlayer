@@ -922,7 +922,7 @@ private struct PlaybackScrubber: View {
                 }
             })
             .id(trackID)
-            .frame(minHeight: PlayerControlMetrics.minimumHitHeight)
+            .frame(height: PlayerControlMetrics.minimumHitHeight)
             .disabled(duration == 0)
             .accessibilityLabel("播放进度")
             .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
