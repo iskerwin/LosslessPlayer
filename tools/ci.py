@@ -29,6 +29,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import select_tests  # noqa: E402
+from versioning import marketing_match  # noqa: E402
 
 SHIP = ROOT / '.ship'
 PLAN = SHIP / 'plan.json'
@@ -376,6 +377,37 @@ def push_source(entry, tag):
     raise Failure('安装源三次推送都失败；安装包已发布，安装源未更新')
 
 
+def changelog_changes(version=None):
+    """User-visible list items in this marketing version, never another release."""
+    try:
+        text = (ROOT / 'CHANGELOG.md').read_text()
+        if version is None:
+            version = marketing_match((ROOT / 'project.yml').read_text())[3]
+    except (FileNotFoundError, ValueError):
+        return ''
+    sections = re.split(r'^##[ \t]+', text, flags=re.MULTILINE)
+    for section in sections[1:]:
+        title, _, body = section.partition('\n')
+        if not re.fullmatch(rf'{re.escape(version)}(?:[ \t]*[（(].*[）)])?[ \t]*', title):
+            continue
+        # Category headings alone are not release notes. Retain headings only
+        # when followed by actual list entries; ignore editorial prose.
+        lines = []
+        heading = None
+        for line in body.splitlines():
+            if line.startswith('### '):
+                heading = line
+            elif re.match(r'^[-*+]\s+\S|^\d+\.\s+\S', line):
+                if heading:
+                    lines.append(heading)
+                    heading = None
+                lines.append(line)
+            elif lines and line.startswith(('  ', '\t')) and line.strip():
+                lines.append(line)
+        return '\n'.join(lines)
+    return ''
+
+
 def notes(kind, plan, proof, sha):
     # Previews pass no proof: they only build.
     if not proof:
@@ -388,8 +420,10 @@ def notes(kind, plan, proof, sha):
         scope = f'本次运行：单元测试通过 {proof["unit_passed"]} 项，界面测试通过 {proof["ui_passed"]} 项'
     head = ('Lossless 预览包，合并前上手机确认用；下一个开发版会覆盖它。'
             if kind == 'preview' else 'Lossless 开发版（iOS 17+，arm64，Release 优化构建）。')
+    changes = changelog_changes()
     return '\n\n'.join([
         head,
+        *([changes] if changes else []),
         f'源码：{sha}。{scope}',
         f'测试范围：{plan["reason"]}；基线 {plan["base_tag"] or "无"}。' if plan else '',
         '本 IPA 未经过 Apple 开发者证书签名，请用 AltStore 等工具以自己的 Apple ID 重新签名后安装。'
@@ -404,6 +438,9 @@ def publish(kind, tag, ipa, info, text, sha):
     run(['gh', 'release', 'create', tag, '-R', REPO, '--target', sha, '--prerelease',
          '--title', title, '--notes-file', str(notes_file), str(ipa), str(ROOT / 'dist/SHA256SUMS.txt')])
     description = (f'{tag}：预览包（合并前确认用）。' if kind == 'preview' else f'{tag}：最新开发版。')
+    changes = changelog_changes(info['CFBundleShortVersionString'])
+    if changes:
+        description += '\n\n' + changes
     push_source(source_entry(json.loads((ROOT / 'apps.json').read_text())['apps'][0]['versions'][0],
                              info, tag, ipa.stat().st_size, description), tag)
 

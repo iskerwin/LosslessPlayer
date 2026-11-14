@@ -145,6 +145,60 @@ class ProofTests(unittest.TestCase):
 
 
 class NotesTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        (self.root / 'project.yml').write_text("MARKETING_VERSION: '0.2.0'\n")
+        patcher = patch.object(ci, 'ROOT', self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_notes_include_only_current_version_list_entries(self):
+        (self.root / 'CHANGELOG.md').write_text(
+            '# 更新记录\n\n## 0.3.0（开发中）\n- 将来条目\n\n'
+            '## 0.2.0（开发中）\n### 新增\n- 新增条目\n  补充说明\n'
+            '### 修复\n- 修复条目\n\n## 0.1.0（已发布）\n- 历史条目\n')
+        for kind, value, proof in [('dev', plan(), {'unit_passed': 3, 'ui_passed': 0}),
+                                   ('preview', None, None)]:
+            text = ci.notes(kind, value, proof, 'abc')
+            self.assertIn('### 新增\n- 新增条目\n  补充说明', text)
+            self.assertIn('- 修复条目', text)
+            self.assertNotIn('历史条目', text)
+            self.assertNotIn('将来条目', text)
+            if kind == 'dev':
+                self.assertIn('测试范围：r', text)
+
+    def test_empty_or_missing_current_section_keeps_template(self):
+        fallback = ci.notes('dev', plan(), {'unit_passed': 3, 'ui_passed': 0}, 'abc')
+        for body in ('## 0.2.0（开发中）\n### 新增\n### 修复\n',
+                     '## 0.1.0（已发布）\n- 历史条目\n', ''):
+            (self.root / 'CHANGELOG.md').write_text(body)
+            self.assertEqual(ci.notes('dev', plan(), {'unit_passed': 3, 'ui_passed': 0}, 'abc'), fallback)
+
+    def test_published_source_description_includes_changes_or_original_template(self):
+        (self.root / 'dist').mkdir()
+        (self.root / 'apps.json').write_text('{"apps": [{"versions": [{}]}]}')
+        ipa = self.root / 'dist/test.ipa'
+        ipa.write_bytes(b'ipa')
+        info = {'CFBundleShortVersionString': '0.2.0', 'CFBundleVersion': '156'}
+        for kind, description in [('dev', 'dev-156：最新开发版。'),
+                                  ('preview', 'preview-156：预览包（合并前确认用）。')]:
+            for exists in (False, True):
+                with self.subTest(kind=kind, exists=exists):
+                    changelog = self.root / 'CHANGELOG.md'
+                    if exists:
+                        changelog.write_text('## 0.2.0（开发中）\n### 修复\n- 修复条目\n')
+                    else:
+                        changelog.unlink(missing_ok=True)
+                    text = ci.notes(kind, plan(), {'unit_passed': 3, 'ui_passed': 0}, 'abc')
+                    with patch.object(ci, 'run') as run, patch.object(ci, 'push_source') as push:
+                        ci.publish(kind, f'{kind}-156', ipa, info, text, 'abc')
+                    expected = description + ('\n\n### 修复\n- 修复条目' if exists else '')
+                    self.assertEqual(push.call_args.args[0]['localizedDescription'], expected)
+                    self.assertEqual((self.root / 'dist/release-notes.md').read_text(), text + '\n')
+                    self.assertIn('--notes-file', run.call_args.args[0])
+
     def test_preview_without_proof(self):
         text = ci.notes('preview', None, None, 'abc')
         self.assertIn('源码：abc。预览包只编译', text)
