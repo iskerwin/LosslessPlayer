@@ -1289,6 +1289,17 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
+
+    func testPullDismissUsesThePlayerThreshold() {
+        XCTAssertNil(PullDismiss.travel(CGSize(width: 100, height: 15)))
+        XCTAssertNil(PullDismiss.travel(CGSize(width: 80, height: 100)))
+        XCTAssertEqual(PullDismiss.travel(CGSize(width: 0, height: 45)), 45)
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 0, height: 45)))
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 0, height: 90)))
+        XCTAssertTrue(PullDismiss.commits(CGSize(width: 0, height: 91)))
+        XCTAssertTrue(PullDismiss.commits(CGSize(width: 0, height: 160)))
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 120, height: 160)))
+    }
 }
 
 final class ArtworkAnalysisTests: XCTestCase {
@@ -1614,6 +1625,22 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(size.height, 100, accuracy: 0.5)
     }
 
+    /// The baked shadow must not grow the cover. Grid cells and the album
+    /// header use this modifier, and a larger frame would change the page.
+    func testRasterizedCoverShadowKeepsTheCoverSize() {
+        let proposed = CGSize(width: 240, height: 480)
+        for (radius, y) in [(CGFloat(10), CGFloat(6)), (16, 8)] {
+            let plain = UIHostingController(rootView: Color.clear.aspectRatio(1, contentMode: .fit).frame(width: 120))
+            let shadowed = UIHostingController(rootView:
+                Color.clear.aspectRatio(1, contentMode: .fit).frame(width: 120)
+                    .modifier(RasterizedCoverShadow(color: .black.opacity(0.12), radius: radius, y: y)))
+            let plainSize = plain.sizeThatFits(in: proposed)
+            let shadowedSize = shadowed.sizeThatFits(in: proposed)
+            XCTAssertEqual(shadowedSize.width, plainSize.width, accuracy: 0.5)
+            XCTAssertEqual(shadowedSize.height, plainSize.height, accuracy: 0.5)
+        }
+    }
+
     /// The mini player reuses one artwork view across tracks. Once a cover is
     /// cached, the old view used to keep its stored bitmap and skip the new
     /// file. The displayed image must follow the current file instead.
@@ -1706,6 +1733,25 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         }
         XCTAssertEqual(DetailCardMetrics.contentOpacity(0), 0)
         XCTAssertEqual(DetailCardMetrics.contentOpacity(1), 1)
+    }
+
+    func testDetailPullSlidesTheFullSheetWithTheFinger() {
+        let source = CGRect(x: 22, y: 240, width: 160, height: 160)
+        let expanded = CGRect(x: 0, y: 0, width: 390, height: 844)
+        for drag in [CGFloat(0), 45, 90, 120, 300] {
+            let frame = DetailPull.frame(translation: drag, expanded: expanded)
+            XCTAssertEqual(frame.minY - expanded.minY, drag, accuracy: 0.001)
+            XCTAssertEqual(frame.size, expanded.size)
+        }
+        // Scrubbing the zoom while the finger is down shrinks the sheet.
+        let zoomed = DetailCardMetrics.frame(
+            PlayerCardMetrics.progress(for: 120, distance: source.minY - expanded.minY),
+            source: source, destination: expanded)
+        XCTAssertLessThan(zoomed.width, expanded.width)
+        XCTAssertEqual(DetailPull.cornerRadius(0), 0)
+        XCTAssertEqual(DetailPull.cornerRadius(45), 16, accuracy: 0.001)
+        XCTAssertEqual(DetailPull.cornerRadius(90), 32, accuracy: 0.001)
+        XCTAssertEqual(DetailPull.cornerRadius(180), 32, accuracy: 0.001)
     }
 
     func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {

@@ -182,6 +182,25 @@ private enum PlaylistLayout: String {
     var toggled: Self { self == .grid ? .list : .grid }
 }
 
+/// Bake a cover and its shadow into one texture. Scrolling then moves that
+/// texture instead of blurring the shadow again. The padding is outside the
+/// shadow and taken back, so the shadow stays in the texture without changing
+/// the cover's layout size.
+struct RasterizedCoverShadow: ViewModifier {
+    var color: Color
+    var radius: CGFloat
+    var y: CGFloat
+
+    func body(content: Content) -> some View {
+        let pad = radius + abs(y) + 4
+        content
+            .shadow(color: color, radius: radius, y: y)
+            .padding(pad)
+            .drawingGroup(opaque: false)
+            .padding(-pad)
+    }
+}
+
 struct PlaylistCover: View {
     let playlist: Playlist
     @ObservedObject var library: LibraryStore
@@ -191,8 +210,7 @@ struct PlaylistCover: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay { artwork.clipped() }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 6)
-            .compositingGroup()
+            .modifier(RasterizedCoverShadow(color: .black.opacity(0.12), radius: 10, y: 6))
             .accessibilityHidden(true)
     }
 

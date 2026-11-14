@@ -10,6 +10,73 @@ private final class TrackOrderMemo {
     var matchingIndices: [Int] = []
 }
 
+/// Downward drags on the header belong to dismissal, the way the player handle
+/// owns its drag. The list would otherwise take the touch, so this pan is
+/// required to fail before the scroll view moves.
+private struct CoverPullHandle: UIViewRepresentable {
+    var onChange: (CGFloat) -> Void
+    var onEnd: (CGSize) -> Void
+
+    func makeUIView(context: Context) -> PullView { PullView() }
+    func updateUIView(_ view: PullView, context: Context) {
+        view.onChange = onChange
+        view.onEnd = onEnd
+    }
+
+    final class PullView: UIView, UIGestureRecognizerDelegate {
+        var onChange: (CGFloat) -> Void = { _ in }
+        var onEnd: (CGSize) -> Void = { _ in }
+        private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            // A clear view is skipped by hit testing. This still looks clear.
+            backgroundColor = UIColor.white.withAlphaComponent(0.001)
+            isAccessibilityElement = true
+            accessibilityIdentifier = "detail-pull-header"
+            accessibilityLabel = "下拉返回"
+            pan.maximumNumberOfTouches = 1
+            pan.delegate = self
+            addGestureRecognizer(pan)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            otherGestureRecognizer is UIPanGestureRecognizer
+        }
+
+        @objc private func panned() {
+            let translation = pan.translation(in: nil)
+            let size = CGSize(width: translation.x, height: translation.y)
+            switch pan.state {
+            case .began, .changed:
+                onChange(PullDismiss.travel(size) ?? 0)
+            case .ended, .cancelled, .failed:
+                onEnd(size)
+            default:
+                break
+            }
+        }
+    }
+}
+
+private struct DetailPullTarget: ViewModifier {
+    var enabled: Bool
+    var onChange: (CGFloat) -> Void
+    var onEnd: (CGSize) -> Void
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if enabled {
+                CoverPullHandle(onChange: onChange, onEnd: onEnd)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
 private struct PlaylistEditing: ViewModifier {
     var enabled: Bool
     var editing: Bool
@@ -24,15 +91,20 @@ private struct PlaylistEditing: ViewModifier {
 
 private struct CollectionSearchField: ViewModifier {
     var enabled: Bool
+    /// Album, playlist and song lists use the album grid's search field.
+    var pullsDown: Bool
     @Binding var query: String
 
     @ViewBuilder func body(content: Content) -> some View {
-        if enabled {
+        if !enabled {
+            content
+        } else if pullsDown {
+            content.searchable(text: $query, placement: .navigationBarDrawer, prompt: "搜索此列表")
+                .scrollDismissesKeyboard(.interactively)
+        } else {
             content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                                prompt: "搜索此列表")
                 .scrollDismissesKeyboard(.interactively)
-        } else {
-            content
         }
     }
 }
@@ -64,6 +136,7 @@ struct CollectionPage: View {
     @State private var coverTarget: Playlist?
     @State private var matchingTrack: Track?
     @State private var orderMemo = TrackOrderMemo()
+    @State private var pullOffset: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.detailCardHeader) private var detailHeader
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -73,11 +146,13 @@ struct CollectionPage: View {
             .navigationTitle(kind == .playlist ? "" : title)
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
-            .modifier(CollectionSearchField(enabled: supportsSearch && !editing, query: $query))
+            .modifier(CollectionSearchField(enabled: supportsSearch && !editing,
+                                            pullsDown: pullsSearch, query: $query))
+            .offset(y: detailHeader.close == nil ? pullOffset : 0)
             .background {
                 if usesArtworkBackground {
                     ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
-                        .ignoresSafeArea()
+                        .fullScreenArtworkWash()
                 }
             }
             .toolbarBackground(usesArtworkBackground ? .hidden : .automatic, for: .navigationBar)
@@ -98,6 +173,8 @@ struct CollectionPage: View {
 
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
     private var usesArtworkBackground: Bool { kind == .album || kind == .playlist }
+    private var pullsSearch: Bool { kind == .album || kind == .playlist || kind == .songs }
+    private var pullsToReturn: Bool { kind == .album || kind == .playlist }
     private var supportsSearch: Bool { kind != .search }
     private var isFiltering: Bool { supportsSearch && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var visibleTracks: [Track] {
@@ -201,12 +278,14 @@ struct CollectionPage: View {
     @ViewBuilder private var header: some View {
         if kind == .album, let first = sorted.first {
             VStack(spacing: 14) {
-                ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
-                    .modifier(DetailHeaderArtwork())
-                    .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
-                    .compositingGroup()
-                    .padding(.top, 8)
-                Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
+                VStack(spacing: 14) {
+                    ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
+                        .modifier(DetailHeaderArtwork())
+                        .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
+                        .padding(.top, 8)
+                    Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
+                }
+                .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
                     Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
                 }
@@ -233,10 +312,44 @@ struct CollectionPage: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
             }
+            .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
+        }
+    }
+
+    /// A card slides with the finger and keeps its size. Letting go past the
+    /// player threshold plays the cover's close on the player spring.
+    private func followPull(_ travel: CGFloat) {
+        guard !reduceMotion else { return }
+        if detailHeader.close != nil {
+            detailHeader.follow?(travel)
+        } else {
+            pullOffset = travel
+        }
+    }
+
+    private func finishPull(_ translation: CGSize) {
+        releasePull(commit: PullDismiss.commits(translation))
+    }
+
+    private func releasePull(commit: Bool) {
+        if commit {
+            if let finishPull = detailHeader.finishPull {
+                finishPull()
+            } else if let close = detailHeader.close {
+                close()
+            } else {
+                dismiss()
+            }
+            return
+        }
+        detailHeader.cancelPull?()
+        guard detailHeader.close == nil, pullOffset != 0 else { return }
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : LibraryView.playerSpring) {
+            pullOffset = 0
         }
     }
 
