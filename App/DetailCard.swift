@@ -23,9 +23,11 @@ struct DetailCardHeader {
     var hidden = false
     var measure: ((CGRect) -> Void)?
     var close: (() -> Void)?
-    /// Finger travel in points. The card turns it into the same progress as a close.
+    /// Finger travel in points. The sheet slides by this much and stays full size.
     var follow: ((CGFloat) -> Void)?
     var cancelPull: (() -> Void)?
+    /// Pull release. Same return as `close`, on the player spring.
+    var finishPull: (() -> Void)?
 }
 extension EnvironmentValues {
     var detailCardContext: DetailCardContext {
@@ -118,11 +120,21 @@ enum DetailCardMetrics {
     }
 }
 
-/// Scrubs a detail card with the same 1:1 rule as the player.
-/// Distance is the cover's vertical travel back to its slot.
+/// The finger slides the full-size sheet, the way a player pull does.
+/// The zoom back to the cover starts only after the finger lets go.
 enum DetailPull {
-    static func progress(translation: CGFloat, source: CGRect, expanded: CGRect) -> CGFloat {
-        PlayerCardMetrics.progress(for: translation, distance: source.minY - expanded.minY)
+    /// The player's expanded top corner. A pull reaches it at the 90pt commit.
+    static let sheetRadius: CGFloat = 32
+
+    static func offset(for translation: CGFloat) -> CGFloat { max(0, translation) }
+
+    static func frame(translation: CGFloat, expanded: CGRect) -> CGRect {
+        expanded.offsetBy(dx: 0, dy: offset(for: translation))
+    }
+
+    static func cornerRadius(_ offset: CGFloat) -> CGFloat {
+        guard offset > 0 else { return 0 }
+        return min(sheetRadius, offset / 90 * sheetRadius)
     }
 }
 
@@ -135,11 +147,16 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
     var headerFrame: CGRect
     var traveling: Bool
     var reduceMotion: Bool
+    /// Finger travel. The sheet stays full size and moves with this offset.
+    var pullOffset: CGFloat = 0
     var detail: Detail
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(progress, pullOffset) }
+        set {
+            progress = newValue.first
+            pullOffset = newValue.second
+        }
     }
 
     var body: some View {
@@ -171,9 +188,11 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
                 }
             }
             .frame(width: card.width, height: card.height, alignment: .topLeading)
-            .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : DetailCardMetrics.radius(p), style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: reduceMotion ? 0 : max(DetailCardMetrics.radius(p), DetailPull.cornerRadius(pullOffset)), style: .continuous))
             .opacity(reduceMotion ? Double(p) : 1)
-            .offset(x: card.minX, y: card.minY)
+            // The pull is a sheet slide. Progress stays put until the finger lets go,
+            // so the page under the finger does not zoom toward the cover.
+            .offset(x: card.minX, y: card.minY + pullOffset)
         }
     }
 }
@@ -185,6 +204,7 @@ final class DetailCardActions {
     var close: () -> Void = {}
     var follow: (CGFloat) -> Void = { _ in }
     var cancelPull: () -> Void = {}
+    var finishPull: () -> Void = {}
     /// Latest header, kept off view state so scrolling does not rebuild the card.
     var latestHeader = CGRect.zero
 }
@@ -220,6 +240,7 @@ struct DetailMotionHost<Detail: View>: View {
     @State private var headerFrame: CGRect = .zero
     @State private var transitioning = true
     @State private var tracking = false
+    @State private var pullOffset: CGFloat = 0
     @State private var closing = false
     @State private var generation = 0
     @State private var pullGeneration = 0
@@ -249,11 +270,12 @@ struct DetailMotionHost<Detail: View>: View {
         let _ = bind()
         DetailZoomCard(progress: progress, source: source, expanded: expanded,
                        headerFrame: headerFrame,
-                       traveling: (transitioning || tracking) && !reduceMotion,
+                       traveling: transitioning && !reduceMotion,
                        reduceMotion: reduceMotion,
-                       detail: DetailHeaderScope(hidden: (transitioning || tracking) && !reduceMotion,
+                       pullOffset: pullOffset,
+                       detail: DetailHeaderScope(hidden: transitioning && !reduceMotion,
                                                  actions: actions, content: detail))
-            // Stay hittable while a pull scrubs progress. The open and close
+            // Stay hittable while a pull slides the sheet. The open and close
             // springs still ignore touches until they finish.
             .allowsHitTesting(!transitioning)
             .accessibilityIdentifier("detail-card")
@@ -269,9 +291,8 @@ struct DetailMotionHost<Detail: View>: View {
         let tracking = $tracking
         let generation = $generation
         let pullGeneration = $pullGeneration
+        let pullOffset = $pullOffset
         let reduceMotion = reduceMotion
-        let source = source
-        let expanded = expanded
         let onWillClose = onWillClose
         let onClosed = onClosed
         let card = actions
@@ -285,12 +306,12 @@ struct DetailMotionHost<Detail: View>: View {
             guard progress.wrappedValue == 0, transitioning.wrappedValue else { return }
             headerFrame.wrappedValue = local
             let token = generation.wrappedValue
-            CardProgressTravel.animate(progress, to: 1, reduceMotion: reduceMotion) {
+            CardProgressTravel.animate(progress: progress, to: 1, pull: pullOffset, reduceMotion: reduceMotion) {
                 guard token == generation.wrappedValue, !closing.wrappedValue else { return }
                 transitioning.wrappedValue = false
             }
         }
-        card.close = {
+        let settle: (Animation?) -> Void = { animation in
             guard !closing.wrappedValue else { return }
             closing.wrappedValue = true
             transitioning.wrappedValue = true
@@ -300,26 +321,32 @@ struct DetailMotionHost<Detail: View>: View {
                 headerFrame.wrappedValue = card.latestHeader
             }
             onWillClose()
-            CardProgressTravel.animate(progress, to: 0, reduceMotion: reduceMotion) {
+            CardProgressTravel.animate(progress: progress, to: 0, pull: pullOffset,
+                                      animation: animation, reduceMotion: reduceMotion) {
                 guard token == generation.wrappedValue else { return }
                 onClosed()
             }
         }
+        card.close = { settle(nil) }
+        // The back button keeps its existing curve. Letting go of a pull uses
+        // the same spring as the player, and the same zoom home.
+        card.finishPull = { settle(reduceMotion ? nil : LibraryView.playerSpring) }
         card.follow = { translation in
             guard !closing.wrappedValue, !reduceMotion else { return }
             pullGeneration.wrappedValue += 1
+            tracking.wrappedValue = true
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                progress.wrappedValue = DetailPull.progress(translation: translation,
-                                                            source: source.frame, expanded: expanded)
+                pullOffset.wrappedValue = DetailPull.offset(for: translation)
             }
-            tracking.wrappedValue = translation > 0
         }
         card.cancelPull = {
             guard !closing.wrappedValue else { return }
             let token = pullGeneration.wrappedValue
-            CardProgressTravel.animate(progress, to: 1, reduceMotion: reduceMotion) {
+            CardProgressTravel.animate(progress: progress, to: 1, pull: pullOffset,
+                                      animation: reduceMotion ? nil : LibraryView.playerSpring,
+                                      reduceMotion: reduceMotion) {
                 guard token == pullGeneration.wrappedValue, !closing.wrappedValue else { return }
                 tracking.wrappedValue = false
             }
@@ -336,15 +363,17 @@ struct DetailMotionHost<Detail: View>: View {
 }
 
 private enum CardProgressTravel {
-    static func animate(_ progress: Binding<CGFloat>, to target: CGFloat, reduceMotion: Bool,
+    static func animate(progress: Binding<CGFloat>, to target: CGFloat, pull: Binding<CGFloat>,
+                        animation requested: Animation? = nil, reduceMotion: Bool,
                         completion: @escaping () -> Void) {
-        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48)
-        if progress.wrappedValue == target {
+        let animation = requested ?? (reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48))
+        if progress.wrappedValue == target, pull.wrappedValue == 0 {
             DispatchQueue.main.async(execute: completion)
             return
         }
         withAnimation(animation, completionCriteria: .removed) {
             progress.wrappedValue = target
+            pull.wrappedValue = 0
         } completion: {
             completion()
         }
@@ -364,7 +393,8 @@ private struct DetailHeaderScope<Content: View>: View {
             measure: { actions.measure($0) },
             close: { actions.close() },
             follow: { actions.follow($0) },
-            cancelPull: { actions.cancelPull() }
+            cancelPull: { actions.cancelPull() },
+            finishPull: { actions.finishPull() }
         ))
     }
 }

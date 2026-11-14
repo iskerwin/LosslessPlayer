@@ -1626,15 +1626,23 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(DetailCardMetrics.contentOpacity(1), 1)
     }
 
-    func testDetailPullMovesTheCardTopWithTheFinger() {
+    func testDetailPullSlidesTheFullSheetWithTheFinger() {
         let source = CGRect(x: 22, y: 240, width: 160, height: 160)
         let expanded = CGRect(x: 0, y: 0, width: 390, height: 844)
-        for drag in [CGFloat(0), 45, 90, 120] {
-            let progress = DetailPull.progress(translation: drag, source: source, expanded: expanded)
-            let frame = DetailCardMetrics.frame(progress, source: source, destination: expanded)
+        for drag in [CGFloat(0), 45, 90, 120, 300] {
+            let frame = DetailPull.frame(translation: drag, expanded: expanded)
             XCTAssertEqual(frame.minY - expanded.minY, drag, accuracy: 0.001)
+            XCTAssertEqual(frame.size, expanded.size)
         }
-        XCTAssertEqual(DetailPull.progress(translation: 300, source: source, expanded: expanded), 0)
+        // Scrubbing the zoom while the finger is down shrinks the sheet.
+        let zoomed = DetailCardMetrics.frame(
+            PlayerCardMetrics.progress(for: 120, distance: source.minY - expanded.minY),
+            source: source, destination: expanded)
+        XCTAssertLessThan(zoomed.width, expanded.width)
+        XCTAssertEqual(DetailPull.cornerRadius(0), 0)
+        XCTAssertEqual(DetailPull.cornerRadius(45), 16, accuracy: 0.001)
+        XCTAssertEqual(DetailPull.cornerRadius(90), 32, accuracy: 0.001)
+        XCTAssertEqual(DetailPull.cornerRadius(180), 32, accuracy: 0.001)
     }
 
     func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {

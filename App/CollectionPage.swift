@@ -10,8 +10,9 @@ private final class TrackOrderMemo {
     var matchingIndices: [Int] = []
 }
 
-/// Downward drags on the cover belong to dismissal. The list would otherwise
-/// take the touch, so this pan is required to fail before the scroll view moves.
+/// Downward drags on the header belong to dismissal, the way the player handle
+/// owns its drag. The list would otherwise take the touch, so this pan is
+/// required to fail before the scroll view moves.
 private struct CoverPullHandle: UIViewRepresentable {
     var onChange: (CGFloat) -> Void
     var onEnd: (CGSize) -> Void
@@ -277,12 +278,14 @@ struct CollectionPage: View {
     @ViewBuilder private var header: some View {
         if kind == .album, let first = sorted.first {
             VStack(spacing: 14) {
-                ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
-                    .modifier(DetailHeaderArtwork())
-                    .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
-                    .padding(.top, 8)
-                    .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
-                Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
+                VStack(spacing: 14) {
+                    ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
+                        .modifier(DetailHeaderArtwork())
+                        .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
+                        .padding(.top, 8)
+                    Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
+                }
+                .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
                     Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
                 }
@@ -301,7 +304,6 @@ struct CollectionPage: View {
                     .modifier(DetailHeaderArtwork())
                     .padding(.top, 16)
                     .padding(.bottom, 24)
-                    .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
                 Text(playlist.name)
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
@@ -310,6 +312,7 @@ struct CollectionPage: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
             }
+            .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -317,7 +320,8 @@ struct CollectionPage: View {
         }
     }
 
-    /// Same distances as the player handle. A card scrubs its close; a pushed page slides.
+    /// A card slides with the finger and keeps its size. Letting go past the
+    /// player threshold plays the cover's close on the player spring.
     private func followPull(_ travel: CGFloat) {
         guard !reduceMotion else { return }
         if detailHeader.close != nil {
@@ -333,7 +337,9 @@ struct CollectionPage: View {
 
     private func releasePull(commit: Bool) {
         if commit {
-            if let close = detailHeader.close {
+            if let finishPull = detailHeader.finishPull {
+                finishPull()
+            } else if let close = detailHeader.close {
                 close()
             } else {
                 dismiss()
@@ -342,7 +348,7 @@ struct CollectionPage: View {
         }
         detailHeader.cancelPull?()
         guard detailHeader.close == nil, pullOffset != 0 else { return }
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48)) {
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : LibraryView.playerSpring) {
             pullOffset = 0
         }
     }
