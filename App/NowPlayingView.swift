@@ -16,6 +16,22 @@ enum PlayerControlMetrics {
     static let timestampOverlap = (minimumHitHeight - activeTrackHeight) / 2 - timestampGap
 }
 
+/// Downward drag that dismisses the player and album or playlist pages.
+/// 90pt and mostly vertical, so a sideways swipe does not leave the page.
+enum PullDismiss {
+    static func commits(_ translation: CGSize) -> Bool {
+        guard let travel = travel(translation) else { return false }
+        return travel > 90
+    }
+
+    /// Points to follow while the drag stays downward. Nil for a sideways drag.
+    static func travel(_ translation: CGSize) -> CGFloat? {
+        guard translation.height > 0,
+              translation.height > abs(translation.width) * 1.5 else { return nil }
+        return translation.height
+    }
+}
+
 /// Horizontal artwork swipe, the way Music changes tracks: swipe left for
 /// the next track, right for the previous. Pure decision logic so the
 /// thresholds stay testable. A swipe must travel 60pt and be clearly more
@@ -310,8 +326,7 @@ struct NowPlayingView: View {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .onChanged { reportPull($0.translation) }
             .onEnded { value in
-                if value.translation.height > 90,
-                   value.translation.height > abs(value.translation.width) * 1.5 {
+                if PullDismiss.commits(value.translation) {
                     onClose()
                 } else {
                     onPullCancelled()
@@ -333,8 +348,7 @@ struct NowPlayingView: View {
                     skipDirection = direction
                     onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
-                } else if value.translation.height > 90,
-                          value.translation.height > abs(value.translation.width) * 1.5 {
+                } else if PullDismiss.commits(value.translation) {
                     onClose()
                 } else {
                     onPullCancelled()
@@ -345,11 +359,7 @@ struct NowPlayingView: View {
     /// The presenter converts vertical points directly into card progress.
     private func reportPull(_ translation: CGSize) {
         guard !reduceMotion else { return }
-        if translation.height > abs(translation.width) * 1.5 {
-            onPull(max(0, translation.height))
-        } else {
-            onPull(0)
-        }
+        onPull(PullDismiss.travel(translation) ?? 0)
     }
 
     /// Horizontal follow for the artwork drag while it is horizontal-dominant.

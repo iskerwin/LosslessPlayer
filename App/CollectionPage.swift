@@ -10,6 +10,22 @@ private final class TrackOrderMemo {
     var matchingIndices: [Int] = []
 }
 
+private struct DetailPullTarget<Pull: Gesture>: ViewModifier {
+    var enabled: Bool
+    var gesture: Pull
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content
+                .contentShape(Rectangle())
+                .highPriorityGesture(gesture)
+                .accessibilityIdentifier("detail-pull-header")
+        } else {
+            content
+        }
+    }
+}
+
 private struct PlaylistEditing: ViewModifier {
     var enabled: Bool
     var editing: Bool
@@ -24,15 +40,20 @@ private struct PlaylistEditing: ViewModifier {
 
 private struct CollectionSearchField: ViewModifier {
     var enabled: Bool
+    /// Hidden until the list is pulled down, the same drawer as the album grid.
+    var pullsDown: Bool
     @Binding var query: String
 
     @ViewBuilder func body(content: Content) -> some View {
-        if enabled {
+        if !enabled {
+            content
+        } else if pullsDown {
+            content.searchable(text: $query, placement: .navigationBarDrawer, prompt: "搜索此列表")
+                .scrollDismissesKeyboard(.interactively)
+        } else {
             content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                                prompt: "搜索此列表")
                 .scrollDismissesKeyboard(.interactively)
-        } else {
-            content
         }
     }
 }
@@ -64,6 +85,7 @@ struct CollectionPage: View {
     @State private var coverTarget: Playlist?
     @State private var matchingTrack: Track?
     @State private var orderMemo = TrackOrderMemo()
+    @State private var pullOffset: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.detailCardHeader) private var detailHeader
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -73,7 +95,9 @@ struct CollectionPage: View {
             .navigationTitle(kind == .playlist ? "" : title)
             .navigationBarTitleDisplayMode(usesLargeTitle ? .large : .inline)
             .softTopScrollEdge()
-            .modifier(CollectionSearchField(enabled: supportsSearch && !editing, query: $query))
+            .modifier(CollectionSearchField(enabled: supportsSearch && !editing,
+                                            pullsDown: pullsSearch, query: $query))
+            .offset(y: detailHeader.close == nil ? pullOffset : 0)
             .background {
                 if usesArtworkBackground {
                     ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
@@ -98,6 +122,8 @@ struct CollectionPage: View {
 
     private var usesLargeTitle: Bool { kind != .album && kind != .playlist }
     private var usesArtworkBackground: Bool { kind == .album || kind == .playlist }
+    private var pullsSearch: Bool { kind == .album || kind == .playlist || kind == .songs }
+    private var pullsToReturn: Bool { kind == .album || kind == .playlist }
     private var supportsSearch: Bool { kind != .search }
     private var isFiltering: Bool { supportsSearch && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var visibleTracks: [Track] {
@@ -213,6 +239,7 @@ struct CollectionPage: View {
                 Text(lengthText(sorted)).font(.subheadline).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
+            .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
@@ -233,9 +260,43 @@ struct CollectionPage: View {
                     .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
+            .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
+        }
+    }
+
+    /// Same drag as the player handle. A card scrubs its close; a pushed page slides.
+    private var detailPull: some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .onChanged { value in
+                guard !reduceMotion else { return }
+                let travel = PullDismiss.travel(value.translation) ?? 0
+                if detailHeader.close != nil {
+                    detailHeader.follow?(travel)
+                } else {
+                    pullOffset = travel
+                }
+            }
+            .onEnded { value in
+                releasePull(commit: PullDismiss.commits(value.translation))
+            }
+    }
+
+    private func releasePull(commit: Bool) {
+        if commit {
+            if let close = detailHeader.close {
+                close()
+            } else {
+                dismiss()
+            }
+            return
+        }
+        detailHeader.cancelPull?()
+        guard detailHeader.close == nil, pullOffset != 0 else { return }
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48)) {
+            pullOffset = 0
         }
     }
 

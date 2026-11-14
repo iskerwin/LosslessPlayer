@@ -23,6 +23,9 @@ struct DetailCardHeader {
     var hidden = false
     var measure: ((CGRect) -> Void)?
     var close: (() -> Void)?
+    /// Finger travel in points. The card turns it into the same progress as a close.
+    var follow: ((CGFloat) -> Void)?
+    var cancelPull: (() -> Void)?
 }
 extension EnvironmentValues {
     var detailCardContext: DetailCardContext {
@@ -115,6 +118,14 @@ enum DetailCardMetrics {
     }
 }
 
+/// Scrubs a detail card with the same 1:1 rule as the player.
+/// Distance is the cover's vertical travel back to its slot.
+enum DetailPull {
+    static func progress(translation: CGFloat, source: CGRect, expanded: CGRect) -> CGFloat {
+        PlayerCardMetrics.progress(for: translation, distance: source.minY - expanded.minY)
+    }
+}
+
 /// One animatable scalar evaluates geometry, both corners and opacity at every
 /// displayed frame. Closing simply animates that scalar from one back to zero.
 struct DetailZoomCard<Detail: View>: View, Animatable {
@@ -122,7 +133,7 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
     var source: DetailCardSource
     var expanded: CGRect
     var headerFrame: CGRect
-    var transitioning: Bool
+    var traveling: Bool
     var reduceMotion: Bool
     var detail: Detail
 
@@ -149,7 +160,7 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
                     // offset back into the destination geometry each frame.
                     .offset(x: expanded.minX - card.minX, y: expanded.minY - card.minY)
                     .opacity(reduceMotion ? 1 : DetailCardMetrics.contentOpacity(p))
-                if transitioning && !reduceMotion {
+                if traveling && !reduceMotion {
                     // The grid and detail artwork are hidden during travel. This
                     // is the only visible cover, inside the growing card.
                     source.artwork
@@ -172,6 +183,8 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
 final class DetailCardActions {
     var measure: (CGRect) -> Void = { _ in }
     var close: () -> Void = {}
+    var follow: (CGFloat) -> Void = { _ in }
+    var cancelPull: () -> Void = {}
     /// Latest header, kept off view state so scrolling does not rebuild the card.
     var latestHeader = CGRect.zero
 }
@@ -206,8 +219,10 @@ struct DetailMotionHost<Detail: View>: View {
     @State private var progress: CGFloat = 0
     @State private var headerFrame: CGRect = .zero
     @State private var transitioning = true
+    @State private var tracking = false
     @State private var closing = false
     @State private var generation = 0
+    @State private var pullGeneration = 0
     @State private var actions = DetailCardActions()
 
     init(source: DetailCardSource, expanded: CGRect, reduceMotion: Bool, spaceOrigin: CGPoint,
@@ -233,11 +248,14 @@ struct DetailMotionHost<Detail: View>: View {
         let _ = onEvaluate()
         let _ = bind()
         DetailZoomCard(progress: progress, source: source, expanded: expanded,
-                       headerFrame: headerFrame, transitioning: transitioning,
+                       headerFrame: headerFrame,
+                       traveling: (transitioning || tracking) && !reduceMotion,
                        reduceMotion: reduceMotion,
-                       detail: DetailHeaderScope(hidden: transitioning && !reduceMotion,
+                       detail: DetailHeaderScope(hidden: (transitioning || tracking) && !reduceMotion,
                                                  actions: actions, content: detail))
-            .allowsHitTesting(progress == 1 && !transitioning)
+            // Stay hittable while a pull scrubs progress. The open and close
+            // springs still ignore touches until they finish.
+            .allowsHitTesting(!transitioning)
             .accessibilityIdentifier("detail-card")
             .onAppear(perform: onReady)
     }
@@ -248,13 +266,18 @@ struct DetailMotionHost<Detail: View>: View {
         let progress = $progress
         let transitioning = $transitioning
         let closing = $closing
+        let tracking = $tracking
         let generation = $generation
+        let pullGeneration = $pullGeneration
         let reduceMotion = reduceMotion
+        let source = source
+        let expanded = expanded
         let onWillClose = onWillClose
         let onClosed = onClosed
         let card = actions
         card.measure = { frame in
-            guard frame.width > 0, frame.height > 0, !closing.wrappedValue else { return }
+            guard frame.width > 0, frame.height > 0, !closing.wrappedValue,
+                  !tracking.wrappedValue else { return }
             let local = frame.offsetBy(dx: -origin.x, dy: -origin.y)
             card.latestHeader = local
             // Freeze the target once travel starts. The moving card would
@@ -280,6 +303,25 @@ struct DetailMotionHost<Detail: View>: View {
             CardProgressTravel.animate(progress, to: 0, reduceMotion: reduceMotion) {
                 guard token == generation.wrappedValue else { return }
                 onClosed()
+            }
+        }
+        card.follow = { translation in
+            guard !closing.wrappedValue, !reduceMotion else { return }
+            pullGeneration.wrappedValue += 1
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                progress.wrappedValue = DetailPull.progress(translation: translation,
+                                                            source: source.frame, expanded: expanded)
+            }
+            tracking.wrappedValue = translation > 0
+        }
+        card.cancelPull = {
+            guard !closing.wrappedValue else { return }
+            let token = pullGeneration.wrappedValue
+            CardProgressTravel.animate(progress, to: 1, reduceMotion: reduceMotion) {
+                guard token == pullGeneration.wrappedValue, !closing.wrappedValue else { return }
+                tracking.wrappedValue = false
             }
         }
         dismiss?.close = card.close
@@ -320,7 +362,9 @@ private struct DetailHeaderScope<Content: View>: View {
         content.environment(\.detailCardHeader, DetailCardHeader(
             hidden: hidden,
             measure: { actions.measure($0) },
-            close: { actions.close() }
+            close: { actions.close() },
+            follow: { actions.follow($0) },
+            cancelPull: { actions.cancelPull() }
         ))
     }
 }

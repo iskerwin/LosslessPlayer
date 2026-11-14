@@ -11,8 +11,8 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(songs.waitForExistence(timeout: 20))
         songs.tap()
         let list = app.descendants(matching: .any)["songs-list"]
-        let search = app.searchFields.firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 8))
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        let search = revealPullDownSearch(in: app, list: list)
         search.tap()
         let query = "stare  ONErepublic"
         search.typeText(query)
@@ -52,7 +52,7 @@ final class GlassScreenshots: XCTestCase {
         playlist.tap()
         let detail = app.descendants(matching: .any)["playlist-detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 8))
-        let pageSearch = app.searchFields.firstMatch
+        let pageSearch = revealPullDownSearch(in: app, list: detail)
         pageSearch.tap()
         pageSearch.typeText("Mercy")
         XCTAssertTrue(detail.staticTexts["Mercy"].waitForExistence(timeout: 5))
@@ -528,6 +528,37 @@ final class GlassScreenshots: XCTestCase {
         }
     }
 
+    func testAlbumPullDownReturnsToTheSameSlot() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let albums = app.buttons["专辑"]
+        XCTAssertTrue(albums.waitForExistence(timeout: 20))
+        albums.tap()
+        let album = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "album-card-")).firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 8))
+        let slot = album.frame
+        album.tap()
+        let header = app.descendants(matching: .any)["detail-pull-header"]
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        let back = app.buttons["detail-card-back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 8))
+        let start = header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 45)))
+        XCTAssertTrue(back.exists, "A short pull keeps the album open")
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 80, dy: 20)))
+        XCTAssertTrue(back.exists, "A sideways pull keeps the album open")
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 180)))
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in album.isHittable }, object: nil)
+        wait(for: [returned], timeout: 8)
+        XCTAssertFalse(app.buttons["detail-card-back"].exists)
+        XCTAssertEqual(album.frame.minX, slot.minX, accuracy: 0.5)
+        XCTAssertEqual(album.frame.minY, slot.minY, accuracy: 0.5)
+        XCTAssertEqual(album.frame.width, slot.width, accuracy: 0.5)
+        XCTAssertEqual(album.frame.height, slot.height, accuracy: 0.5)
+    }
+
     func testAlbumGridAndPlaylistArtworkEntry() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -717,6 +748,17 @@ final class GlassScreenshots: XCTestCase {
     /// frame — two consecutive reads, 0.25 s apart, that are finite,
     /// nonempty, and equal — within the same 20 s budget. Callers still
     /// assert hittability on the returned, settled element.
+    /// Album, playlist and song search stays in the navigation drawer until a downward pull.
+    private func revealPullDownSearch(in app: XCUIApplication, list: XCUIElement) -> XCUIElement {
+        let existing = app.searchFields.firstMatch
+        if existing.waitForExistence(timeout: 1), existing.isHittable { return existing }
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 8))
+        return search
+    }
+
     private func readyMini(in app: XCUIApplication, file: StaticString = #filePath,
                            line: UInt = #line) throws -> XCUIElement {
         try readyMiniFrame(in: app, file: file, line: line).element

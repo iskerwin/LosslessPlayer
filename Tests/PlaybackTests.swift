@@ -1212,6 +1212,17 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
+
+    func testPullDismissUsesThePlayerThreshold() {
+        XCTAssertNil(PullDismiss.travel(CGSize(width: 100, height: 15)))
+        XCTAssertNil(PullDismiss.travel(CGSize(width: 80, height: 100)))
+        XCTAssertEqual(PullDismiss.travel(CGSize(width: 0, height: 45)), 45)
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 0, height: 45)))
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 0, height: 90)))
+        XCTAssertTrue(PullDismiss.commits(CGSize(width: 0, height: 91)))
+        XCTAssertTrue(PullDismiss.commits(CGSize(width: 0, height: 160)))
+        XCTAssertFalse(PullDismiss.commits(CGSize(width: 120, height: 160)))
+    }
 }
 
 final class ArtworkAnalysisTests: XCTestCase {
@@ -1613,6 +1624,17 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         }
         XCTAssertEqual(DetailCardMetrics.contentOpacity(0), 0)
         XCTAssertEqual(DetailCardMetrics.contentOpacity(1), 1)
+    }
+
+    func testDetailPullMovesTheCardTopWithTheFinger() {
+        let source = CGRect(x: 22, y: 240, width: 160, height: 160)
+        let expanded = CGRect(x: 0, y: 0, width: 390, height: 844)
+        for drag in [CGFloat(0), 45, 90, 120] {
+            let progress = DetailPull.progress(translation: drag, source: source, expanded: expanded)
+            let frame = DetailCardMetrics.frame(progress, source: source, destination: expanded)
+            XCTAssertEqual(frame.minY - expanded.minY, drag, accuracy: 0.001)
+        }
+        XCTAssertEqual(DetailPull.progress(translation: 300, source: source, expanded: expanded), 0)
     }
 
     func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
