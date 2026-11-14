@@ -174,6 +174,23 @@ final class TransportFaderTests: XCTestCase {
         }
     }
 
+    func testConsecutiveStoppedLoadsDoNotBecomeAsynchronousDuringRecovery() {
+        // PlayerStore.pause -> prepareForLoad -> load can all run while the
+        // node is stopped, including during a preceding hold-zero or fade-in.
+        for recoveryTicks in 0...40 {
+            var fader = TransportFader()
+            _ = fader.request(.pause, audible: false)
+            fader.performed()
+            for _ in 0..<recoveryTicks { _ = fader.step() }
+            for operation in [TransportFader.Operation.load, .load, .play] {
+                XCTAssertEqual(fader.request(operation, audible: false), [.gain(0), .perform(operation)])
+                fader.performed()
+            }
+            XCTAssertEqual(fader.gain, 0)
+            XCTAssertEqual(fader.phase, .holdZero)
+        }
+    }
+
     func testNestedLoadAndPlayReuseSilentPerformWindow() {
         var fader = TransportFader()
         _ = fader.request(.load, audible: true)

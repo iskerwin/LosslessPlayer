@@ -27,7 +27,7 @@ struct TransportFader {
     /// needs an explicit zero write but no new drain period. Nested load work
     /// can reuse the silent window whose perform callback is still executing.
     mutating func request(_ operation: Operation, audible: Bool) -> [Event] {
-        let alreadySilent = (!audible && phase == .steady) || phase == .performing
+        let alreadySilent = !audible || phase == .performing
         pending = operation
         elapsed = 0
         rampStart = gain
