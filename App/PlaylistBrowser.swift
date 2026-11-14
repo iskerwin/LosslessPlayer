@@ -37,7 +37,7 @@ struct PlaylistHome: View {
                 list
             }
         }
-        .searchable(text: $query, prompt: "搜索歌单")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索歌单")
         .scrollDismissesKeyboard(.interactively)
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.28), value: layout)
         .safeAreaInset(edge: .top) {

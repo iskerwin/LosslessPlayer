@@ -11,8 +11,13 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(songs.waitForExistence(timeout: 20))
         songs.tap()
         let list = app.descendants(matching: .any)["songs-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 8))
+        save("songs-search-at-rest")
+        list.swipeDown()
+        save("songs-search-pulled-down")
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 8))
+        assertHittable(search, "Pulling down must reveal the songs search field")
         search.tap()
         let query = "stare  ONErepublic"
         search.typeText(query)
@@ -52,7 +57,11 @@ final class GlassScreenshots: XCTestCase {
         playlist.tap()
         let detail = app.descendants(matching: .any)["playlist-detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 8))
+        save("playlist-search-at-rest")
+        detail.swipeDown()
+        save("playlist-search-pulled-down")
         let pageSearch = app.searchFields.firstMatch
+        assertHittable(pageSearch, "Pulling down must reveal the playlist search field")
         pageSearch.tap()
         pageSearch.typeText("Mercy")
         XCTAssertTrue(detail.staticTexts["Mercy"].waitForExistence(timeout: 5))
@@ -71,7 +80,11 @@ final class GlassScreenshots: XCTestCase {
         app.tabBars.buttons["收藏"].tap()
         let list = app.descendants(matching: .any)["collection-list"]
         XCTAssertTrue(list.staticTexts["Apologize"].waitForExistence(timeout: 8))
+        save("favorites-search-at-rest")
+        list.swipeDown()
+        save("favorites-search-pulled-down")
         let search = app.searchFields.firstMatch
+        assertHittable(search, "Pulling down must reveal the favorites search field")
         search.tap()
         search.typeText("Stop")
         XCTAssertTrue(list.descendants(matching: .any)["collection-search-empty"].waitForExistence(timeout: 5))

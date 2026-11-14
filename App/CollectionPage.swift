@@ -28,7 +28,7 @@ private struct CollectionSearchField: ViewModifier {
 
     @ViewBuilder func body(content: Content) -> some View {
         if enabled {
-            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
                                prompt: "搜索此列表")
                 .scrollDismissesKeyboard(.interactively)
         } else {
