@@ -905,43 +905,28 @@ private struct PlaybackScrubber: View {
 
     var body: some View {
         VStack(spacing: PlayerControlMetrics.timestampGap) {
-            ZStack {
-                Slider(value: Binding(
-                    get: { shown },
-                    set: {
-                        draft = $0
-                        // Native accessibility adjustments can write without a drag.
-                        if !scrubbing, duration > 0 { seek($0) }
-                    }
-                ), in: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
-                    if editing {
-                        draft = playbackClock.position
-                        scrubbing = true
-                    } else {
-                        if scrubbing, duration > 0 { seek(draft) }
-                        scrubbing = false
-                    }
-                })
-                .id(trackID)
-            }
-            .frame(height: PlayerControlMetrics.minimumHitHeight)
-            // AX geometry follows the full container, not the native slider's
-            // 31pt content bounds. Touch handling and rendering stay native.
-            .contentShape(.accessibility, Rectangle())
-            .disabled(duration == 0)
-            .accessibilityElement(children: .ignore)
-            .accessibilityAdjustableAction { direction in
-                guard duration > 0 else { return }
-                let delta: Double
-                switch direction {
-                case .increment: delta = 10
-                case .decrement: delta = -10
-                @unknown default: return
+            Slider(value: Binding(
+                get: { shown },
+                set: {
+                    draft = $0
+                    // Native accessibility adjustments can write without a drag.
+                    if !scrubbing, duration > 0 { seek($0) }
                 }
-                let target = min(duration, max(0, shown + delta))
-                draft = target
-                seek(target)
-            }
+            ), in: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
+                if editing {
+                    draft = playbackClock.position
+                    scrubbing = true
+                } else {
+                    if scrubbing, duration > 0 { seek(draft) }
+                    scrubbing = false
+                }
+            })
+            .id(trackID)
+            .frame(height: PlayerControlMetrics.minimumHitHeight)
+            // Apply the full 44pt shape to the interactive slider itself so
+            // touch hit testing and AX bounds use the same rectangle.
+            .contentShape(.interaction, Rectangle())
+            .disabled(duration == 0)
             .accessibilityLabel("播放进度")
             .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
             .accessibilityIdentifier("playback-progress")
