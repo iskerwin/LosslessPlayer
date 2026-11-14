@@ -5,9 +5,10 @@ Paths are repository-relative positional arguments, or a NUL-delimited file
 from `git diff --name-only --no-renames -z` via --files-from. Renames must
 include BOTH paths so moving a mapped file cannot hide an unknown dependency.
 Selections are unions, never intersections. Only exact, reviewed source paths
-may narrow the suite. Unknown paths (including docs), project.yml, Tests/,
-UITests/, tools/ and workflows, empty input, or errors select the whole unit
-target and conservatively enable screenshots. --full does the same explicitly.
+may narrow the suite. Unmapped App paths select all units without adding UI.
+Docs (docs/** and *.md) add no tests. Tools, workflows, Tests/, UITests/,
+project.yml, other unknown paths, empty input and errors select all units
+and UI. --full does the same explicitly; mixed paths union their requirements.
 The workflow also guards invocation/JSON failures, including syntax errors here.
 
 This saves little unit execution time: simulator startup/build still dominate.
@@ -88,17 +89,29 @@ def select_tests(paths, full=False):
         return full_selection("forced full suite")
     if not paths:
         return full_selection("no changed paths available")
+    sensitive = sorted(p for p in set(paths) if p == "project.yml" or
+                       p.startswith(("tools/", ".github/workflows/", "Tests/", "UITests/")))
+    if sensitive:
+        return full_selection("selection-sensitive paths: " + ", ".join(sensitive))
+    paths = sorted({p for p in paths if not (p.startswith("docs/") or p.endswith(".md"))})
     unknown = sorted(set(paths) - MAPPING.keys())
-    if unknown:
-        return full_selection("unmapped or selection-sensitive paths: " + ", ".join(unknown))
+    unsafe = [p for p in unknown if not p.startswith("App/")]
+    if unsafe:
+        return full_selection("unmapped paths: " + ", ".join(unsafe))
     classes = set()
     screenshots = False
     for path in paths:
+        if path not in MAPPING:
+            continue
         tests, ui = MAPPING[path]
         classes.update(tests)
         screenshots |= ui
+    if unknown:
+        return {"only_testing": [f"-only-testing:{TARGET}"], "screenshots": screenshots,
+                "full": False, "reason": "unmapped App paths (all units): " + ", ".join(unknown)}
     if not classes:
-        return full_selection("no audited test classes selected")
+        return {"only_testing": [], "screenshots": False, "full": False,
+                "reason": "documentation only; static checks and tool tests"}
     return {"only_testing": [f"-only-testing:{TARGET}/{name}" for name in sorted(classes)],
             "screenshots": screenshots, "full": False,
             "reason": "union of audited source dependencies"}

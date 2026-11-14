@@ -179,7 +179,8 @@ def describe(plan, title):
 
 
 def proof_matches(proof, plan):
-    return (proof.get('schema') == 1 and proof.get('tree') == plan['tree']
+    return (bool(plan['only_testing'] or plan['ui']) and not proof.get('check_only')
+            and proof.get('schema') == 1 and proof.get('tree') == plan['tree']
             and proof.get('plan_key') == plan_key(plan)
             and proof.get('unit_passed', 0) + proof.get('ui_passed', 0) > 0)
 
@@ -252,6 +253,10 @@ def xcodebuild_test(udid, selectors, result, minutes, env=None):
 
 def execute(plan):
     """Run exactly the planned tests; returns the proof for this tree and plan."""
+    if not plan['only_testing'] and not plan['ui']:
+        return dict(schema=1, sha=plan['head'], tree=plan['tree'], plan_key=plan_key(plan),
+                    unit_passed=0, ui_passed=0, check_only=True,
+                    run_id=os.environ.get('GITHUB_RUN_ID'))
     udid = prepare()
     unit = ui = 0
     if plan['only_testing']:
@@ -375,6 +380,8 @@ def notes(kind, plan, proof, sha):
     # Previews pass no proof: they only build.
     if not proof:
         scope = '预览包只编译，不跑模拟器测试（测试由 PR 检查负责）。'
+    elif proof.get('check_only'):
+        scope = '仅静态检查和工具测试；未运行 App 测试。'
     elif proof.get('url'):
         scope = f'测试由 PR 检查完成并复用：{proof["url"]}'
     else:
@@ -426,6 +433,9 @@ def cmd_gate(_):
     if git('rev-parse', 'HEAD') != plan['head']:
         raise Failure('测试期间源码有变化，未留下 PR 测试记录')
     write_json(PROOF, proof)
+    if proof.get('check_only'):
+        summary('PR 检查通过：仅静态检查和工具测试；未运行 App 测试，记录不可供开发版复用；未发布安装包')
+        return
     summary(f'PR 门禁通过：单元 {proof["unit_passed"]} 项，界面 {proof["ui_passed"]} 项；未发布安装包')
 
 
@@ -452,7 +462,9 @@ def cmd_dev(_):
         prepare(simulator=False)
     else:
         summary('没有可复用的 PR 测试记录，运行同样的测试')
-        proof = execute(plan)  # execute() already prepared Xcode and the project
+        proof = execute(plan)
+        if proof.get('check_only'):
+            prepare(simulator=False)
     write_json(PROOF, proof)
     build = next_build(all_tags(), json.loads((ROOT / 'apps.json').read_text()))
     ipa, info = build_ipa(build)

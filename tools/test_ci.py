@@ -122,6 +122,23 @@ class ProofTests(unittest.TestCase):
         proof = dict(self.proof(plan()), unit_passed=0, ui_passed=0)
         self.assertFalse(ci.proof_matches(proof, plan()))
 
+    def test_check_only_proof_is_never_reusable_even_for_empty_plan(self):
+        empty = plan(only_testing=[], ui=False)
+        with patch.object(ci, 'prepare') as prepare:
+            proof = ci.execute(empty)
+        prepare.assert_not_called()
+        self.assertTrue(proof['check_only'])
+        self.assertEqual(proof['unit_passed'] + proof['ui_passed'], 0)
+        self.assertFalse(ci.proof_matches(proof, empty))
+        self.assertFalse(ci.proof_matches(dict(proof, unit_passed=3), empty))
+        self.assertFalse(ci.proof_matches(dict(self.proof(plan()), check_only=True), plan()))
+        self.assertFalse(ci.proof_matches(proof, plan()))
+
+    def test_selected_tests_with_zero_passes_still_fail(self):
+        with patch.object(ci, 'prepare'), patch.object(ci, 'xcodebuild_test', return_value=0):
+            with self.assertRaises(ci.Failure):
+                ci.execute(plan(ui=False))
+
     def test_head_and_reason_do_not_block_reuse(self):
         # The PR merge commit differs from main's merge commit; the tree is what was tested.
         self.assertTrue(ci.proof_matches(self.proof(plan()), plan(head='merge', reason='other words')))
