@@ -905,25 +905,42 @@ private struct PlaybackScrubber: View {
 
     var body: some View {
         VStack(spacing: PlayerControlMetrics.timestampGap) {
-            Slider(value: Binding(
-                get: { shown },
-                set: {
-                    draft = $0
-                    // Native accessibility adjustments can write without a drag.
-                    if !scrubbing, duration > 0 { seek($0) }
-                }
-            ), in: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
-                if editing {
-                    draft = playbackClock.position
-                    scrubbing = true
-                } else {
-                    if scrubbing, duration > 0 { seek(draft) }
-                    scrubbing = false
-                }
-            })
-            .id(trackID)
+            ZStack {
+                Slider(value: Binding(
+                    get: { shown },
+                    set: {
+                        draft = $0
+                        // Native accessibility adjustments can write without a drag.
+                        if !scrubbing, duration > 0 { seek($0) }
+                    }
+                ), in: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
+                    if editing {
+                        draft = playbackClock.position
+                        scrubbing = true
+                    } else {
+                        if scrubbing, duration > 0 { seek(draft) }
+                        scrubbing = false
+                    }
+                })
+                .id(trackID)
+            }
             .frame(height: PlayerControlMetrics.minimumHitHeight)
             .disabled(duration == 0)
+            // The native slider exposes its own 31pt AX bounds. Give the
+            // 44pt layout container a separate element, without changing touch handling.
+            .accessibilityElement(children: .ignore)
+            .accessibilityAdjustableAction { direction in
+                guard duration > 0 else { return }
+                let delta: Double
+                switch direction {
+                case .increment: delta = 10
+                case .decrement: delta = -10
+                @unknown default: return
+                }
+                let target = min(duration, max(0, shown + delta))
+                draft = target
+                seek(target)
+            }
             .accessibilityLabel("播放进度")
             .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
             .accessibilityIdentifier("playback-progress")
