@@ -58,11 +58,12 @@ final class EnginePlayer {
             throw CocoaError(.fileReadCorruptFile)
         }
         wantsPlayback = false
-        transport(.load) { [self] in
+        let reconfigures = file == nil || !GaplessCompatibility.canJoin(node.outputFormat(forBus: 0), next.processingFormat)
+        transport(.load, silence: reconfigures ? .reconfiguration : .renderStop) { [self] in
             queue.invalidate(.trackChange)
             nextFile = nil
             // Preserve the output render stream for same-format replacements.
-            if file == nil || !GaplessCompatibility.canJoin(node.outputFormat(forBus: 0), next.processingFormat) {
+            if reconfigures {
                 node.stop()
                 engine.stop()
                 engine.disconnectNodeOutput(node)
@@ -80,6 +81,8 @@ final class EnginePlayer {
     /// paused. The closure includes session preparation and the new load.
     func prepareForLoad(_ action: @escaping () -> Void) {
         wantsPlayback = false
+        // The opaque action can change the session rate before loading; keep
+        // the conservative reconfiguration hold even for a same-format file.
         transport(.load) { [self] in
             node.pause()
             action()
@@ -153,7 +156,8 @@ final class EnginePlayer {
         }
     }
 
-    private func transport(_ operation: TransportFader.Operation, action: @escaping () -> Void) {
+    private func transport(_ operation: TransportFader.Operation, silence: TransportFader.Silence? = nil,
+                           action: @escaping () -> Void) {
         // Reject completions from the old segment as soon as replacement is
         // requested, including callbacks queued during the fade-out.
         switch operation {
@@ -170,7 +174,7 @@ final class EnginePlayer {
         }
         transportAction = action
         pendingOperation = operation
-        if let token = envelope.request(operation, audible: node.isPlaying) {
+        if let token = envelope.request(operation, audible: node.isPlaying, silence: silence) {
             performTransport(token)
         }
     }

@@ -21,10 +21,11 @@ final class TransportEnvelopeDriver: @unchecked Sendable {
 
     /// Immediate work (stopped node / nested load) stays synchronous on the
     /// caller, preserving load's file/duration contract.
-    func request(_ operation: TransportFader.Operation, audible: Bool) -> UInt64? {
+    func request(_ operation: TransportFader.Operation, audible: Bool,
+                 silence: TransportFader.Silence? = nil) -> UInt64? {
         queue.sync {
             generation &+= 1
-            let needsPerform = apply(fader.request(operation, audible: audible))
+            let needsPerform = apply(fader.request(operation, audible: audible, silence: silence))
             resetClockAndDrive()
             return needsPerform ? generation : nil
         }
@@ -61,7 +62,8 @@ final class TransportEnvelopeDriver: @unchecked Sendable {
         lastTick = DispatchTime.now().uptimeNanoseconds
         guard timer == nil, fader.isActive else { return }
         let source = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        source.schedule(deadline: .now() + .milliseconds(1), repeating: .milliseconds(1), leeway: .nanoseconds(0))
+        let interval = DispatchTimeInterval.nanoseconds(Int(TransportFader.stepSeconds * 1_000_000_000))
+        source.schedule(deadline: .now() + interval, repeating: interval, leeway: .nanoseconds(0))
         source.setEventHandler { [weak self] in self?.tick() }
         timer = source
         source.resume()
@@ -78,6 +80,9 @@ final class TransportEnvelopeDriver: @unchecked Sendable {
             lastTick = DispatchTime.now().uptimeNanoseconds
         }
         if needsPerform {
+            // Never wait for MainActor from this queue. The actor validates
+            // this generation before using its current transport closure;
+            // replacement, resume and invalidate all retire the old token.
             let token = generation
             let callback = onPerform
             Task { @MainActor in callback(token) }
@@ -89,7 +94,7 @@ final class TransportEnvelopeDriver: @unchecked Sendable {
     }
 
     /// Never replay missed ticks as a burst of stale gain writes. Dispatch's
-    /// 1 ms interval is a request, not a real-time guarantee; a delayed wake
+    /// 2 ms interval is a request, not a real-time guarantee; a delayed wake
     /// samples the curve at elapsed time, with holds beginning at actual writes.
     private func apply(_ events: [TransportFader.Event]) -> Bool {
         var needsPerform = false
