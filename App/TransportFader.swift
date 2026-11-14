@@ -1,5 +1,7 @@
-/// Pure transport envelope. The caller applies gain events in order, then runs
-/// the action event. No audio APIs, timers, or listening assertions live here.
+import Foundation
+
+/// Pure transport envelope: no audio APIs or timers. Elapsed time is supplied
+/// by the driver; each boundary starts at the actual zero write/action completion.
 struct TransportFader {
     enum Operation: CaseIterable, Equatable {
         case pause, stop, seek, load, play, invalidatePreload
@@ -8,61 +10,102 @@ struct TransportFader {
         case gain(Float)
         case perform(Operation)
     }
-    private enum Phase { case steady, falling, rising }
+    enum Phase: Equatable { case steady, falling, holdSilent, performing, holdZero, rising }
 
-    static let stepSeconds: Double = 0.004
-    static let rampSeconds: Double = 0.020
+    static let stepSeconds: Double = 0.001
+    static let rampSeconds: Double = 0.030
+    static let silentSeconds: Double = 0.025
+    static let zeroSeconds: Double = 0.010
     private(set) var gain: Float = 1
     private(set) var pending: Operation?
-    private var phase = Phase.steady
+    private(set) var phase = Phase.steady
+    private var elapsed: Double = 0
+    private var rampStart: Float = 1
+    private var silenceReady = false
     var isActive: Bool { phase != .steady }
 
-    /// New requests replace unfinished actions, retaining the current gain.
-    /// A stopped node can enter the silent window immediately.
+    /// Replace unfinished work without a gain jump. An already stopped node
+    /// needs an explicit zero write but no new drain period. Nested load work
+    /// can reuse a drained silent window, including a render restart that has
+    /// not emitted its first positive gain yet.
     mutating func request(_ operation: Operation, audible: Bool) -> [Event] {
+        let alreadySilent = !audible || (gain == 0 && silenceReady)
         pending = operation
-        phase = .falling
-        if !audible {
+        elapsed = 0
+        rampStart = gain
+        if alreadySilent {
             gain = 0
-            return [.gain(0)] + enterSilence()
+            return [.gain(0)] + perform()
         }
-        return gain == 0 ? enterSilence() : []
+        phase = gain == 0 ? .holdSilent : .falling
+        return []
     }
 
-    /// Resume during a pending pause reverses the envelope without a gain jump.
+    /// Resume a pending pause from exactly the current gain.
     mutating func resumeRendering() {
         pending = nil
-        phase = gain == 1 ? .steady : .rising
+        elapsed = 0
+        rampStart = gain
+        phase = gain == 1 ? .steady : (gain == 0 ? .holdZero : .rising)
     }
 
-    mutating func step() -> [Event] {
-        let delta = Float(Self.stepSeconds / Self.rampSeconds)
+    /// The caller acknowledges completion, including any render restart.
+    /// Time waiting for the MainActor must never count toward hold-zero.
+    mutating func performed() {
+        guard phase == .performing else { return }
+        elapsed = 0
+        phase = .holdZero
+    }
+
+    mutating func step(elapsedSeconds: Double = Self.stepSeconds) -> [Event] {
+        guard elapsedSeconds.isFinite, elapsedSeconds > 0 else { return [] }
         switch phase {
-        case .steady: return []
-        case .falling:
-            // Snap the final step so floating point rounding cannot strand an action.
-            gain = gain <= delta + 0.000001 ? 0 : gain - delta
-            return [.gain(gain)] + (gain == 0 ? enterSilence() : [])
-        case .rising:
-            gain = gain >= 1 - delta - 0.000001 ? 1 : gain + delta
-            if gain == 1 { phase = .steady }
+        case .steady, .performing: return []
+        case .falling, .rising:
+            elapsed = min(Self.rampSeconds, elapsed + elapsedSeconds)
+            // Tolerance only settles accumulated clock arithmetic at the deadline;
+            // endpoint gain values are assigned exactly, never approximated by cos.
+            let finished = elapsed >= Self.rampSeconds - 1e-12
+            let fraction = (1 - cos(.pi * elapsed / Self.rampSeconds)) / 2
+            if phase == .falling {
+                gain = finished ? 0 : rampStart * Float(1 - fraction)
+                if finished { phase = .holdSilent; elapsed = 0 }
+            } else {
+                gain = finished ? 1 : rampStart + (1 - rampStart) * Float(fraction)
+                if finished { phase = .steady; elapsed = 0 }
+            }
+            if gain > 0 { silenceReady = false }
             return [.gain(gain)]
+        case .holdSilent:
+            elapsed += elapsedSeconds
+            return elapsed >= Self.silentSeconds - 1e-12 ? perform() : []
+        case .holdZero:
+            elapsed += elapsedSeconds
+            if elapsed >= Self.zeroSeconds - 1e-12 {
+                phase = .rising
+                elapsed = 0
+                rampStart = 0
+            }
+            return []
         }
     }
 
-    /// Only called after rendering has been stopped by an external invalidation.
-    /// Cancels stale actions and leaves the next transport at a known endpoint.
+    /// Only after an external interruption has already stopped rendering.
     mutating func invalidate() -> [Event] {
         pending = nil
         phase = .steady
+        elapsed = 0
         gain = 1
+        silenceReady = false
         return [.gain(1)]
     }
 
-    private mutating func enterSilence() -> [Event] {
+    private mutating func perform() -> [Event] {
         guard let operation = pending else { return [] }
         pending = nil
-        phase = .rising
+        silenceReady = true
+        phase = .performing
+        elapsed = 0
         return [.perform(operation)]
     }
 }

@@ -27,6 +27,10 @@ class SelectionTests(unittest.TestCase):
 
     def test_transport_fader_keeps_engine_dependents_and_envelope_regressions(self):
         fader = select_tests(["App/TransportFader.swift"])
+        driver = select_tests(["App/TransportEnvelopeDriver.swift"])
+        self.assertFalse(driver["full"])
+        self.assertFalse(driver["screenshots"])
+        self.assertEqual(fader["only_testing"], driver["only_testing"])
         engine = select_tests(["App/EnginePlayer.swift"])
         store = select_tests(["App/PlayerStore.swift"])
         self.assertFalse(fader["full"])
