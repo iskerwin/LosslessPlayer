@@ -465,12 +465,16 @@ final class PlayerCardRenderingTests: XCTestCase {
 
     func testDetailFlightBackgroundMatchesDestinationSurfaceInBothAppearances() throws {
         let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
+        let artworkURL = FileManager.default.temporaryDirectory.appendingPathComponent("detail-flight-\(UUID()).png")
+        ArtworkAnalysisCache.shared.store(ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)),
+                                          for: artworkURL.absoluteString)
+        let samples: [CGFloat] = [0.1, 0.5, 1]
         for scheme in [ColorScheme.light, .dark] {
-            let reference = ImageRenderer(content: ArtworkBackground(url: nil, followsAppearance: true)
+            let reference = ImageRenderer(content: ArtworkBackground(url: artworkURL, followsAppearance: true)
                 .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
             reference.scale = 1
             let referencePixels = try rgbaPixels(in: XCTUnwrap(reference.cgImage))
-            for progress: CGFloat in [0.1, 0.5, 1] {
+            for progress in samples {
                 let card = DetailCardMetrics.frame(progress,
                     source: CGRect(x: 20, y: 300, width: 120, height: 120), destination: expanded)
                 let renderer = ImageRenderer(content:
@@ -478,7 +482,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                         source: DetailCardSource(route: .albums,
                             frame: CGRect(x: 20, y: 300, width: 120, height: 120), artwork: AnyView(Color.green)),
                         expanded: expanded, headerFrame: CGRect(x: 55, y: 50, width: 250, height: 250),
-                        transitioning: true, reduceMotion: false, detail: Color.clear)
+                        transitioning: true, reduceMotion: false, detail: Color.clear, backgroundURL: artworkURL)
                         .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
                 renderer.scale = 1
                 let pixels = try rgbaPixels(in: XCTUnwrap(renderer.cgImage))
