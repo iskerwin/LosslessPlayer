@@ -21,7 +21,7 @@ private struct DetailCardHeaderKey: EnvironmentKey {
 }
 struct DetailCardHeader {
     var hidden = false
-    var measure: ((CGRect) -> Void)?
+    var measure: ((CGRect, URL?) -> Void)?
     var close: (() -> Void)?
 }
 extension EnvironmentValues {
@@ -90,28 +90,32 @@ struct DetailCardLink<Artwork: View, Label: View>: View {
 }
 
 struct DetailHeaderArtwork: ViewModifier {
+    var backgroundURL: URL? = nil
     @Environment(\.detailCardHeader) private var header
     func body(content: Content) -> some View {
         content
             .opacity(header.hidden ? 0 : 1)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { header.measure?($0) }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { header.measure?($0, backgroundURL) }
     }
 }
 
 enum DetailCardMetrics {
     static func frame(_ progress: CGFloat, source: CGRect, destination: CGRect) -> CGRect {
         let p = min(1, max(0, progress))
+        if p == 0 { return source }
+        if p == 1 { return destination }
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
         return CGRect(x: mix(source.minX, destination.minX), y: mix(source.minY, destination.minY),
                       width: mix(source.width, destination.width), height: mix(source.height, destination.height))
     }
     static func radius(_ progress: CGFloat) -> CGFloat {
-        // Keep a readable outside corner until the last part of expansion.
+        // The source has 12 pt corners; expansion only flattens them.
         let p = min(1, max(0, progress))
-        return 12 * (1 - p) + 24 * sin(.pi * p)
+        return 12 * (1 - p)
     }
     static func contentOpacity(_ progress: CGFloat) -> Double {
-        Double(min(1, max(0, (progress - 0.15) / 0.85)))
+        // The moving clip reveals an opaque page, never a dissolve over the grid.
+        1
     }
 }
 
@@ -125,6 +129,7 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
     var transitioning: Bool
     var reduceMotion: Bool
     var detail: Detail
+    var backgroundURL: URL? = nil
 
     var animatableData: CGFloat {
         get { progress }
@@ -141,7 +146,9 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
                 .frame(width: expanded.width, height: expanded.height)
                 .position(x: expanded.midX, y: expanded.midY)
             ZStack(alignment: .topLeading) {
-                Color(uiColor: .systemBackground)
+                ArtworkBackground(url: backgroundURL, followsAppearance: true)
+                    .frame(width: expanded.width, height: expanded.height)
+                    .offset(x: expanded.minX - card.minX, y: expanded.minY - card.minY)
                 detail
                     .frame(width: expanded.width, height: expanded.height)
                     // Lay out the destination at its resting screen position.
@@ -164,13 +171,17 @@ struct DetailZoomCard<Detail: View>: View, Animatable {
             .opacity(reduceMotion ? Double(p) : 1)
             .offset(x: card.minX, y: card.minY)
         }
+        // This animatable view already samples the spring. In particular, the
+        // cover inserted on close must not start a second implicit frame/opacity
+        // animation from its header size while the outer card is shrinking.
+        .transaction { if transitioning { $0.animation = nil } }
     }
 }
 
 /// Header measure and close. The card installs these; the shell never sees
 /// the progress those callbacks animate.
 final class DetailCardActions {
-    var measure: (CGRect) -> Void = { _ in }
+    var measure: (CGRect, URL?) -> Void = { _, _ in }
     var close: () -> Void = {}
     /// Latest header, kept off view state so scrolling does not rebuild the card.
     var latestHeader = CGRect.zero
@@ -205,6 +216,7 @@ struct DetailMotionHost<Detail: View>: View {
     var detail: Detail
     @State private var progress: CGFloat = 0
     @State private var headerFrame: CGRect = .zero
+    @State private var backgroundURL: URL?
     @State private var transitioning = true
     @State private var closing = false
     @State private var generation = 0
@@ -236,7 +248,8 @@ struct DetailMotionHost<Detail: View>: View {
                        headerFrame: headerFrame, transitioning: transitioning,
                        reduceMotion: reduceMotion,
                        detail: DetailHeaderScope(hidden: transitioning && !reduceMotion,
-                                                 actions: actions, content: detail))
+                                                 actions: actions, content: detail),
+                       backgroundURL: backgroundURL)
             .allowsHitTesting(progress == 1 && !transitioning)
             .accessibilityIdentifier("detail-card")
             .onAppear(perform: onReady)
@@ -245,6 +258,7 @@ struct DetailMotionHost<Detail: View>: View {
     private func bind() {
         let origin = spaceOrigin
         let headerFrame = $headerFrame
+        let backgroundURL = $backgroundURL
         let progress = $progress
         let transitioning = $transitioning
         let closing = $closing
@@ -253,7 +267,7 @@ struct DetailMotionHost<Detail: View>: View {
         let onWillClose = onWillClose
         let onClosed = onClosed
         let card = actions
-        card.measure = { frame in
+        card.measure = { frame, url in
             guard frame.width > 0, frame.height > 0, !closing.wrappedValue else { return }
             let local = frame.offsetBy(dx: -origin.x, dy: -origin.y)
             card.latestHeader = local
@@ -261,6 +275,7 @@ struct DetailMotionHost<Detail: View>: View {
             // otherwise report a new header frame on every spring tick.
             guard progress.wrappedValue == 0, transitioning.wrappedValue else { return }
             headerFrame.wrappedValue = local
+            backgroundURL.wrappedValue = url
             let token = generation.wrappedValue
             CardProgressTravel.animate(progress, to: 1, reduceMotion: reduceMotion) {
                 guard token == generation.wrappedValue, !closing.wrappedValue else { return }
@@ -296,7 +311,7 @@ struct DetailMotionHost<Detail: View>: View {
 private enum CardProgressTravel {
     static func animate(_ progress: Binding<CGFloat>, to target: CGFloat, reduceMotion: Bool,
                         completion: @escaping () -> Void) {
-        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.48)
+        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.48, dampingFraction: 1)
         if progress.wrappedValue == target {
             DispatchQueue.main.async(execute: completion)
             return
@@ -319,7 +334,7 @@ private struct DetailHeaderScope<Content: View>: View {
     var body: some View {
         content.environment(\.detailCardHeader, DetailCardHeader(
             hidden: hidden,
-            measure: { actions.measure($0) },
+            measure: { actions.measure($0, $1) },
             close: { actions.close() }
         ))
     }

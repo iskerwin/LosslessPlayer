@@ -202,7 +202,7 @@ struct CollectionPage: View {
         if kind == .album, let first = sorted.first {
             VStack(spacing: 14) {
                 ArtworkView(track: sorted.first { $0.artworkFilename != nil } ?? first, root: library.root, size: 250)
-                    .modifier(DetailHeaderArtwork())
+                    .modifier(DetailHeaderArtwork(backgroundURL: backgroundArtworkURL))
                     .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
                     .compositingGroup()
                     .padding(.top, 8)
@@ -222,7 +222,7 @@ struct CollectionPage: View {
                 PlaylistCover(playlist: playlist, library: library)
                     .frame(maxWidth: 300)
                     .containerRelativeFrame(.horizontal) { width, _ in min(300, width * 0.65) }
-                    .modifier(DetailHeaderArtwork())
+                    .modifier(DetailHeaderArtwork(backgroundURL: backgroundArtworkURL))
                     .padding(.top, 16)
                     .padding(.bottom, 24)
                 Text(playlist.name)
