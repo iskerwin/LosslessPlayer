@@ -166,6 +166,9 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func toggle() {
+        #if DEBUG
+        NSLog("Lossless transport toggle: playing=%d hasFile=%d enginePlaying=%d", playing, engine.hasFile, engine.isPlaying)
+        #endif
         if playing { pause() }
         else if engine.hasFile { resume() }
         else if let first = library.tracks.firstPlayable() { load(first) }
@@ -187,10 +190,16 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func resume() {
+        #if DEBUG
+        NSLog("Lossless transport resume: hasFile=%d", engine.hasFile)
+        #endif
         guard engine.hasFile else { return }
         do {
             if let current { try prepareSession(for: current, activate: true) }
             playing = try engine.play()
+            #if DEBUG
+            NSLog("Lossless transport play accepted: playing=%d enginePlaying=%d", playing, engine.isPlaying)
+            #endif
             if !playing { errorMessage = "音频设备无法开始播放" }
             updateOutput()
             updateNowPlaying()
@@ -224,6 +233,9 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     private func pause(discardingPreload: Bool) {
+        #if DEBUG
+        NSLog("Lossless transport pause: discardPreload=%d", discardingPreload)
+        #endif
         position = engine.hasFile ? engine.currentTime : position
         engine.pause()
         if discardingPreload { invalidatePreload(.pause) }
@@ -246,6 +258,9 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func seek(_ time: Double) {
+        #if DEBUG
+        NSLog("Lossless transport seek: time=%f hasFile=%d", time, engine.hasFile)
+        #endif
         guard engine.hasFile, time.isFinite else { return }
         position = min(max(0, time), engine.duration)
         engine.seek(to: position)
