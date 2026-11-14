@@ -427,6 +427,70 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
+    func testDetailFlightRendersSolidContentAndCoverAtTheSharedProgress() throws {
+        let slot = CGRect(x: 20, y: 300, width: 120, height: 120)
+        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
+        let header = CGRect(x: 55, y: 50, width: 250, height: 250)
+        let source = DetailCardSource(route: .albums, frame: slot, artwork: AnyView(Color(red: 0, green: 1, blue: 0)))
+        let samples: [CGFloat] = [0, 0.1, 0.25, 0.5, 0.75, 1]
+        for progress in samples + samples.reversed() {
+            var inheritedAnimation = false
+            let renderer = ImageRenderer(content:
+                Color.blue.frame(width: 360, height: 720)
+                    .overlay(alignment: .topLeading) {
+                        DetailZoomCard(progress: progress, source: source, expanded: expanded,
+                            headerFrame: header, transitioning: true, reduceMotion: false,
+                            detail: Color(red: 1, green: 0, blue: 0).transaction { inheritedAnimation = $0.animation != nil })
+                    }
+                    .transaction { $0.animation = .spring(response: 0.48, dampingFraction: 1) })
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage)
+            let pixels = try rgbaPixels(in: image)
+            func channel(_ frame: CGRect, _ component: Int, bottom: Bool = false) -> UInt8 {
+                let x = Int(frame.midX)
+                let y = Int(bottom ? frame.maxY - 10 : frame.midY)
+                return pixels[(y * image.width + x) * 4 + component]
+            }
+            let cover = DetailCardMetrics.frame(progress, source: slot, destination: header)
+            XCTAssertGreaterThan(channel(cover, 1), 240, "Cover missing at \(progress)")
+            XCTAssertLessThan(channel(cover, 0), 10)
+            if progress > 0 {
+                let card = DetailCardMetrics.frame(progress, source: slot, destination: expanded)
+                XCTAssertGreaterThan(channel(card, 0, bottom: true), 240, "Translucent page at \(progress)")
+                XCTAssertLessThan(channel(card, 2, bottom: true), 10)
+            }
+            XCTAssertFalse(inheritedAnimation, "Flight children must not animate independently")
+        }
+    }
+
+    func testDetailFlightBackgroundMatchesDestinationSurfaceInBothAppearances() throws {
+        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
+        for scheme in [ColorScheme.light, .dark] {
+            let reference = ImageRenderer(content: ArtworkBackground(url: nil, followsAppearance: true)
+                .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
+            reference.scale = 1
+            let referencePixels = try rgbaPixels(in: XCTUnwrap(reference.cgImage))
+            for progress: CGFloat in [0.1, 0.5, 1] {
+                let card = DetailCardMetrics.frame(progress,
+                    source: CGRect(x: 20, y: 300, width: 120, height: 120), destination: expanded)
+                let renderer = ImageRenderer(content:
+                    DetailZoomCard(progress: progress,
+                        source: DetailCardSource(route: .albums,
+                            frame: CGRect(x: 20, y: 300, width: 120, height: 120), artwork: AnyView(Color.green)),
+                        expanded: expanded, headerFrame: CGRect(x: 55, y: 50, width: 250, height: 250),
+                        transitioning: true, reduceMotion: false, detail: Color.clear)
+                        .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let pixels = try rgbaPixels(in: XCTUnwrap(renderer.cgImage))
+                let offset = (Int(card.maxY - 10) * 360 + Int(card.midX)) * 4
+                for channel in 0..<4 {
+                    XCTAssertEqual(pixels[offset + channel], referencePixels[offset + channel],
+                                   "Background seam at \(progress) in \(scheme)")
+                }
+            }
+        }
+    }
+
     func testDetailZoomKeepsUnderlyingAppearanceAtEverySampleInBothDirections() throws {
         let source = DetailCardSource(route: .albums,
             frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))

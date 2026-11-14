@@ -1681,7 +1681,7 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertEqual(PlayerCardMetrics.topRadius(0), 18)
     }
 
-    func testDetailCardReturnsToMeasuredSlotWithVisibleIntermediateCorners() {
+    func testDetailCardReturnsExactlyToMeasuredSlotWithMonotonicCorners() {
         // Non-integral, scrolled slots make an estimated grid destination fail.
         for source in [CGRect(x: 22.5, y: 213.25, width: 165.5, height: 165.5),
                        CGRect(x: 209.75, y: 487.5, width: 165.5, height: 165.5)] {
@@ -1701,11 +1701,29 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         }
         XCTAssertEqual(DetailCardMetrics.radius(0), 12)
         XCTAssertEqual(DetailCardMetrics.radius(1), 0, accuracy: 0.0001)
-        for step in 1...90 {
-            XCTAssertGreaterThan(DetailCardMetrics.radius(CGFloat(step) / 100), 8)
+        var previous: CGFloat = 12
+        for step in -100...1100 {
+            let radius = DetailCardMetrics.radius(CGFloat(step) / 1000)
+            XCTAssertGreaterThanOrEqual(radius, 0)
+            XCTAssertLessThanOrEqual(radius, previous)
+            previous = radius
+            XCTAssertEqual(DetailCardMetrics.contentOpacity(CGFloat(step) / 1000), 1)
         }
-        XCTAssertEqual(DetailCardMetrics.contentOpacity(0), 0)
-        XCTAssertEqual(DetailCardMetrics.contentOpacity(1), 1)
+    }
+
+    func testDetailCoverAndCardShareProgressIncludingExactEndpoints() {
+        let source = CGRect(x: 209.75, y: 487.5, width: 165.5, height: 165.5)
+        let expanded = CGRect(x: 0, y: 0, width: 398, height: 720)
+        let header = CGRect(x: 74, y: 83, width: 250, height: 250)
+        for destination in [expanded, header] {
+            XCTAssertEqual(DetailCardMetrics.frame(-0.1, source: source, destination: destination), source)
+            XCTAssertEqual(DetailCardMetrics.frame(0, source: source, destination: destination), source)
+            XCTAssertEqual(DetailCardMetrics.frame(1, source: source, destination: destination), destination)
+            XCTAssertEqual(DetailCardMetrics.frame(1.1, source: source, destination: destination), destination)
+            let middle = DetailCardMetrics.frame(0.5, source: source, destination: destination)
+            XCTAssertEqual(middle.midX, (source.midX + destination.midX) / 2)
+            XCTAssertEqual(middle.width, (source.width + destination.width) / 2)
+        }
     }
 
     func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
