@@ -39,13 +39,14 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(mixed["screenshots"])
 
     def test_card_progress_keeps_rendering_regressions(self):
-        for path in ("App/PlayerCard.swift", "App/DetailCard.swift"):
+        for path in ("App/PlayerCard.swift", "App/DetailZoom.swift"):
             with self.subTest(path=path):
                 result = select_tests([path])
                 self.assertFalse(result["full"])
                 self.assertTrue(result["screenshots"])
                 self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardRenderingTests", result["only_testing"])
-                self.assertIn("-only-testing:LosslessPlayerTests/BrowseAndArtworkPerformanceTests",
+                self.assertIn("-only-testing:LosslessPlayerTests/" +
+                              ("SearchResultsTests" if path == "App/DetailZoom.swift" else "BrowseAndArtworkPerformanceTests"),
                               result["only_testing"])
 
     def test_search_changes_keep_matching_and_cache_regressions(self):

@@ -301,7 +301,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testCollectionOverlayDoesNotChangeLightWindowAppearance() async throws {
+    func testNativeCollectionPushDoesNotChangeLightWindowAppearance() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = LibraryStore(root: root)
@@ -317,26 +317,17 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
         let page = CollectionPage(library: library, player: player, title: "Album", tracks: [], kind: .album,
             onOpen: { _ in }, onAddToPlaylist: { _ in }, onDelete: { _ in }, onLyrics: { _ in })
-        let size = window.bounds.size
-        let expanded = CGRect(origin: .zero, size: size)
-        let source = DetailCardSource(route: .albums,
-            frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))
-        let samples: [CGFloat] = [0, 0.2, 0.5, 0.8, 1]
-        for progress in samples + samples.reversed() {
+        let detail = DetailZoomRoute(route: .album("appearance"), grid: .albumIndex)
+        for pushed in [false, true, false] {
             let host = UIHostingController(rootView:
-                Color(uiColor: .systemBackground)
-                    .overlay(alignment: .topLeading) {
-                        DetailZoomCard(progress: progress, source: source, expanded: expanded,
-                            headerFrame: source.frame, transitioning: true, reduceMotion: false,
-                            detail: NavigationStack { page })
-                    })
+                NativeCollectionAppearanceHarness(page: page, detail: detail, pushed: pushed))
             window.rootViewController = host
             window.makeKeyAndVisible()
             host.view.layoutIfNeeded()
             // Let SwiftUI propagate presentation preferences through UIKit.
             try await Task.sleep(for: .milliseconds(100))
             XCTAssertEqual(host.traitCollection.userInterfaceStyle, .light,
-                           "Collection preference escaped its overlay at progress \(progress)")
+                           "Collection preference escaped native navigation (pushed: \(pushed))")
             XCTAssertEqual(window.overrideUserInterfaceStyle, .light)
         }
     }
@@ -405,6 +396,9 @@ final class PlayerCardRenderingTests: XCTestCase {
             }
             try sample("before opening", contentVisible: false)
             state.mounted = true
+            if kind != nil {
+                state.detailPath = [DetailZoomRoute(route: .album("appearance"), grid: .albumIndex)]
+            }
             for progress in [CGFloat(0), 0.5, 1] {
                 state.progress = progress
                 try await Task.sleep(for: .milliseconds(100))
@@ -416,6 +410,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                 try sample("closing \(progress), still mounted", contentVisible: true)
             }
             state.mounted = false
+            state.detailPath = []
             // First rendered return frame, then 0.5, 1 and 1.5 seconds from it.
             // Test-only waits observe retention; production has no delayed reset.
             try await Task.sleep(for: .milliseconds(20))
@@ -423,39 +418,6 @@ final class PlayerCardRenderingTests: XCTestCase {
             for milliseconds in [500, 1000, 1500] {
                 try await Task.sleep(for: .milliseconds(500))
                 try sample("returned \(milliseconds) ms", contentVisible: false)
-            }
-        }
-    }
-
-    func testDetailZoomKeepsUnderlyingAppearanceAtEverySampleInBothDirections() throws {
-        let source = DetailCardSource(route: .albums,
-            frame: CGRect(x: 60, y: 180, width: 140, height: 140), artwork: AnyView(Color.green))
-        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
-        let samples: [CGFloat] = [0, 0.15, 0.35, 0.65, 0.85]
-        for scheme in [ColorScheme.light, .dark] {
-            for progress in samples + samples.reversed() {
-                let renderer = ImageRenderer(content:
-                    Color(uiColor: .systemBackground).frame(width: 360, height: 720)
-                        .overlay(alignment: .topLeading) {
-                            DetailZoomCard(progress: progress, source: source, expanded: expanded,
-                                headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
-                                transitioning: true, reduceMotion: false,
-                                detail: ArtworkBackgroundSurface(analysis: ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)), followsAppearance: true))
-                        }
-                        .environment(\.colorScheme, scheme))
-                renderer.scale = 1
-                let image = try XCTUnwrap(renderer.cgImage)
-                let pixels = try rgbaPixels(in: image)
-                // x=2,y=2 stays outside the growing card at every sample.
-                // Only the intentional 12% dimming is allowed, never a scheme flip.
-                let offset = (2 * image.width + 2) * 4
-                for channel in 0..<3 {
-                    if scheme == .light {
-                        XCTAssertGreaterThan(pixels[offset + channel], 220)
-                    } else {
-                        XCTAssertLessThan(pixels[offset + channel], 8)
-                    }
-                }
             }
         }
     }
@@ -512,7 +474,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         XCTAssertNil(source.range(of: "playerProgress"))
         XCTAssertNil(source.range(of: "detailProgress"))
         XCTAssertNotNil(source.range(of: "PlayerMotionHost"))
-        XCTAssertNotNil(source.range(of: "DetailMotionHost"))
+        XCTAssertNil(source.range(of: "DetailMotionHost"))
     }
 
     func testPlayerProgressWritesDoNotEvaluateTheShell() throws {
@@ -535,88 +497,6 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
         XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
-    }
-
-    func testPlaylistTabCloseStartsTheCardReturnWithoutRemovingIt() throws {
-        let dismiss = DetailCardDismiss()
-        var willClose = 0
-        var didClose = 0
-        let drive = DetailProgressDrive()
-        let ready = expectation(description: "detail card appeared")
-        let window = try show(DetailMotionHost(
-            source: DetailCardSource(route: .playlist(UUID()),
-                                     frame: CGRect(x: 20, y: 80, width: 160, height: 160),
-                                     artwork: AnyView(Color.green)),
-            expanded: CGRect(x: 0, y: 0, width: 390, height: 700),
-            reduceMotion: true, spaceOrigin: .zero,
-            onWillClose: { willClose += 1 },
-            onClosed: { didClose += 1 },
-            dismiss: dismiss,
-            progressDrive: drive,
-            onReady: { ready.fulfill() }
-        ) {
-            Color.white
-        })
-        defer { hide(window) }
-        wait(for: [ready], timeout: 2)
-        drive.set(1)
-        let committed = expectation(description: "open progress committed")
-        DispatchQueue.main.async { committed.fulfill() }
-        wait(for: [committed], timeout: 1)
-        dismiss.close()
-        XCTAssertEqual(willClose, 1)
-        XCTAssertEqual(didClose, 0, "The card travels back instead of being removed")
-    }
-
-    func testDetailProgressWritesDoNotEvaluateTheShell() throws {
-        let probe = TransitionEvaluationProbe()
-        let drive = DetailProgressDrive()
-        let ready = expectation(description: "detail card appeared")
-        let window = try show(DetailShellProbe(probe: probe, drive: drive, ready: {
-            guard !probe.didReady else { return }
-            probe.didReady = true
-            ready.fulfill()
-        }))
-        defer { hide(window) }
-        wait(for: [ready], timeout: 2)
-        let shellBaseline = probe.shell
-        let cardBaseline = probe.card
-        for step in 1...30 {
-            let seen = probe.card
-            drive.set(CGFloat(step) / 30)
-            flushUntil(probe: probe, changesFrom: seen)
-        }
-        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
-        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
-    }
-
-    func testCoverFrameWritesDoNotEvaluateTheLink() throws {
-        let probe = TransitionEvaluationProbe()
-        let linkProbe = DetailCardLinkProbe()
-        let ready = expectation(description: "cover link appeared")
-        linkProbe.evaluate = { probe.card += 1 }
-        linkProbe.ready = { slot in
-            linkProbe.attached = slot
-            guard !probe.didReady else { return }
-            probe.didReady = true
-            ready.fulfill()
-        }
-        let window = try show(DetailCardLink(route: .albums, fallback: {}, probe: linkProbe) {
-            Color.green.frame(width: 80, height: 80)
-        } label: { artwork in
-            artwork
-        })
-        defer { hide(window) }
-        wait(for: [ready], timeout: 2)
-        let baseline = probe.card
-        let slot = try XCTUnwrap(linkProbe.attached)
-        for step in 1...10 {
-            let seen = probe.card
-            slot.frame = CGRect(x: 0, y: CGFloat(step) * 12, width: 80, height: 80)
-            flushUntil(probe: probe, changesFrom: seen)
-        }
-        XCTAssertLessThanOrEqual(probe.card - baseline, 1, "card \(probe.card)")
-        XCTAssertEqual(slot.frame, CGRect(x: 0, y: 120, width: 80, height: 80))
     }
 
     private var displacedKey: UIWindow?
@@ -693,28 +573,10 @@ private struct PlayerShellProbe: View {
     }
 }
 
-private struct DetailShellProbe: View {
-    var probe: TransitionEvaluationProbe
-    var drive: DetailProgressDrive
-    var ready: () -> Void
-
-    var body: some View {
-        let _ = probe.shell += 1
-        DetailMotionHost(source: DetailCardSource(route: .albums,
-                                                  frame: CGRect(x: 10, y: 10, width: 40, height: 40),
-                                                  artwork: AnyView(Color.green)),
-                         expanded: CGRect(x: 0, y: 0, width: 200, height: 400),
-                         reduceMotion: true, spaceOrigin: .zero,
-                         onWillClose: {}, onClosed: {}, progressDrive: drive, onReady: ready,
-                         onEvaluate: { probe.card += 1 }) {
-            Color.white
-        }
-    }
-}
-
 @MainActor
 private final class ReturnAppearanceState: ObservableObject {
     @Published var mounted = false
+    @Published var detailPath: [DetailZoomRoute] = []
     @Published var progress: CGFloat = 0
 }
 
@@ -735,6 +597,7 @@ private struct AppearanceProbe: UIViewRepresentable {
 /// Uses the real destination and card types, with the same local dark scope as
 /// LibraryView. It isolates preference propagation, not native tab-bar animation.
 private struct ReturnAppearanceHarness: View {
+    @Namespace private var zoom
     @ObservedObject var state: ReturnAppearanceState
     var library: LibraryStore
     var player: PlayerStore
@@ -752,20 +615,23 @@ private struct ReturnAppearanceHarness: View {
                     AppearanceProbe(view: baseProbe).frame(width: 8, height: 8)
                 }
                 .overlay(alignment: .topLeading) {
-                    if state.mounted {
-                        if let kind {
-                            DetailZoomCard(progress: state.progress,
-                                source: DetailCardSource(route: .albums,
-                                    frame: mini, artwork: AnyView(Color.green)),
-                                expanded: expanded, headerFrame: mini,
-                                transitioning: true, reduceMotion: false,
-                                detail: NavigationStack {
+                    if let kind {
+                        NavigationStack(path: $state.detailPath) {
+                            Color(uiColor: .systemBackground)
+                                .modifier(DetailZoomSource(
+                                    id: DetailZoomRoute(route: .album("appearance"), grid: .albumIndex),
+                                    namespace: zoom))
+                                .navigationDestination(for: DetailZoomRoute.self) { detail in
                                     CollectionPage(library: library, player: player, title: "Detail",
                                         tracks: [], kind: kind, onOpen: { _ in },
                                         onAddToPlaylist: { _ in }, onDelete: { _ in }, onLyrics: { _ in })
+                                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
                                         .overlay { AppearanceProbe(view: contentProbe).frame(width: 8, height: 8) }
-                                })
-                        } else {
+                                }
+                        }
+                    }
+                    if state.mounted {
+                        if kind == nil {
                             PlayerCard(progress: state.progress, miniFrame: mini,
                                 expandedFrame: expanded, reduceMotion: false,
                                 canReopen: false, onReopen: {}) {
@@ -779,6 +645,29 @@ private struct ReturnAppearanceHarness: View {
                                 }
                         }
                     }
+                }
+        }
+    }
+}
+
+private struct NativeCollectionAppearanceHarness: View {
+    var page: CollectionPage
+    var detail: DetailZoomRoute
+    @State private var path: [DetailZoomRoute]
+    @Namespace private var zoom
+
+    init(page: CollectionPage, detail: DetailZoomRoute, pushed: Bool) {
+        self.page = page
+        self.detail = detail
+        _path = State(initialValue: pushed ? [detail] : [])
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            Color(uiColor: .systemBackground)
+                .modifier(DetailZoomSource(id: detail, namespace: zoom))
+                .navigationDestination(for: DetailZoomRoute.self) { detail in
+                    page.modifier(DetailZoomDestination(id: detail, namespace: zoom))
                 }
         }
     }

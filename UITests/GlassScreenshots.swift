@@ -487,18 +487,18 @@ final class GlassScreenshots: XCTestCase {
         albums.tap()
         let album = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "album-card-")).firstMatch
         XCTAssertTrue(album.waitForExistence(timeout: 8))
-        try checkRepeatedCardReturn(app, cell: album)
+        try checkRepeatedCardReturn(app, cell: album, backTitle: "专辑")
         app.tabBars.buttons["歌单"].tap()
         let playlist = app.buttons["playlist-深夜"]
         XCTAssertTrue(playlist.waitForExistence(timeout: 8))
-        try checkRepeatedCardReturn(app, cell: playlist)
+        try checkRepeatedCardReturn(app, cell: playlist, backTitle: "歌单")
     }
 
-    private func checkRepeatedCardReturn(_ app: XCUIApplication, cell: XCUIElement) throws {
+    private func checkRepeatedCardReturn(_ app: XCUIApplication, cell: XCUIElement, backTitle: String) throws {
         let slot = cell.frame
         for _ in 0..<2 {
             cell.tap()
-            let back = app.buttons["detail-card-back"]
+            let back = app.navigationBars.buttons[backTitle]
             XCTAssertTrue(back.waitForExistence(timeout: 8))
             let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: back)
             wait(for: [hittable], timeout: 8)
@@ -524,7 +524,7 @@ final class GlassScreenshots: XCTestCase {
             XCTAssertEqual(cell.frame.minY, slot.minY, accuracy: 0.5)
             XCTAssertEqual(cell.frame.width, slot.width, accuracy: 0.5)
             XCTAssertEqual(cell.frame.height, slot.height, accuracy: 0.5)
-            XCTAssertFalse(app.buttons["detail-card-back"].exists)
+            XCTAssertFalse(app.navigationBars.buttons[backTitle].exists)
         }
     }
 
@@ -547,7 +547,7 @@ final class GlassScreenshots: XCTestCase {
         albumList.swipeUp()
         save("album-scrolled-continuity")
         try assertCollectionBackground(albumList)
-        app.buttons["detail-card-back"].tap()
+        app.navigationBars.buttons["专辑"].tap()
         app.tabBars.buttons["歌单"].tap()
         let playlist = app.descendants(matching: .any)["playlist-深夜"]
         XCTAssertTrue(playlist.waitForExistence(timeout: 8))
