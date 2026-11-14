@@ -375,7 +375,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                 Color(uiColor: .systemBackground)
                     .overlay(alignment: .topLeading) {
                         DetailZoomCard(progress: progress, source: source, expanded: expanded,
-                            headerFrame: source.frame, transitioning: true, reduceMotion: false,
+                            headerFrame: source.frame, traveling: true, reduceMotion: false,
                             detail: NavigationStack { page })
                     })
             window.rootViewController = host
@@ -487,7 +487,7 @@ final class PlayerCardRenderingTests: XCTestCase {
                         .overlay(alignment: .topLeading) {
                             DetailZoomCard(progress: progress, source: source, expanded: expanded,
                                 headerFrame: CGRect(x: 55, y: 60, width: 250, height: 250),
-                                transitioning: true, reduceMotion: false,
+                                traveling: true, reduceMotion: false,
                                 detail: ArtworkBackgroundSurface(analysis: ArtworkAnalysis.make(from: washFixture(top: .blue, bottom: .cyan)), followsAppearance: true))
                         }
                         .environment(\.colorScheme, scheme))
@@ -806,7 +806,7 @@ private struct ReturnAppearanceHarness: View {
                                 source: DetailCardSource(route: .albums,
                                     frame: mini, artwork: AnyView(Color.green)),
                                 expanded: expanded, headerFrame: mini,
-                                transitioning: true, reduceMotion: false,
+                                traveling: true, reduceMotion: false,
                                 detail: NavigationStack {
                                     CollectionPage(library: library, player: player, title: "Detail",
                                         tracks: [], kind: kind, onOpen: { _ in },
