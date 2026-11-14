@@ -19,8 +19,12 @@ final class EnginePlayer {
 
     private let engine: AVAudioEngine
     private let node = AVAudioPlayerNode()
-    private var fader = TransportFader()
-    private var fadeTask: Task<Void, Never>?
+    private lazy var envelope = TransportEnvelopeDriver(node: node) { [weak self] token in
+        self?.performTransport(token)
+    }
+    private var transportDepth = 0
+    private var performingToken: UInt64 = 0
+    private var handlingNaturalFinish = false
     private var transportAction: (() -> Void)?
     private var wantsPlayback = false
     private var pendingOperation: TransportFader.Operation?
@@ -97,8 +101,7 @@ final class EnginePlayer {
             pendingOperation = nil
         }
         if node.isPlaying {
-            fader.resumeRendering()
-            driveFader()
+            envelope.resumeRendering()
         } else {
             transport(.play) { [self] in node.play() }
         }
@@ -159,39 +162,31 @@ final class EnginePlayer {
             nextFile = nil
         case .pause, .play: break
         }
+        // A natural end has no live segment to drain. Its existing synchronous
+        // finish/load chain must stay outside the user-transport envelope.
+        if handlingNaturalFinish {
+            action()
+            return
+        }
         transportAction = action
         pendingOperation = operation
-        apply(fader.request(operation, audible: node.isPlaying))
-        driveFader()
-    }
-
-    private func apply(_ events: [TransportFader.Event]) {
-        for event in events {
-            switch event {
-            case .gain(let gain): node.volume = gain
-            case .perform:
-                let action = transportAction
-                transportAction = nil
-                pendingOperation = nil
-                action?()
-            }
+        if let token = envelope.request(operation, audible: node.isPlaying) {
+            performTransport(token)
         }
     }
 
-    private func driveFader() {
-        guard fadeTask == nil, fader.isActive else { return }
-        fadeTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                // Five gain writes per 20 ms ramp, rather than a single volume jump.
-                try? await Task.sleep(for: .seconds(TransportFader.stepSeconds))
-                guard !Task.isCancelled, let self else { return }
-                self.apply(self.fader.step())
-                if !self.fader.isActive {
-                    self.fadeTask = nil
-                    return
-                }
-            }
-        }
+    private func performTransport(_ token: UInt64) {
+        guard envelope.isCurrent(token) else { return }
+        let action = transportAction
+        transportAction = nil
+        pendingOperation = nil
+        transportDepth += 1
+        performingToken = token
+        action?()
+        transportDepth -= 1
+        // Session preparation -> load -> autoplay can nest synchronously.
+        // Keep one silent window until the entire render restart has completed.
+        if transportDepth == 0 { envelope.performed(performingToken) }
     }
 
     /// Playback position in seconds. `playerTime` counts samples rendered
@@ -231,16 +226,14 @@ final class EnginePlayer {
     /// segment at the current position, and reject callbacks from the old tail.
     func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
         let needsRebuild = nextFile != nil || (pendingOperation != nil && queue.currentToken == nil && file != nil)
-        if reason == .interruption || reason == .routeChange {
+        if reason == .interruption {
             // The system may already have stopped rendering. Discard any old
             // closure before restoring unity; never leave a half-faded transport.
             node.pause()
-            fadeTask?.cancel()
-            fadeTask = nil
             transportAction = nil
             pendingOperation = nil
-            apply(fader.invalidate())
-            if reason == .interruption { wantsPlayback = false }
+            envelope.invalidate()
+            wantsPlayback = false
         }
         guard needsRebuild else {
             queue.disablePreload()
@@ -289,7 +282,10 @@ final class EnginePlayer {
     private func completed(_ token: UUID) {
         switch queue.complete(token) {
         case .ignored: return
-        case .finished: onFinish?()
+        case .finished:
+            handlingNaturalFinish = true
+            defer { handlingNaturalFinish = false }
+            onFinish?()
         case .advanced(let id):
             guard let next = nextFile else { return }
             file = next

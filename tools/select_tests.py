@@ -43,6 +43,7 @@ CATALOG = LIBRARY | {
 MAPPING = {
     "App/EnginePlayer.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/TransportFader.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
+    "App/TransportEnvelopeDriver.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/GaplessPlayback.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/AudioPath.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/PlayerStore.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
