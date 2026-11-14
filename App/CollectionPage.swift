@@ -10,20 +10,72 @@ private final class TrackOrderMemo {
     var matchingIndices: [Int] = []
 }
 
-private struct DetailPullTarget<Pull: Gesture>: ViewModifier {
-    var enabled: Bool
-    var gesture: Pull
+/// Downward drags on the cover belong to dismissal. The list would otherwise
+/// take the touch, so this pan is required to fail before the scroll view moves.
+private struct CoverPullHandle: UIViewRepresentable {
+    var onChange: (CGFloat) -> Void
+    var onEnd: (CGSize) -> Void
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if enabled {
-            content
-                .contentShape(Rectangle())
-                .highPriorityGesture(gesture)
-                .accessibilityElement(children: .ignore)
-                .accessibilityIdentifier("detail-pull-header")
-                .accessibilityLabel("下拉返回")
-        } else {
-            content
+    func makeUIView(context: Context) -> PullView { PullView() }
+    func updateUIView(_ view: PullView, context: Context) {
+        view.onChange = onChange
+        view.onEnd = onEnd
+    }
+
+    final class PullView: UIView, UIGestureRecognizerDelegate {
+        var onChange: (CGFloat) -> Void = { _ in }
+        var onEnd: (CGSize) -> Void = { _ in }
+        private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isAccessibilityElement = true
+            accessibilityIdentifier = "detail-pull-header"
+            accessibilityLabel = "下拉返回"
+            pan.maximumNumberOfTouches = 1
+            pan.delegate = self
+            addGestureRecognizer(pan)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            let velocity = pan.velocity(in: nil)
+            return velocity.y > 0 && velocity.y > abs(velocity.x) * 1.5
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            otherGestureRecognizer is UIPanGestureRecognizer
+        }
+
+        @objc private func panned() {
+            let translation = pan.translation(in: nil)
+            let size = CGSize(width: translation.x, height: translation.y)
+            switch pan.state {
+            case .began, .changed:
+                onChange(PullDismiss.travel(size) ?? 0)
+            case .ended, .cancelled, .failed:
+                onEnd(size)
+            default:
+                break
+            }
+        }
+    }
+}
+
+private struct DetailPullTarget: ViewModifier {
+    var enabled: Bool
+    var onChange: (CGFloat) -> Void
+    var onEnd: (CGSize) -> Void
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if enabled {
+                CoverPullHandle(onChange: onChange, onEnd: onEnd)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
@@ -42,7 +94,7 @@ private struct PlaylistEditing: ViewModifier {
 
 private struct CollectionSearchField: ViewModifier {
     var enabled: Bool
-    /// Hidden until the list is pulled down, the same drawer as the album grid.
+    /// Album, playlist and song lists use the album grid's search field.
     var pullsDown: Bool
     @Binding var query: String
 
@@ -50,7 +102,9 @@ private struct CollectionSearchField: ViewModifier {
         if !enabled {
             content
         } else if pullsDown {
-            content.searchable(text: $query, placement: .navigationBarDrawer, prompt: "搜索此列表")
+            // Same modifier as the album grid. The navigation-bar drawer stays
+            // visible under the title, which is the floating field.
+            content.searchable(text: $query, prompt: "搜索此列表")
                 .scrollDismissesKeyboard(.interactively)
         } else {
             content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
@@ -233,7 +287,7 @@ struct CollectionPage: View {
                     .modifier(DetailHeaderArtwork())
                     .modifier(RasterizedCoverShadow(color: .black.opacity(0.16), radius: 16, y: 8))
                     .padding(.top, 8)
-                    .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
+                    .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
                 Text(first.albumTitle).font(.title.bold()).multilineTextAlignment(.center)
                 Button { onOpen(.artist(albumArtistRoute)) } label: {
                     Text(first.albumArtistName).font(.title3).foregroundStyle(MusicTheme.accent)
@@ -253,7 +307,7 @@ struct CollectionPage: View {
                     .modifier(DetailHeaderArtwork())
                     .padding(.top, 16)
                     .padding(.bottom, 24)
-                    .modifier(DetailPullTarget(enabled: pullsToReturn, gesture: detailPull))
+                    .modifier(DetailPullTarget(enabled: pullsToReturn, onChange: followPull, onEnd: finishPull))
                 Text(playlist.name)
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
@@ -269,21 +323,18 @@ struct CollectionPage: View {
         }
     }
 
-    /// Same drag as the player handle. A card scrubs its close; a pushed page slides.
-    private var detailPull: some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .onChanged { value in
-                guard !reduceMotion else { return }
-                let travel = PullDismiss.travel(value.translation) ?? 0
-                if detailHeader.close != nil {
-                    detailHeader.follow?(travel)
-                } else {
-                    pullOffset = travel
-                }
-            }
-            .onEnded { value in
-                releasePull(commit: PullDismiss.commits(value.translation))
-            }
+    /// Same distances as the player handle. A card scrubs its close; a pushed page slides.
+    private func followPull(_ travel: CGFloat) {
+        guard !reduceMotion else { return }
+        if detailHeader.close != nil {
+            detailHeader.follow?(travel)
+        } else {
+            pullOffset = travel
+        }
+    }
+
+    private func finishPull(_ translation: CGSize) {
+        releasePull(commit: PullDismiss.commits(translation))
     }
 
     private func releasePull(commit: Bool) {
