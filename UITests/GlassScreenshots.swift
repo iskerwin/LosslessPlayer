@@ -192,6 +192,26 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 5))
     }
 
+    func testMiniPlayerColdLaunchTransportActions() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        // Exercise fresh accessory hosts. Each control gets one tap; a lost
+        // action must fail rather than being hidden by tapMiniControl's retry.
+        for _ in 0..<5 {
+            app.launch()
+            let mini = try readyMini(in: app)
+            let player = app.descendants(matching: .any)["now-playing"]
+            mini.buttons["播放"].tap()
+            XCTAssertTrue(mini.buttons["暂停"].waitForExistence(timeout: 5))
+            XCTAssertFalse(player.exists, "Mini play must not expand the player")
+            mini.buttons["暂停"].tap()
+            XCTAssertTrue(mini.buttons["播放"].waitForExistence(timeout: 5))
+            XCTAssertFalse(player.exists, "Mini pause must not expand the player")
+            app.terminate()
+        }
+    }
+
     func testQueueButtonShowsAndHidesQueue() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
