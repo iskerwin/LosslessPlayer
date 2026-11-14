@@ -21,6 +21,13 @@ final class ArtistTagTests: XCTestCase {
             XCTAssertEqual(AudioTags.role(for: key), .albumArtist, key)
         }
         XCTAssertNil(AudioTags.role(for: "vorbis/NOT_AN_ALBUM"))
+        XCTAssertEqual(AudioTags.role(for: "id3/USLT"), .lyrics)
+        XCTAssertEqual(AudioTags.role(for: "id3/USLT/eng"), .lyrics)
+        XCTAssertEqual(AudioTags.role(for: "itsk/©lyr"), .lyrics)
+        XCTAssertEqual(AudioTags.role(for: "vorbis/LYRICS"), .lyrics)
+        XCTAssertEqual(AudioTags.role(for: "vorbis/UNSYNCEDLYRICS"), .lyrics)
+        XCTAssertEqual(AudioTags.role(for: "----:com.apple.iTunes:LYRICS"), .lyrics)
+        XCTAssertNil(AudioTags.role(for: "vorbis/NOT_LYRICS"))
     }
 
     func testVorbisCommentsPreserveRepeatedArtistsAndRejectTruncation() {

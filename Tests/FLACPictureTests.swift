@@ -228,6 +228,60 @@ final class FLACPictureTests: XCTestCase {
         XCTAssertNil(second.tracks.first?.artworkFilename)
     }
 
+    func testEmbeddedLyricsAreKeptAndASidecarReplacesThem() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("song.flac")
+        try playableFLAC(["TITLE=Song", "LYRICS=[00:01.00]Embedded line"]).write(to: file)
+        let folder = MusicFolder(id: UUID(), name: "Music", bookmark: Data())
+        let scanner = AudioScanner(root: root)
+        let first = try await scanner.scan(url: root, folder: folder, existing: []) { _, _, _ in }
+        XCTAssertTrue(first.failures.isEmpty, "\(first.failures)")
+        let track = try XCTUnwrap(first.tracks.first)
+        XCTAssertEqual(track.lyrics, "[00:01.00]Embedded line")
+        XCTAssertEqual(track.catalogVersion, AudioTags.catalogVersion)
+        XCTAssertGreaterThan(AudioTags.catalogVersion, 6)
+        let again = try await scanner.scan(url: root, folder: folder, existing: first.tracks) { _, _, _ in }
+        XCTAssertEqual(again.skipped, 1)
+        XCTAssertEqual(again.tracks.first?.lyrics, "[00:01.00]Embedded line")
+        var stale = track
+        stale.catalogVersion = 6
+        stale.lyrics = nil
+        let migrated = try await scanner.scan(url: root, folder: folder, existing: [stale]) { _, _, _ in }
+        XCTAssertEqual(migrated.skipped, 0)
+        XCTAssertEqual(migrated.tracks.first?.lyrics, "[00:01.00]Embedded line")
+        let lrc = file.deletingPathExtension().appendingPathExtension("lrc")
+        try "[00:02.00]Sidecar line".write(to: lrc, atomically: true, encoding: .utf8)
+        let replaced = try await scanner.scan(url: root, folder: folder, existing: migrated.tracks) { _, _, _ in }
+        XCTAssertEqual(replaced.skipped, 1)
+        XCTAssertEqual(replaced.tracks.first?.lyrics, "[00:02.00]Sidecar line")
+        try FileManager.default.removeItem(at: lrc)
+        let kept = try await scanner.scan(url: root, folder: folder, existing: replaced.tracks) { _, _, _ in }
+        XCTAssertEqual(kept.tracks.first?.lyrics, "[00:02.00]Sidecar line")
+    }
+
+    func testBlankEmbeddedLyricsFallThroughToTheUnsyncedTag() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try playableFLAC(["LYRICS=", "LYRICS=   ", "UNSYNCEDLYRICS=From the unsynced tag"]).write(to: root.appendingPathComponent("song.flac"))
+        let result = try await AudioScanner(root: root).scan(url: root,
+            folder: MusicFolder(id: UUID(), name: "Music", bookmark: Data()), existing: []) { _, _, _ in }
+        XCTAssertTrue(result.failures.isEmpty, "\(result.failures)")
+        XCTAssertEqual(result.tracks.first?.lyrics, "From the unsynced tag")
+    }
+
+    func testImportKeepsEmbeddedLyricsWhenTheSourceHasNoSidecar() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("song.flac")
+        try playableFLAC(["TITLE=Song", "LYRICS=Imported embedded"]).write(to: source)
+        let imported = try await AudioScanner(root: root.appendingPathComponent("Library")).importCopy(source)
+        XCTAssertEqual(imported.lyrics, "Imported embedded")
+    }
+
     func testScannerSkipsEmptyFirstFLACCommentValues() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
