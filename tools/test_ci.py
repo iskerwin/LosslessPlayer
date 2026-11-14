@@ -187,6 +187,11 @@ class WorkflowTests(unittest.TestCase):
             writes = re.search(r'contents:\s*write', path.read_text())
             self.assertEqual(bool(writes), path.name in ('dev.yml', 'preview.yml'), path.name)
 
+    def test_gate_skips_drafts_and_runs_when_ready(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        self.assertRegex(workflow, r'pull_request:\n    types: \[opened, synchronize, reopened, ready_for_review\]')
+        self.assertIn("if: github.event_name == 'pull_request' && !github.event.pull_request.draft", workflow)
+
     def test_gate_job_name_is_stable_for_branch_protection(self):
         self.assertRegex((ROOT / '.github/workflows/ci.yml').read_text(), r'\n  gate:\n')
 
