@@ -29,7 +29,8 @@ private struct CoverPullHandle: UIViewRepresentable {
 
         override init(frame: CGRect) {
             super.init(frame: frame)
-            backgroundColor = .clear
+            // A clear view is skipped by hit testing. This still looks clear.
+            backgroundColor = UIColor.white.withAlphaComponent(0.001)
             isAccessibilityElement = true
             accessibilityIdentifier = "detail-pull-header"
             accessibilityLabel = "下拉返回"
@@ -39,11 +40,6 @@ private struct CoverPullHandle: UIViewRepresentable {
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            let velocity = pan.velocity(in: nil)
-            return velocity.y > 0 && velocity.y > abs(velocity.x) * 1.5
-        }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -102,9 +98,7 @@ private struct CollectionSearchField: ViewModifier {
         if !enabled {
             content
         } else if pullsDown {
-            // Same modifier as the album grid. The navigation-bar drawer stays
-            // visible under the title, which is the floating field.
-            content.searchable(text: $query, prompt: "搜索此列表")
+            content.searchable(text: $query, placement: .navigationBarDrawer, prompt: "搜索此列表")
                 .scrollDismissesKeyboard(.interactively)
         } else {
             content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
