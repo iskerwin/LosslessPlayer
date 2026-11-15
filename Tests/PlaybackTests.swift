@@ -1366,7 +1366,8 @@ final class ArtworkAnalysisTests: XCTestCase {
             XCTAssertLessThanOrEqual(dark.b, 0.33, "dark tone too bright at hue \(hue)")
             XCTAssertGreaterThanOrEqual(light.b, 0.89, "light tone too dark at hue \(hue)")
             XCTAssertLessThanOrEqual(light.s, 0.31)
-            XCTAssertEqual(dark.h, hue, accuracy: 0.01)
+            let gap = abs(dark.h - hue)
+            XCTAssertLessThan(min(gap, 1 - gap), 0.01, "hue is kept (it wraps at 1)")
         }
         let grey = UIColor(white: 0.5, alpha: 1)
         XCTAssertLessThan(hsb(ArtworkColors.tone(for: grey, dark: true)).s, 0.01)

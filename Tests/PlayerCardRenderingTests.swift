@@ -141,12 +141,13 @@ final class PlayerCardRenderingTests: XCTestCase {
                     let offset = (y * image.width + 180) * 4
                     let rgb = Array(pixels[offset..<(offset + 3)])
                     XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(scheme), \(y)")
-                    for channel in rgb {
-                        if scheme == .light {
-                            XCTAssertGreaterThanOrEqual(channel, 205, "Light tone became dark")
-                        } else {
-                            XCTAssertLessThanOrEqual(channel, 100, "Dark tone is too bright")
-                        }
+                    // Light tone: brightness >= 0.90 and saturation <= 0.30, so no channel
+                    // below ~160 and at least one near the top. Dark tone: brightness <= 0.32.
+                    if scheme == .light {
+                        XCTAssertGreaterThanOrEqual(rgb.min()!, 160, "Light tone became dark")
+                        XCTAssertGreaterThanOrEqual(rgb.max()!, 225, "Light tone is not light")
+                    } else {
+                        XCTAssertLessThanOrEqual(rgb.max()!, 100, "Dark tone is too bright")
                     }
                     if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
                     if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
