@@ -66,6 +66,8 @@ MAPPING = {
         "MigrationAndLyricsTests", "PlaybackQueueTests", "ArtworkSwipeTests",
         "ArtworkAnalysisTests", "BrowseAndArtworkPerformanceTests", "LyricPlaybackTests",
     }, True),
+    # PlayerDismissPan decides which pans may close the zoomed player.
+    "App/PlayerPresentation.swift": ({"ArtworkSwipeTests"}, True),
     "App/MusicChrome.swift": ({"PlaybackQueueTests"}, True),
     # LibraryStore invalidates this cache during removal, rescans and cover edits.
     "App/ArtworkCache.swift": (LIBRARY | {"BrowseAndArtworkPerformanceTests", "ArtworkAnalysisTests"}, True),

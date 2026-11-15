@@ -6,15 +6,11 @@ struct LibraryView: View {
     @ObservedObject var player: PlayerStore
     @State private var nav = LibraryNavigation()
     @State private var commands = LibraryCommands()
-    /// The overlay owns player travel; the native accessory owns the resting
-    /// mini. Completion transfers ownership in one update.
-    @State private var playerPresentation = PlayerPresentationState()
-    private var showPlayer: Bool { playerPresentation.presented }
-    private var playerMounted: Bool { playerPresentation.mounted }
-    private var playerSettled: Bool { playerPresentation.settled }
-    @State private var miniSlot = PlayerMiniSlot()
-    @State private var playerGestures = PlayerGestureBridge()
-    @State private var latestMiniSlot = PlayerMiniSlotCache()
+    /// UIKit owns the player presentation (full screen, zooming from the
+    /// mini). `playerSettled` mounts the heavy system chrome after it appears.
+    @State private var showPlayer = false
+    @State private var playerSettled = false
+    @State private var playerZoom = PlayerZoomAnchor()
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -33,60 +29,24 @@ struct LibraryView: View {
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
-    /// Spring for the player card. The shell does not read its progress.
-    static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
-
     var body: some View {
-        GeometryReader { geometry in
-            let origin = geometry.frame(in: .global).origin
-            let expandedFrame = CGRect(x: 0, y: -geometry.safeAreaInsets.top,
-                                       width: geometry.size.width,
-                                       height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
-            let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            let _ = commands.update(actions: actions, onMiniMeasure: receiveMiniSlot, openPlayer: { setPlayer(true) })
-            LibraryTabs(library: library, player: player, nav: nav, commands: commands,
-                        hasCurrent: player.current != nil, miniHidden: playerMounted)
-                .accessibilityHidden(showPlayer)
-                .overlay(alignment: .topLeading) {
-                    if player.current != nil, playerMounted, miniFrame.width > 0 {
-                        PlayerMotionHost(presented: showPlayer,
-                                         generation: playerPresentation.generation,
-                                         miniFrame: miniFrame, expandedFrame: expandedFrame,
-                                         reduceMotion: reduceMotion, animation: playerAnimation,
-                                         canReopen: playerMounted && !showPlayer,
-                                         gestures: playerGestures,
-                                         onReopen: { setPlayer(true) },
-                                         onMounted: { playerPresentation.beginMountedPresentation() },
-                                         onComplete: { playerPresentation.complete($0) }) {
-                            NowPlayingBackground(library: library, player: player)
-                        } expanded: {
-                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                                setPlayer(false)
-                                pendingDelete = [track]
-                            }, onClose: { setPlayer(false) }, onPull: { playerGestures.follow($0) },
-                            onPullCancelled: { playerGestures.cancel() },
-                            presentationSettled: playerSettled)
-                            .environment(\.colorScheme, .dark)
-                            .padding(.top, geometry.safeAreaInsets.top)
-                            .padding(.bottom, geometry.safeAreaInsets.bottom)
-                            .accessibilityHidden(!showPlayer)
-                            .allowsHitTesting(showPlayer)
-                        } collapsed: {
-                            MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
-                                .accessibilityHidden(showPlayer)
-                                .allowsHitTesting(!showPlayer)
-                        }
-                        .zIndex(1)
-                    }
+        let _ = commands.update(actions: actions, openPlayer: { showPlayer = true })
+        LibraryTabs(library: library, player: player, nav: nav, commands: commands,
+                    hasCurrent: player.current != nil, zoom: playerZoom)
+            .background {
+                PlayerPresentation(isPresented: $showPlayer, anchor: playerZoom,
+                                   onSettled: { playerSettled = true }) {
+                    NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                        showPlayer = false
+                        pendingDelete = [track]
+                    }, onClose: { showPlayer = false }, presentationSettled: playerSettled)
+                    .background { NowPlayingBackground(library: library, player: player).ignoresSafeArea() }
+                    .environment(\.colorScheme, .dark)
                 }
-        }
+            }
+            .onChange(of: showPlayer) { _, shown in if !shown { playerSettled = false } }
             .onChange(of: player.current?.id) { _, currentID in
-                guard currentID == nil else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    playerPresentation.discard()
-                }
+                if currentID == nil { showPlayer = false }
             }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
@@ -186,13 +146,6 @@ struct LibraryView: View {
             }
     }
 
-    private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
-        guard latestMiniSlot.record(slot), playerMounted, slot != miniSlot else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { miniSlot = slot }
-    }
-
     private var actions: LibraryActions {
         LibraryActions(
             open: open,
@@ -228,23 +181,8 @@ struct LibraryView: View {
         }
     }
 
-    private var playerAnimation: Animation {
-        reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
-    }
-
-    /// Mounts or asks the card to travel. Progress stays inside the card.
-    private func setPlayer(_ expanded: Bool) {
-        guard let step = playerPresentation.request(expanded) else { return }
-        guard case .prepare = step else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            miniSlot = latestMiniSlot.latest
-        }
-    }
-
     private func open(_ route: LibraryRoute) {
-        setPlayer(false)
+        showPlayer = false
         lyricsTrack = nil
         nav.open(route)
     }
@@ -298,13 +236,10 @@ struct LibraryView: View {
 /// root evaluation refreshes them here, where LibraryTabs does not compare.
 private final class LibraryCommands {
     var actions = LibraryActions.none
-    var onMiniMeasure: (PlayerMiniSlot) -> Void = { _ in }
     var openPlayer: () -> Void = {}
 
-    func update(actions: LibraryActions, onMiniMeasure: @escaping (PlayerMiniSlot) -> Void,
-                openPlayer: @escaping () -> Void) {
+    func update(actions: LibraryActions, openPlayer: @escaping () -> Void) {
         self.actions = actions
-        self.onMiniMeasure = onMiniMeasure
         self.openPlayer = openPlayer
     }
 }
@@ -332,8 +267,8 @@ private struct LibraryActions {
 
 /// Applies the TabView and the native bottom accessory. The accessory
 /// replaces its mini whenever this body runs, and a tap landing during the
-/// replacement is lost. So it holds only references and the two flags that
-/// change the accessory, and re-runs only when one of them changes; the tabs
+/// replacement is lost. So it holds only references and the flag that
+/// changes the accessory, and re-runs only when it changes; the tabs
 /// and the mini observe the stores themselves.
 private struct LibraryTabs: View {
     let library: LibraryStore
@@ -341,7 +276,7 @@ private struct LibraryTabs: View {
     @Bindable var nav: LibraryNavigation
     let commands: LibraryCommands
     var hasCurrent: Bool
-    var miniHidden: Bool
+    let zoom: PlayerZoomAnchor
 
     @ViewBuilder var body: some View {
         if #available(iOS 26.1, *) {
@@ -361,12 +296,10 @@ private struct LibraryTabs: View {
         }
     }
 
-    /// At rest the native host owns the visible mini and its scroll animation.
-    /// The overlay owns it only during player presentation, with one handover
-    /// at animation completion. There is no detached glass surface at rest.
+    /// The native accessory owns the resting mini and its scroll animation; it
+    /// is also the source of the system zoom into the player.
     private var miniPlayer: some View {
-        AccessoryMini(library: library, player: player, hidden: miniHidden,
-                      onMeasure: { [commands] in commands.onMiniMeasure($0) }, open: { [commands] in commands.openPlayer() })
+        AccessoryMini(library: library, player: player, zoom: zoom, open: { [commands] in commands.openPlayer() })
     }
 
     @available(iOS 26, *)
@@ -417,17 +350,13 @@ private struct LibraryTabs: View {
 private struct AccessoryMini: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    var hidden: Bool
-    var onMeasure: (PlayerMiniSlot) -> Void
+    let zoom: PlayerZoomAnchor
     var open: () -> Void
     @State private var instance = UUID()
 
     var body: some View {
-        PlayerMiniSlotView(onMeasure: onMeasure) { compact in
-            MiniPlayer(library: library, player: player, compact: compact, open: open)
-                .opacity(hidden ? 0 : 1)
-                .allowsHitTesting(!hidden)
-                .accessibilityHidden(hidden)
+        PlayerMiniSlotView { compact in
+            MiniPlayer(library: library, player: player, compact: compact, zoom: zoom, open: open)
         }
         .onAppear { MiniAccessoryProbe.instances.insert(instance) }
         .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
@@ -971,6 +900,7 @@ struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     var compact: Bool
+    var zoom: PlayerZoomAnchor
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
@@ -978,7 +908,7 @@ struct MiniPlayer: View {
     var body: some View {
         AccessoryMiniPlayer(compact: compact, title: title, artist: artist, track: player.current,
                             root: library.root, playing: player.playing, toggle: { player.toggle() },
-                            skip: { player.skip() }, open: open)
+                            skip: { player.skip() }, open: open, zoom: zoom)
     }
 }
 
@@ -992,6 +922,7 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
+    var zoom: PlayerZoomAnchor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -1013,6 +944,7 @@ private struct AccessoryMiniPlayer: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .background(PlayerZoomSource(anchor: zoom))
             .accessibilityHint("展开播放器")
             .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {

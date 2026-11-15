@@ -1,53 +1,6 @@
 import SwiftUI
 
-/// A cold presentation first creates a zero-progress card. Its mount event
-/// starts travel only after that starting layout exists in the view tree.
-struct PlayerPresentationState {
-    enum Step: Equatable { case prepare(Int), animate(Int) }
-    private(set) var presented = false
-    private(set) var mounted = false
-    private(set) var settled = false
-    private(set) var generation = 0
-    private var pendingOpen: Int?
-
-    mutating func request(_ expanded: Bool) -> Step? {
-        guard expanded != presented else { return nil }
-        generation += 1
-        presented = expanded
-        settled = false
-        if expanded && !mounted {
-            mounted = true
-            pendingOpen = generation
-            return .prepare(generation)
-        }
-        pendingOpen = nil
-        return .animate(generation)
-    }
-
-    mutating func beginMountedPresentation() -> Int? {
-        guard let pendingOpen, pendingOpen == generation, presented else { return nil }
-        self.pendingOpen = nil
-        return pendingOpen
-    }
-
-    mutating func complete(_ token: Int) {
-        guard token == generation, pendingOpen == nil else { return }
-        if presented { settled = true }
-        else { mounted = false }
-    }
-
-    /// Removing the current track removes the card itself. Invalidate both
-    /// its pending mount and animation callbacks before another track appears.
-    mutating func discard() {
-        generation += 1
-        presented = false
-        mounted = false
-        settled = false
-        pendingOpen = nil
-    }
-}
-
-/// Shared by the resting mini (in either host) and the closing card overlay.
+/// Shared by the resting mini in either host.
 /// Ordinary drag priority preserves taps on the mini's transport buttons.
 struct MiniPlayerReopenGesture: Gesture {
     var onReopen: () -> Void
@@ -60,129 +13,6 @@ struct MiniPlayerReopenGesture: Gesture {
                     onReopen()
                 }
             }
-    }
-}
-
-/// Pure mapping shared by the finger, spring and rendered card. Progress is
-/// zero in the accessory slot and one at full screen.
-enum PlayerCardMetrics {
-    static func progress(for translation: CGFloat, distance: CGFloat) -> CGFloat {
-        guard distance > 0 else { return 1 }
-        return min(1, max(0, 1 - max(0, translation) / distance))
-    }
-
-    static func frame(progress: CGFloat, mini: CGRect, expanded: CGRect) -> CGRect {
-        let p = min(1, max(0, progress))
-        func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
-        return CGRect(x: mix(mini.minX, expanded.minX), y: mix(mini.minY, expanded.minY),
-                      width: mix(mini.width, expanded.width), height: mix(mini.height, expanded.height))
-    }
-
-    static func topRadius(_ progress: CGFloat) -> CGFloat {
-        18 + 14 * min(1, max(0, progress))
-    }
-
-    // Keep the expanded sheet opaque until the final 6% of travel. Serial
-    // fades hand over to mini only at landing, without overlapping covers
-    // or an independent timer during slow drags, reversal or spring frames.
-    static func miniOpacity(_ progress: CGFloat) -> Double {
-        Double(min(1, max(0, (0.03 - progress) / 0.03)))
-    }
-
-    static func expandedOpacity(_ progress: CGFloat) -> Double {
-        Double(min(1, max(0, (progress - 0.03) / 0.03)))
-    }
-}
-
-/// Animatable evaluates *all* derived geometry and opacity at the presented
-/// spring value, rather than starting separate implicit layout/fade animations.
-struct PlayerCard<Background: View, Expanded: View, Collapsed: View>: View, Animatable {
-    var progress: CGFloat
-    var miniFrame: CGRect
-    var expandedFrame: CGRect
-    var reduceMotion: Bool
-    var canReopen: Bool
-    var onReopen: () -> Void
-    var background: Background
-    var expanded: Expanded
-    var collapsed: Collapsed
-
-    init(progress: CGFloat, miniFrame: CGRect, expandedFrame: CGRect, reduceMotion: Bool,
-         canReopen: Bool, onReopen: @escaping () -> Void,
-         @ViewBuilder background: () -> Background,
-         @ViewBuilder expanded: () -> Expanded, @ViewBuilder collapsed: () -> Collapsed) {
-        self.progress = progress
-        self.miniFrame = miniFrame
-        self.expandedFrame = expandedFrame
-        self.reduceMotion = reduceMotion
-        self.canReopen = canReopen
-        self.onReopen = onReopen
-        self.background = background()
-        self.expanded = expanded()
-        self.collapsed = collapsed()
-    }
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    var body: some View {
-        let p = min(1, max(0, progress))
-        let frame = PlayerCardMetrics.frame(progress: p, mini: miniFrame, expanded: expandedFrame)
-        // Reduce Motion keeps both layouts stationary at their resting frames;
-        // only the same progress-driven fades run. No drag scrubbing or travel.
-        let bounds = reduceMotion && p > 0 ? expandedFrame : frame
-        let miniOrigin = reduceMotion && p > 0
-            ? CGSize(width: miniFrame.minX - bounds.minX, height: miniFrame.minY - bounds.minY)
-            : .zero
-        ZStack(alignment: .topLeading) {
-            // Keep the backdrop at its full-screen resting size. Resizing it
-            // to the shrinking card compresses the dark bottom gradient upward
-            // while the expanded controls still use full-screen coordinates.
-            // Crop one continuous texture through the card until mini takes over.
-            background
-                .frame(width: expandedFrame.width, height: expandedFrame.height)
-                .clipped()
-                .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
-                .clipped()
-                .opacity(reduceMotion ? PlayerCardMetrics.expandedOpacity(p)
-                         : 1 - PlayerCardMetrics.miniOpacity(p))
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            expanded
-                .frame(width: expandedFrame.width, height: expandedFrame.height)
-                .opacity(PlayerCardMetrics.expandedOpacity(p))
-            collapsed
-                .frame(width: miniFrame.width, height: miniFrame.height)
-                // The accessory surface remains visible when its CONTENT is
-                // hidden during travel. A second glass here nests two outlines
-                // at landing (also over the legacy inset's material).
-                .opacity(PlayerCardMetrics.miniOpacity(p))
-                .offset(miniOrigin)
-        }
-        // The expanded layout keeps its resting size inside this one card:
-        // its cover never scales or drifts diagonally toward the mini slot.
-        .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
-        .clipShape(UnevenRoundedRectangle(
-            topLeadingRadius: PlayerCardMetrics.topRadius(p),
-            bottomLeadingRadius: 18 * (1 - p),
-            bottomTrailingRadius: 18 * (1 - p),
-            topTrailingRadius: PlayerCardMetrics.topRadius(p), style: .continuous))
-        .contentShape(Rectangle())
-        .overlay {
-            // Created only after a close begins: a tap on the expanded close
-            // button cannot bubble into a parent gesture and reopen it.
-            if canReopen {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onReopen)
-                    .simultaneousGesture(MiniPlayerReopenGesture(onReopen: onReopen))
-                    .accessibilityLabel("展开播放器")
-                    .accessibilityAddTraits(.isButton)
-            }
-        }
-        .offset(x: bounds.minX, y: bounds.minY)
     }
 }
 
@@ -203,27 +33,6 @@ struct PlayerMiniGlass: ViewModifier {
     }
 }
 
-struct PlayerMiniSlot: Equatable {
-    var frame: CGRect = .zero
-    var compact = false
-}
-
-/// Record native accessory motion without publishing a root-view update for
-/// every frame. The presenter copies this value when it needs an overlay.
-final class PlayerMiniSlotCache {
-    private(set) var latest = PlayerMiniSlot()
-
-    @discardableResult
-    func record(_ slot: PlayerMiniSlot) -> Bool {
-        let frame = slot.frame
-        guard frame.minX.isFinite, frame.minY.isFinite,
-              frame.width.isFinite, frame.height.isFinite,
-              frame.width > 0, frame.height > 0, slot != latest else { return false }
-        latest = slot
-        return true
-    }
-}
-
 /// Distinct native accessory minis that appeared, and the track the mini
 /// last showed. A replaced mini drops a tap that lands during the swap, so
 /// regression tests assert that updates reach the mounted mini instead. A
@@ -238,38 +47,33 @@ final class PlayerMiniSlotCache {
     }
 }
 
-/// Native accessory ownership keeps placement and content in the same animation.
+/// Sizes the resting mini for the native accessory (or the pre-iOS 26 inset).
 struct PlayerMiniSlotView<Content: View>: View {
-    var onMeasure: (PlayerMiniSlot) -> Void
     @ViewBuilder var content: (Bool) -> Content
 
     var body: some View {
         if #available(iOS 26, *) {
-            GlassPlayerMiniSlot(onMeasure: onMeasure, content: content)
+            GlassPlayerMiniSlot(content: content)
         } else {
-            PlayerMiniSlotMeasure(compact: false, onMeasure: onMeasure) {
-                content(false).modifier(PlayerMiniGlass())
-            }
+            PlayerMiniSlotSized(compact: false) { content(false).modifier(PlayerMiniGlass()) }
         }
     }
 }
 
 @available(iOS 26, *)
 private struct GlassPlayerMiniSlot<Content: View>: View {
-    var onMeasure: (PlayerMiniSlot) -> Void
     @ViewBuilder var content: (Bool) -> Content
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
     var body: some View {
         let compact = placement == .inline
         // No app material here: inline/expanded backing is drawn by the native
         // accessory. Adding another glass surface cannot remove an opaque host.
-        PlayerMiniSlotMeasure(compact: compact, onMeasure: onMeasure) { content(compact) }
+        PlayerMiniSlotSized(compact: compact) { content(compact) }
     }
 }
 
-private struct PlayerMiniSlotMeasure<Content: View>: View {
+private struct PlayerMiniSlotSized<Content: View>: View {
     var compact: Bool
-    var onMeasure: (PlayerMiniSlot) -> Void
     @ViewBuilder var content: () -> Content
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = 56
 
@@ -277,146 +81,5 @@ private struct PlayerMiniSlotMeasure<Content: View>: View {
         content()
             .frame(maxWidth: .infinity)
             .frame(height: compact ? 36 : max(56, rowHeight))
-            .background {
-                GeometryReader { geometry in
-                    let slot = PlayerMiniSlot(frame: geometry.frame(in: .global), compact: compact)
-                    Color.clear
-                        .onAppear { report(slot) }
-                        .onChange(of: slot) { _, next in report(next) }
-                }
-            }
-    }
-
-    private func report(_ slot: PlayerMiniSlot) {
-        // Measurement is only a target for player expansion/collapse. The
-        // visible resting mini stays in this host during native minimization.
-        DispatchQueue.main.async { onMeasure(slot) }
-    }
-}
-
-/// Pull and snap-back write the card's progress. The library shell holds this
-/// object and does not observe it, so a finger update never rebuilds the tabs.
-final class PlayerGestureBridge {
-    var follow: (CGFloat) -> Void = { _ in }
-    var cancel: () -> Void = {}
-}
-
-/// Owns the spring. `LibraryView` reads only the discrete presentation state;
-/// reading `progress` there rebuilt every tab on each frame.
-struct PlayerMotionHost<Background: View, Expanded: View, Collapsed: View>: View {
-    var presented: Bool
-    var generation: Int
-    var miniFrame: CGRect
-    var expandedFrame: CGRect
-    var reduceMotion: Bool
-    var animation: Animation
-    var canReopen: Bool
-    var gestures: PlayerGestureBridge
-    var onReopen: () -> Void
-    var onMounted: () -> Int?
-    var onComplete: (Int) -> Void
-    var onEvaluate: () -> Void = {}
-    var background: Background
-    var expanded: Expanded
-    var collapsed: Collapsed
-    @State private var progress: CGFloat = 0
-    /// Generation changes before the first appearance belong to `onAppear`,
-    /// which sees the latest request. Later changes are the spring.
-    @State private var appeared = false
-
-    init(presented: Bool, generation: Int, miniFrame: CGRect, expandedFrame: CGRect,
-         reduceMotion: Bool, animation: Animation, canReopen: Bool, gestures: PlayerGestureBridge,
-         onReopen: @escaping () -> Void, onMounted: @escaping () -> Int?, onComplete: @escaping (Int) -> Void,
-         onEvaluate: @escaping () -> Void = {},
-         @ViewBuilder background: () -> Background,
-         @ViewBuilder expanded: () -> Expanded,
-         @ViewBuilder collapsed: () -> Collapsed) {
-        self.presented = presented
-        self.generation = generation
-        self.miniFrame = miniFrame
-        self.expandedFrame = expandedFrame
-        self.reduceMotion = reduceMotion
-        self.animation = animation
-        self.canReopen = canReopen
-        self.gestures = gestures
-        self.onReopen = onReopen
-        self.onMounted = onMounted
-        self.onComplete = onComplete
-        self.onEvaluate = onEvaluate
-        self.background = background()
-        self.expanded = expanded()
-        self.collapsed = collapsed()
-    }
-
-    var body: some View {
-        let _ = onEvaluate()
-        let _ = rebind()
-        PlayerCard(progress: progress, miniFrame: miniFrame, expandedFrame: expandedFrame,
-                   reduceMotion: reduceMotion, canReopen: canReopen, onReopen: onReopen) {
-            background
-        } expanded: {
-            expanded
-        } collapsed: {
-            collapsed
-        }
-        .onAppear {
-            appeared = true
-            if let token = onMounted() {
-                travel(to: 1, token: token)
-            } else if !presented {
-                travel(to: 0, token: generation)
-            }
-        }
-        .onChange(of: generation) { _, token in
-            guard appeared else { return }
-            travel(to: presented ? 1 : 0, token: token)
-        }
-        .onDisappear {
-            gestures.follow = { _ in }
-            gestures.cancel = {}
-        }
-    }
-
-    private func rebind() {
-        let distance = miniFrame.minY - expandedFrame.minY
-        let progress = $progress
-        let presented = presented
-        let reduceMotion = reduceMotion
-        let animation = animation
-        gestures.follow = { translation in
-            guard presented, !reduceMotion else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                progress.wrappedValue = PlayerCardMetrics.progress(for: translation, distance: distance)
-            }
-        }
-        gestures.cancel = {
-            guard presented else { return }
-            var transaction = Transaction(animation: animation)
-            transaction.disablesAnimations = false
-            withTransaction(transaction) {
-                withAnimation(animation) { progress.wrappedValue = 1 }
-            }
-        }
-    }
-
-    /// A value that is already at the target still completes, so a close that
-    /// wins before the cold card appears can unmount it.
-    private func travel(to target: CGFloat, token: Int) {
-        let finish = onComplete
-        if progress == target {
-            DispatchQueue.main.async { finish(token) }
-            return
-        }
-        var transaction = Transaction(animation: animation)
-        transaction.disablesAnimations = false
-        withTransaction(transaction) {
-            withAnimation(animation, completionCriteria: .removed) {
-                progress = target
-            } completion: {
-                finish(token)
-            }
-        }
     }
 }
