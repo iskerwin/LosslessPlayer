@@ -121,7 +121,7 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testSharedArtworkBackgroundPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
+    func testSharedArtworkBackgroundIsOneOpaqueToneOfTheCoverInBothAppearances() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),
             ("cool", washFixture(top: .blue, bottom: .cyan)),
@@ -130,35 +130,36 @@ final class PlayerCardRenderingTests: XCTestCase {
         ]
         for scheme in [ColorScheme.light, .dark] {
             for (name, texture) in fixtures {
-                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(analysis: texture.map { ArtworkAnalysis.make(from: $0) }, followsAppearance: true)
+                let renderer = ImageRenderer(content: ArtworkBackgroundSurface(analysis: texture.map { ArtworkAnalysis.make(from: $0) })
                     .frame(width: 360, height: 720).environment(\.colorScheme, scheme))
                 renderer.scale = 1
                 let image = try XCTUnwrap(renderer.cgImage)
                 let pixels = try rgbaPixels(in: image)
                 var samples: [[UInt8]] = []
-                // Top/bottom edges and list region must all be opaque wash.
+                // Top/bottom edges and list region must all be the same opaque tone.
                 for y in [0, 180, 540, 719] {
                     let offset = (y * image.width + 180) * 4
                     let rgb = Array(pixels[offset..<(offset + 3)])
                     XCTAssertEqual(pixels[offset + 3], 255, "Edge leak: \(name), \(scheme), \(y)")
-                    for channel in rgb {
-                        if scheme == .light {
-                            XCTAssertGreaterThanOrEqual(channel, 205, "Light wash became dark")
-                        } else {
-                            XCTAssertLessThanOrEqual(channel, 75, "Dark wash is too bright")
-                        }
+                    // Light tone: brightness >= 0.90 and saturation <= 0.30, so no channel
+                    // below ~160 and at least one near the top. Dark tone: brightness <= 0.32.
+                    if scheme == .light {
+                        XCTAssertGreaterThanOrEqual(rgb.min()!, 160, "Light tone became dark")
+                        XCTAssertGreaterThanOrEqual(rgb.max()!, 225, "Light tone is not light")
+                    } else {
+                        XCTAssertLessThanOrEqual(rgb.max()!, 100, "Dark tone is too bright")
                     }
                     if name == "warm" { XCTAssertGreaterThan(Int(rgb[0]) - Int(rgb[2]), 15) }
                     if name == "cool" { XCTAssertGreaterThan(Int(rgb[2]) - Int(rgb[0]), 15) }
-                    if name == "neutral" {
-                        XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 2)
+                    if name == "neutral" || name == "missing" {
+                        XCTAssertEqual(Double(rgb[0]), Double(rgb[2]), accuracy: 3)
                     }
                     samples.append(rgb)
                 }
                 let variation = (0..<3).map { channel in
                     Int(samples.map { $0[channel] }.max()!) - Int(samples.map { $0[channel] }.min()!)
                 }.max()!
-                XCTAssertGreaterThan(variation, 5, "Flat plate instead of texture: \(name), \(scheme)")
+                XCTAssertLessThanOrEqual(variation, 2, "Tone is not a solid colour: \(name), \(scheme)")
             }
         }
     }

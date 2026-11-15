@@ -118,10 +118,6 @@ final class PlaybackQueueTests: XCTestCase {
         let mp3 = Track(id: UUID(), filename: "b.mp3", title: "B", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 0)
         XCTAssertEqual(lossless.qualityBadge, "Lossless")
         XCTAssertEqual(mp3.qualityBadge, "MP3")
-        var brightness: CGFloat = 1
-        let dark = ArtworkColors.darkened(UIColor(hue: 0.6, saturation: 0.9, brightness: 1, alpha: 1))
-        XCTAssertTrue(dark.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil))
-        XCTAssertLessThanOrEqual(brightness, 0.36)
         XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...211), 4 / 211, accuracy: 0.0001)
         XCTAssertEqual(ScrubberMap.value(x: 50, width: 100, in: 0...10), 5, accuracy: 0.0001)
     }
@@ -1353,20 +1349,47 @@ final class ArtworkAnalysisTests: XCTestCase {
         XCTAssertTrue(image.downscaled(maxPixel: 300) === image)
     }
 
-    func testAnalysisBuildsPaletteAndTexture() {
-        let analysis = ArtworkAnalysis.make(from: solidImage(width: 200, height: 200))
-        XCTAssertEqual(analysis.palette.count, 4)
-        guard let backdrop = analysis.backdrop else {
-            return XCTFail("missing backdrop texture")
+    private func hsb(_ color: UIColor) -> (h: CGFloat, s: CGFloat, b: CGFloat) {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0
+        XCTAssertTrue(color.getHue(&h, saturation: &s, brightness: &b, alpha: nil))
+        return (h, s, b)
+    }
+
+    func testDominantColourFollowsTheCoverNotTheBackground() {
+        // A mostly black cover with a small red mark is red, not grey.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { context in
+            UIColor.black.setFill(); context.fill(CGRect(x: 0, y: 0, width: 120, height: 120))
+            UIColor.red.setFill(); context.fill(CGRect(x: 30, y: 30, width: 60, height: 60))
         }
-        XCTAssertLessThanOrEqual(max(backdrop.size.width, backdrop.size.height), 40.5)
+        let red = hsb(ArtworkColors.dominant(from: image))
+        XCTAssertTrue(red.h < 0.04 || red.h > 0.96, "hue \(red.h)")
+        XCTAssertGreaterThan(red.s, 0.8)
+        let grey = hsb(ArtworkColors.dominant(from: solidImage(width: 80, height: 80, color: UIColor(white: 0.5, alpha: 1))))
+        XCTAssertLessThan(grey.s, 0.05, "a colourless cover stays grey")
+        XCTAssertEqual(ArtworkColors.dominant(from: nil), ArtworkColors.neutral)
+    }
+
+    func testToneKeepsTextReadableInBothAppearances() {
+        for hue in stride(from: CGFloat(0), through: 1, by: 0.1) {
+            let tint = UIColor(hue: hue, saturation: 1, brightness: 1, alpha: 1)
+            let dark = hsb(ArtworkColors.tone(for: tint, dark: true))
+            let light = hsb(ArtworkColors.tone(for: tint, dark: false))
+            XCTAssertLessThanOrEqual(dark.b, 0.33, "dark tone too bright at hue \(hue)")
+            XCTAssertGreaterThanOrEqual(light.b, 0.89, "light tone too dark at hue \(hue)")
+            XCTAssertLessThanOrEqual(light.s, 0.31)
+            let gap = abs(dark.h - hue)
+            XCTAssertLessThan(min(gap, 1 - gap), 0.01, "hue is kept (it wraps at 1)")
+        }
+        let grey = UIColor(white: 0.5, alpha: 1)
+        XCTAssertLessThan(hsb(ArtworkColors.tone(for: grey, dark: true)).s, 0.01)
+        XCTAssertLessThan(hsb(ArtworkColors.tone(for: grey, dark: false)).s, 0.01)
     }
 
     func testAnalysisCacheRoundTrip() {
         let cache = ArtworkAnalysisCache.shared
         let analysis = ArtworkAnalysis.make(from: solidImage(width: 80, height: 80))
         cache.store(analysis, for: "analysis-test.jpg")
-        XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.palette.count, 4)
+        XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.tint, analysis.tint)
         XCTAssertNil(cache.analysis(for: "analysis-missing.jpg"))
     }
 }

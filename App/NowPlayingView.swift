@@ -778,7 +778,6 @@ struct NowPlayingBackground: View {
 /// cache and displayed result by URL so another collection cannot show stale art.
 struct ArtworkBackground: View {
     var url: URL?
-    var followsAppearance = false
     @State private var analysis: ArtworkAnalysis?
     @State private var resolvedURL: URL?
 
@@ -788,8 +787,7 @@ struct ArtworkBackground: View {
     }
 
     var body: some View {
-        ArtworkBackgroundSurface(analysis: displayed,
-                                 imageKey: url?.absoluteString, followsAppearance: followsAppearance)
+        ArtworkBackgroundSurface(analysis: displayed)
             .task(id: url) {
                 analysis = nil
                 resolvedURL = nil
@@ -813,36 +811,23 @@ struct ArtworkBackground: View {
     }
 }
 
-/// Shared opaque full-size surface. Details inherit the window appearance and
-/// add a legibility veil; playback retains its existing dark presentation.
+/// Shared opaque full-size surface: one solid tone of the cover's tint,
+/// following the appearance it is shown in (the player is always dark).
 struct ArtworkBackgroundSurface: View {
     var analysis: ArtworkAnalysis?
-    var imageKey: String? = nil
-    var followsAppearance = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var tone: Color {
+        let dark = scheme == .dark
+        guard let analysis else { return Color(white: dark ? 0.12 : 0.95) }
+        return Color(uiColor: ArtworkColors.tone(for: analysis.tint, dark: dark))
+    }
+
     var body: some View {
-        GeometryReader { geometry in
-            Color(white: 0.08)
-                .overlay {
-                    ArtworkBackdrop(colors: analysis?.palette.map { Color(uiColor: $0) } ?? [],
-                                    image: analysis?.backdrop, imageKey: imageKey,
-                                    extendsIntoSafeArea: false)
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.5),
-                                   value: analysis?.palette.map { Color(uiColor: $0) } ?? [])
-                }
-                .overlay {
-                    if followsAppearance {
-                        if scheme == .light { Color.white.opacity(0.82) }
-                        else { Color.black.opacity(0.72) }
-                    }
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped()
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        tone
+            .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: tone)
+            .allowsHitTesting(false)
     }
 }
 
@@ -1007,72 +992,68 @@ struct ThinScrubber: View {
     }
 }
 
+/// One tint per cover and one tone per appearance, shared by the player and the
+/// album/playlist pages so every artwork background is the same kind of surface.
 enum ArtworkColors {
-    static let fallback: [UIColor] = [
-        UIColor(red: 0.08, green: 0.12, blue: 0.20, alpha: 1),
-        UIColor(red: 0.14, green: 0.18, blue: 0.30, alpha: 1),
-        UIColor(red: 0.06, green: 0.09, blue: 0.16, alpha: 1),
-        UIColor(red: 0.11, green: 0.15, blue: 0.24, alpha: 1)
-    ]
+    /// Neutral tint for a missing or unreadable cover.
+    static let neutral = UIColor(white: 0.5, alpha: 1)
 
-    static func palette(from image: UIImage?) -> [UIColor] {
-        guard let image, let ci = CIImage(image: image) else { return fallback }
-        let extent = ci.extent.integral
-        guard extent.width > 1, extent.height > 1 else { return fallback }
-        let regions = [
-            CGRect(x: extent.minX, y: extent.midY, width: extent.width / 2, height: extent.height / 2),
-            CGRect(x: extent.midX, y: extent.midY, width: extent.width / 2, height: extent.height / 2),
-            CGRect(x: extent.minX, y: extent.minY, width: extent.width / 2, height: extent.height / 2),
-            CGRect(x: extent.midX, y: extent.minY, width: extent.width / 2, height: extent.height / 2)
-        ]
-        let colors = regions.compactMap { average(ci, rect: $0) }.map(darkened)
-        return colors.count == 4 ? colors : fallback
-    }
-
-    static func darkened(_ color: UIColor) -> UIColor {
-        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
-        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
-            return UIColor(white: 0.12, alpha: 1)
+    /// The cover's dominant colour: the hue family with the most saturated,
+    /// bright pixels wins, and its pixels are averaged. A cover with no real
+    /// colour (greyscale) falls back to the plain average, which stays grey.
+    static func dominant(from image: UIImage?) -> UIColor {
+        guard let cg = image?.cgImage else { return neutral }
+        let side = 24
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        guard let context = CGContext(data: &pixels, width: side, height: side, bitsPerComponent: 8,
+                                      bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return neutral }
+        context.interpolationQuality = .medium
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+        let bins = 12
+        var weight = [Double](repeating: 0, count: bins)
+        var sums = [[Double]](repeating: [0, 0, 0], count: bins)
+        var average: [Double] = [0, 0, 0]
+        for index in 0..<(side * side) {
+            let r = Double(pixels[index * 4]) / 255, g = Double(pixels[index * 4 + 1]) / 255, b = Double(pixels[index * 4 + 2]) / 255
+            average[0] += r; average[1] += g; average[2] += b
+            var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
+            UIColor(red: r, green: g, blue: b, alpha: 1).getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+            guard saturation > 0.15, brightness > 0.15 else { continue }
+            let bin = min(bins - 1, Int(hue * CGFloat(bins)))
+            let w = Double(saturation * brightness)
+            weight[bin] += w
+            sums[bin][0] += r * w; sums[bin][1] += g * w; sums[bin][2] += b * w
         }
-        return UIColor(hue: hue, saturation: min(0.48, saturation * 0.65), brightness: min(0.36, max(0.10, brightness * 0.60)), alpha: 1)
+        let count = Double(side * side)
+        guard let best = weight.indices.max(by: { weight[$0] < weight[$1] }), weight[best] > count * 0.05 else {
+            return UIColor(red: average[0] / count, green: average[1] / count, blue: average[2] / count, alpha: 1)
+        }
+        let w = weight[best]
+        return UIColor(red: sums[best][0] / w, green: sums[best][1] / w, blue: sums[best][2] / w, alpha: 1)
     }
 
-    /// One shared context: creating a CIContext per region per call was a
-    /// visible part of the old main-thread cost.
-    private static let context = CIContext(options: [.workingColorSpace: NSNull()])
-
-    private static func average(_ image: CIImage, rect: CGRect) -> UIColor? {
-        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
-        filter.setValue(image, forKey: kCIInputImageKey)
-        filter.setValue(CIVector(cgRect: rect), forKey: kCIInputExtentKey)
-        guard let output = filter.outputImage else { return nil }
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        context.render(
-            output,
-            toBitmap: &bitmap,
-            rowBytes: 4,
-            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-            format: .RGBA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
-        return UIColor(red: CGFloat(bitmap[0]) / 255, green: CGFloat(bitmap[1]) / 255, blue: CGFloat(bitmap[2]) / 255, alpha: 1)
+    /// The surface colour for a tint. Dark keeps the hue deep enough for white
+    /// text; light keeps it pale enough for dark text. A grey tint stays grey.
+    static func tone(for tint: UIColor, dark: Bool) -> UIColor {
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
+        guard tint.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil) else {
+            return UIColor(white: dark ? 0.14 : 0.95, alpha: 1)
+        }
+        if dark {
+            return UIColor(hue: hue, saturation: min(0.60, saturation * 0.85), brightness: 0.16 + 0.16 * brightness, alpha: 1)
+        }
+        return UIColor(hue: hue, saturation: min(0.30, saturation * 0.45), brightness: 0.90 + 0.06 * brightness, alpha: 1)
     }
 }
 
-/// Everything the backdrop needs from one artwork, computed once per file
-/// off the main thread: the four-quadrant palette and a small texture that
-/// reads as a blur once stretched full-screen. A static texture replaces
-/// the full-screen mesh gradient, whose per-frame rendering made the
-/// presentation drop frames; a textured backdrop is also what Music
-/// composites behind its player.
+/// Everything the background needs from one artwork, computed once per file
+/// off the main thread: its dominant tint.
 struct ArtworkAnalysis {
-    var palette: [UIColor]
-    var backdrop: UIImage?
+    var tint: UIColor
 
     static func make(from image: UIImage) -> ArtworkAnalysis {
-        let small = image.downscaled(maxPixel: 96)
-        return ArtworkAnalysis(palette: ArtworkColors.palette(from: small),
-                               backdrop: small.downscaled(maxPixel: 40))
+        ArtworkAnalysis(tint: ArtworkColors.dominant(from: image.downscaled(maxPixel: 96)))
     }
 }
 
@@ -1110,38 +1091,6 @@ extension UIImage {
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             draw(in: CGRect(origin: .zero, size: target))
         }
-    }
-}
-
-struct ArtworkBackdrop: View {
-    var colors: [Color]
-    var image: UIImage? = nil
-    var imageKey: String? = nil
-    var extendsIntoSafeArea = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        ZStack {
-            LinearGradient(colors: colors.isEmpty ? ArtworkColors.fallback.map { Color(uiColor: $0) } : colors,
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .id(imageKey)
-                    .transition(.opacity)
-                    .accessibilityHidden(true)
-            }
-        }
-        .overlay {
-            ZStack {
-                Color.black.opacity(image == nil ? 0 : 0.22)
-                LinearGradient(colors: [.white.opacity(0.06), .clear, .black.opacity(0.32)],
-                               startPoint: .top, endPoint: .bottom)
-            }
-        }
-        .ignoresSafeArea(edges: extendsIntoSafeArea ? .all : [])
-        .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: imageKey)
     }
 }
 

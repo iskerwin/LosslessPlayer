@@ -75,7 +75,7 @@ struct CollectionPage: View {
             .modifier(CollectionSearchField(enabled: supportsSearch && !editing, query: $query))
             .background {
                 if usesArtworkBackground {
-                    ArtworkBackground(url: backgroundArtworkURL, followsAppearance: true)
+                    ArtworkBackground(url: backgroundArtworkURL)
                         .ignoresSafeArea()
                 }
             }
