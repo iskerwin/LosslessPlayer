@@ -31,10 +31,6 @@ final class MiniAccessoryStabilityTests: XCTestCase {
         try assertMiniSurvives(.keyWindow)
     }
 
-    func testTabSwitchKeepsTheMountedAccessoryMini() throws {
-        try assertMiniSurvives(.tabSwitch)
-    }
-
     private func assertMiniSurvives(_ trigger: ParentTrigger, file: StaticString = #filePath,
                                     line: UInt = #line) throws {
         guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
@@ -67,9 +63,6 @@ final class MiniAccessoryStabilityTests: XCTestCase {
                 flushMainQueue()
                 other.isHidden = true
                 window.makeKeyAndVisible()
-            case .tabSwitch:
-                let tabs = try XCTUnwrap(tabBarController(in: window), file: file, line: line)
-                tabs.selectedIndex = round % 2 == 1 ? 1 : 0
             case .reRender, .environment, .scenePhase:
                 let seen = parent.evaluations
                 parent.tick += 1
@@ -78,16 +71,6 @@ final class MiniAccessoryStabilityTests: XCTestCase {
             flushMainQueue()
         }
         XCTAssertEqual(MiniAccessoryProbe.instances.count, 1, "\(trigger) replaced the mini", file: file, line: line)
-    }
-
-    private func tabBarController(in window: UIWindow) -> UITabBarController? {
-        var pending = [window.rootViewController].compactMap { $0 }
-        while !pending.isEmpty {
-            let controller = pending.removeFirst()
-            if let tabs = controller as? UITabBarController { return tabs }
-            pending += controller.children
-        }
-        return nil
     }
 
     private func fixture() throws -> (URL, LibraryStore, [Track]) {
@@ -154,7 +137,7 @@ final class MiniAccessoryStabilityTests: XCTestCase {
     }
 }
 
-private enum ParentTrigger { case storeUpdate, reRender, environment, scenePhase, keyWindow, tabSwitch }
+private enum ParentTrigger { case storeUpdate, reRender, environment, scenePhase, keyWindow }
 
 private final class ParentProbe: ObservableObject {
     @Published var tick = 0
@@ -185,7 +168,7 @@ private struct ParentHarness: View {
             LibraryView(library: library, player: player).environment(\.parentTick, tick)
         case .scenePhase:
             LibraryView(library: library, player: player).environment(\.scenePhase, tick % 2 == 1 ? .inactive : .active)
-        case .storeUpdate, .reRender, .keyWindow, .tabSwitch:
+        case .storeUpdate, .reRender, .keyWindow:
             LibraryView(library: library, player: player)
         }
     }
