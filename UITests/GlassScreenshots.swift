@@ -229,18 +229,6 @@ final class GlassScreenshots: XCTestCase {
         let start = screenPoint(in: app, mini.frame, dx: 0.35, dy: 0.5)
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
         let player = app.descendants(matching: .any)["now-playing"]
-        if !player.waitForExistence(timeout: 8) {
-            // A drag can be lost on a slow simulator, the same class as the
-            // lost scroll gesture already retried once in
-            // checkNativeBottomAccessory. Only retry after the full
-            // appearance budget expires, so a merely slow expansion is never
-            // double-dragged; re-resolve a settled mini first, then deliver
-            // the drag once more with the same full 8 s budget. The final
-            // gate below is unchanged.
-            let freshMini = try readyMiniFrame(in: app, settled: true)
-            let retryStart = screenPoint(in: app, freshMini.frame, dx: 0.35, dy: 0.5)
-            retryStart.press(forDuration: 0.1, thenDragTo: retryStart.withOffset(CGVector(dx: 0, dy: -100)))
-        }
         XCTAssertTrue(player.waitForExistence(timeout: 8), "The mini host must deliver the upward drag")
         assertHittable(player.buttons["收起播放器"], "Player collapse button must be hittable after swipe-up expand")
         XCTAssertFalse(player.scrollViews["now-playing-queue-scroll"].exists)
@@ -373,10 +361,7 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(mini.waitForExistence(timeout: 20))
         // Cover coordinates target the actual image, not just the page margin.
         for region in ["artwork", "title", "background", "handle"] {
-            // Use the retry-hardened tap: a raw mini.tap() loses the first
-            // tap when the player is still appearing (run 40987569389 :125,
-            // now-playing 8 s timeout), while tapMini retries within the
-            // same 8 s budget.
+            // tapMini taps the ready frame's center, not the AX activation point.
             try tapMini(in: app)
             let player = app.descendants(matching: .any)["now-playing"]
             XCTAssertTrue(player.waitForExistence(timeout: 8))
@@ -475,10 +460,10 @@ final class GlassScreenshots: XCTestCase {
             .press(forDuration: 0.2, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.35)))
         XCTAssertTrue(player.staticTexts["Stop and Stare"].waitForExistence(timeout: 8))
         XCTAssertFalse(player.staticTexts["Apologize"].exists)
-        // The swipe does not return until the transition is idle, and the
-        // new song keeps playing during that wait. Past 3 seconds,
-        // skip(backwards:) restarts this song, so park the playhead first.
-        player.buttons["暂停"].tap()
+        // The fixture starts paused, and skipping keeps that state.
+        XCTAssertTrue(player.buttons["播放"].exists)
+        // Past 3 seconds, skip(backwards:) restarts this song instead of
+        // going back, so park the playhead at the start first.
         let progress = player.descendants(matching: .any)["playback-progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 5))
         progress.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
@@ -794,34 +779,18 @@ final class GlassScreenshots: XCTestCase {
         let mini = try readyMiniFrame(in: app, file: file, line: line)
         // Use the ready frame's center instead of the accessory's AX activation point.
         screenPoint(in: app, mini.frame, dx: 0.5, dy: 0.5).tap()
+        // One tap. Lost taps were the accessory replacing its mini during a
+        // shell update (MiniAccessoryStabilityTests), not simulator noise.
         let player = app.descendants(matching: .any)["now-playing"]
-        if !player.waitForExistence(timeout: 2) {
-            let freshMini = try readyMiniFrame(in: app, file: file, line: line)
-            screenPoint(in: app, freshMini.frame, dx: 0.5, dy: 0.5).tap()
-            // Each attempt gets the full appearance budget. Sharing the
-            // original 8 s across first tap and retry left no expand time
-            // after a lost first tap (run 41019339693: retry at 17.55 s,
-            // budget exhausted at 19.29 s). The assertion itself is
-            // unchanged: the player appears after tapping the mini.
-            XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
-        }
+        XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
     }
 
-    /// Taps a mini control and asserts its effect. The simulator accessory
-    /// can drop a touch outright (run 41071297827: a tap on 播放 left the
-    /// screen unchanged for 22 s), so retry once — but only after the full
-    /// budget expires: these controls toggle or skip, and a second tap on a
-    /// merely slow first one would undo or overshoot it, failing honestly
-    /// below rather than passing. The final assertion and budget are the
-    /// ones the test used before.
+    /// Taps a mini control once and asserts its effect.
     private func tapMiniControl(_ label: String, in app: XCUIApplication, until effect: XCUIElement,
                                 timeout: TimeInterval, file: StaticString = #filePath,
                                 line: UInt = #line) throws {
         try readyMini(in: app, file: file, line: line).buttons[label].tap()
-        if !effect.waitForExistence(timeout: timeout) {
-            try readyMini(in: app, file: file, line: line).buttons[label].tap()
-            XCTAssertTrue(effect.waitForExistence(timeout: timeout), file: file, line: line)
-        }
+        XCTAssertTrue(effect.waitForExistence(timeout: timeout), file: file, line: line)
     }
 
     /// Measure actual List cells, including any system insets outside SongRow.

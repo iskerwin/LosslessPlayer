@@ -4,16 +4,8 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    @State private var tab = AppTab.library
-    @State private var libraryPath = NavigationPath()
-    @State private var playlistPath = NavigationPath()
-    @State private var favoritesPath = NavigationPath()
-    @State private var searchPath = NavigationPath()
-    @Namespace private var libraryZoom
-    @Namespace private var playlistZoom
-    @Namespace private var favoritesZoom
-    @Namespace private var searchZoom
-    @State private var searchFieldFocused = false
+    @State private var nav = LibraryNavigation()
+    @State private var commands = LibraryCommands()
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
     @State private var playerPresentation = PlayerPresentationState()
@@ -26,9 +18,6 @@ struct LibraryView: View {
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
-    @State private var query = ""
-    @State private var artistQuery = ""
-    @State private var albumQuery = ""
     @State private var playlistName = ""
     @State private var creatingPlaylist = false
     @State private var playlistBatch: TrackBatch?
@@ -54,7 +43,9 @@ struct LibraryView: View {
                                        width: geometry.size.width,
                                        height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
             let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            playerTabs
+            let _ = commands.update(actions: actions, onMiniMeasure: receiveMiniSlot, openPlayer: { setPlayer(true) })
+            LibraryTabs(library: library, player: player, nav: nav, commands: commands,
+                        hasCurrent: player.current != nil, miniHidden: playerMounted)
                 .accessibilityHidden(showPlayer)
                 .overlay(alignment: .topLeading) {
                     if player.current != nil, playerMounted, miniFrame.width > 0 {
@@ -195,18 +186,6 @@ struct LibraryView: View {
             }
     }
 
-    /// At rest the native host owns the visible mini and its scroll animation.
-    /// The overlay owns it only during player presentation, with one handover
-    /// at animation completion. There is no detached glass surface at rest.
-    private var miniPlayer: some View {
-        PlayerMiniSlotView(onMeasure: receiveMiniSlot) { compact in
-            MiniPlayer(library: library, player: player, compact: compact) { setPlayer(true) }
-                .opacity(playerMounted ? 0 : 1)
-                .allowsHitTesting(!playerMounted)
-                .accessibilityHidden(playerMounted)
-        }
-    }
-
     private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
         guard latestMiniSlot.record(slot), playerMounted, slot != miniSlot else { return }
         var transaction = Transaction()
@@ -214,49 +193,267 @@ struct LibraryView: View {
         withTransaction(transaction) { miniSlot = slot }
     }
 
-    @ViewBuilder private var playerTabs: some View {
+    private var actions: LibraryActions {
+        LibraryActions(
+            open: open,
+            imports: imports,
+            addToPlaylist: { playlistBatch = TrackBatch(tracks: $0) },
+            delete: { pendingDelete = $0 },
+            lyrics: { lyricsTrack = $0 },
+            identify: { matchingTrack = $0 },
+            rename: beginRename,
+            export: beginExport,
+            addSongs: { songPicker = $0 },
+            createPlaylist: { creatingPlaylist = true },
+            batchFill: { batchFill = true }
+        )
+    }
+
+    private var imports: ImportCommands {
+        ImportCommands(
+            addFolder: { importKind = .folders; pickerPresented = true },
+            addFiles: { importKind = .files; pickerPresented = true },
+            newPlaylist: { creatingPlaylist = true },
+            importPlaylist: { importKind = .playlist; pickerPresented = true },
+            showFolders: { showSources = true },
+            folderPlaylists: { importKind = .folderPlaylists; pickerPresented = true }
+        )
+    }
+
+    private var pickerTypes: [UTType] {
+        switch importKind {
+        case .folders, .folderPlaylists: return [.folder]
+        case .files: return [.audio]
+        case .playlist: return PlaylistFileTypes.readable
+        }
+    }
+
+    private var playerAnimation: Animation {
+        reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
+    }
+
+    /// Mounts or asks the card to travel. Progress stays inside the card.
+    private func setPlayer(_ expanded: Bool) {
+        guard let step = playerPresentation.request(expanded) else { return }
+        guard case .prepare = step else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            miniSlot = latestMiniSlot.latest
+        }
+    }
+
+    private func open(_ route: LibraryRoute) {
+        setPlayer(false)
+        lyricsTrack = nil
+        nav.open(route)
+    }
+
+    private func beginRename(_ playlist: Playlist) {
+        playlistName = playlist.name
+        renamingPlaylist = playlist
+    }
+
+    private func beginExport(_ playlist: Playlist, tracks: [Track]) {
+        exportText = PlaylistExchange.render(tracks)
+        exportName = playlist.name.replacingOccurrences(of: "/", with: "-")
+        exportPresented = true
+    }
+
+    private func remove(_ tracks: [Track]) {
+        for track in tracks {
+            player.stopIfCurrent(track)
+            library.remove(track)
+        }
+        pendingDelete = []
+    }
+}
+
+/// Tab selection, navigation paths and browse queries. Observable, so each
+/// tab reads only its own path and query.
+@Observable private final class LibraryNavigation {
+    var tab = AppTab.library
+    var libraryPath = NavigationPath()
+    var playlistPath = NavigationPath()
+    var favoritesPath = NavigationPath()
+    var searchPath = NavigationPath()
+    var query = ""
+    var artistQuery = ""
+    var albumQuery = ""
+    var searchFieldFocused = false
+
+    func open(_ route: LibraryRoute) {
+        switch tab {
+        case .library: libraryPath.append(route)
+        case .playlists: playlistPath.append(route)
+        case .favorites: favoritesPath.append(route)
+        case .search: searchPath.append(route)
+        }
+    }
+}
+
+/// The shell's closures behind one stable reference. Closures made in the
+/// root body are new values on every evaluation, and handing them to
+/// LibraryTabs made SwiftUI treat it as changed and re-run its body. Each
+/// root evaluation refreshes them here, where LibraryTabs does not compare.
+private final class LibraryCommands {
+    var actions = LibraryActions.none
+    var onMiniMeasure: (PlayerMiniSlot) -> Void = { _ in }
+    var openPlayer: () -> Void = {}
+
+    func update(actions: LibraryActions, onMiniMeasure: @escaping (PlayerMiniSlot) -> Void,
+                openPlayer: @escaping () -> Void) {
+        self.actions = actions
+        self.onMiniMeasure = onMiniMeasure
+        self.openPlayer = openPlayer
+    }
+}
+
+/// What browse pages ask of the shell: navigation that also closes the
+/// player, and the sheets, alerts and pickers the shell presents.
+private struct LibraryActions {
+    var open: (LibraryRoute) -> Void
+    var imports: ImportCommands
+    var addToPlaylist: ([Track]) -> Void
+    var delete: ([Track]) -> Void
+    var lyrics: (Track) -> Void
+    var identify: (Track) -> Void
+    var rename: (Playlist) -> Void
+    var export: (Playlist, [Track]) -> Void
+    var addSongs: (Playlist) -> Void
+    var createPlaylist: () -> Void
+    var batchFill: () -> Void
+
+    static let none = LibraryActions(open: { _ in }, imports: ImportCommands(addFolder: {}, addFiles: {}, newPlaylist: {},
+        importPlaylist: {}, showFolders: {}, folderPlaylists: {}), addToPlaylist: { _ in }, delete: { _ in },
+        lyrics: { _ in }, identify: { _ in }, rename: { _ in }, export: { _, _ in }, addSongs: { _ in },
+        createPlaylist: {}, batchFill: {})
+}
+
+/// Applies the TabView and the native bottom accessory. The accessory
+/// replaces its mini whenever this body runs, and a tap landing during the
+/// replacement is lost. So it holds only references and the two flags that
+/// change the accessory, and re-runs only when one of them changes; the tabs
+/// and the mini observe the stores themselves.
+private struct LibraryTabs: View {
+    let library: LibraryStore
+    let player: PlayerStore
+    @Bindable var nav: LibraryNavigation
+    let commands: LibraryCommands
+    var hasCurrent: Bool
+    var miniHidden: Bool
+
+    @ViewBuilder var body: some View {
         if #available(iOS 26.1, *) {
-            glassTabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory(isEnabled: player.current != nil) {
+            glassTabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory(isEnabled: hasCurrent) {
                 miniPlayer
             }
         } else if #available(iOS 26.0, *) {
             glassTabs.tabBarMinimizeBehavior(.onScrollDown).tabViewBottomAccessory {
-                if player.current != nil { miniPlayer }
+                if hasCurrent { miniPlayer }
             }
         } else {
             legacyTabs.safeAreaInset(edge: .bottom, spacing: 0) {
-                if player.current != nil {
+                if hasCurrent {
                     miniPlayer
                 }
             }
         }
     }
 
+    /// At rest the native host owns the visible mini and its scroll animation.
+    /// The overlay owns it only during player presentation, with one handover
+    /// at animation completion. There is no detached glass surface at rest.
+    private var miniPlayer: some View {
+        AccessoryMini(library: library, player: player, hidden: miniHidden,
+                      onMeasure: { [commands] in commands.onMiniMeasure($0) }, open: { [commands] in commands.openPlayer() })
+    }
+
     @available(iOS 26, *)
     private var glassTabs: some View {
-        TabView(selection: $tab) {
-            Tab("资料库", systemImage: "square.stack", value: AppTab.library) { libraryStack }
-            Tab("歌单", systemImage: "music.note.list", value: AppTab.playlists) { playlistStack }
-            Tab("收藏", systemImage: "star.fill", value: AppTab.favorites) { favoritesStack }
-            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { searchStack }
+        TabView(selection: $nav.tab) {
+            Tab("资料库", systemImage: "square.stack", value: AppTab.library) { browser(.library) }
+            Tab("歌单", systemImage: "music.note.list", value: AppTab.playlists) { browser(.playlists) }
+            Tab("收藏", systemImage: "star.fill", value: AppTab.favorites) { browser(.favorites) }
+            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { browser(.search) }
         }
-        .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .searchReselect(title: "搜索") { nav.searchFieldFocused = true }
         .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var legacyTabs: some View {
-        TabView(selection: $tab) {
-            libraryStack.tabItem { Label("资料库", systemImage: "square.stack") }.tag(AppTab.library)
-            playlistStack.tabItem { Label("歌单", systemImage: "music.note.list") }.tag(AppTab.playlists)
-            favoritesStack.tabItem { Label("收藏", systemImage: "star.fill") }.tag(AppTab.favorites)
-            searchStack.tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
+        TabView(selection: $nav.tab) {
+            browser(.library).tabItem { Label("资料库", systemImage: "square.stack") }.tag(AppTab.library)
+            browser(.playlists).tabItem { Label("歌单", systemImage: "music.note.list") }.tag(AppTab.playlists)
+            browser(.favorites).tabItem { Label("收藏", systemImage: "star.fill") }.tag(AppTab.favorites)
+            browser(.search).tabItem { Label("搜索", systemImage: "magnifyingglass") }.tag(AppTab.search)
         }
-        .searchReselect(title: "搜索") { searchFieldFocused = true }
+        .searchReselect(title: "搜索") { nav.searchFieldFocused = true }
         .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
+    private func browser(_ root: AppTab) -> some View {
+        LibraryBrowser(library: library, player: player, nav: nav, actions: commands.actions, root: root)
+    }
+
+    /// Second tap on the playlist tab. Already at the home does nothing.
+    /// Every pushed page, including album and playlist detail, pops to the root.
+    private func returnToPlaylistHome() {
+        switch PlaylistTabNavigation.step(pathIsEmpty: nav.playlistPath.isEmpty) {
+        case .stay:
+            break
+        case .popPath:
+            var transaction = Transaction()
+            transaction.disablesAnimations = false
+            withTransaction(transaction) {
+                nav.playlistPath = NavigationPath()
+            }
+        }
+    }
+}
+
+/// The native accessory's mini. It observes the stores itself, so playback
+/// changes update it in place instead of re-running `LibraryTabs`.
+private struct AccessoryMini: View {
+    @ObservedObject var library: LibraryStore
+    @ObservedObject var player: PlayerStore
+    var hidden: Bool
+    var onMeasure: (PlayerMiniSlot) -> Void
+    var open: () -> Void
+    @State private var instance = UUID()
+
+    var body: some View {
+        PlayerMiniSlotView(onMeasure: onMeasure) { compact in
+            MiniPlayer(library: library, player: player, compact: compact, open: open)
+                .opacity(hidden ? 0 : 1)
+                .allowsHitTesting(!hidden)
+                .accessibilityHidden(hidden)
+        }
+        .onAppear { MiniAccessoryProbe.instances.insert(instance) }
+        .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
+    }
+}
+
+/// One tab's navigation stack and the browse pages pushed onto it.
+private struct LibraryBrowser: View {
+    @ObservedObject var library: LibraryStore
+    @ObservedObject var player: PlayerStore
+    @Bindable var nav: LibraryNavigation
+    let actions: LibraryActions
+    let root: AppTab
+    @Namespace private var zoom
+
+    @ViewBuilder var body: some View {
+        switch root {
+        case .library: libraryStack
+        case .playlists: playlistStack
+        case .favorites: favoritesStack
+        case .search: searchStack
+        }
+    }
+
     private var libraryStack: some View {
-        NavigationStack(path: $libraryPath) {
+        NavigationStack(path: $nav.libraryPath) {
             libraryHome
                 .navigationTitle("资料库")
                 .navigationBarTitleDisplayMode(.large)
@@ -264,58 +461,58 @@ struct LibraryView: View {
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
                 .navigationDestination(for: DetailZoomRoute.self) { detail in
                     destination(detail.route)
-                        .modifier(DetailZoomDestination(id: detail, namespace: libraryZoom))
+                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
                 }
         }
-        .environment(\.detailZoomNamespace, libraryZoom)
+        .environment(\.detailZoomNamespace, zoom)
     }
 
     private var playlistStack: some View {
-        NavigationStack(path: $playlistPath) {
-            PlaylistHome(library: library, player: player, imports: imports, onOpen: open, onRename: beginRename, onCreate: {
-                creatingPlaylist = true
-            }, onAddSongs: { songPicker = $0 }, onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) })
+        NavigationStack(path: $nav.playlistPath) {
+            PlaylistHome(library: library, player: player, imports: actions.imports, onOpen: actions.open, onRename: actions.rename, onCreate: {
+                actions.createPlaylist()
+            }, onAddSongs: { actions.addSongs($0) }, onAddToPlaylist: { actions.addToPlaylist($0) })
             .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
             .navigationDestination(for: DetailZoomRoute.self) { detail in
                 destination(detail.route)
-                    .modifier(DetailZoomDestination(id: detail, namespace: playlistZoom))
+                    .modifier(DetailZoomDestination(id: detail, namespace: zoom))
             }
         }
-        .environment(\.detailZoomNamespace, playlistZoom)
+        .environment(\.detailZoomNamespace, zoom)
     }
 
     private var favoritesStack: some View {
-        NavigationStack(path: $favoritesPath) {
+        NavigationStack(path: $nav.favoritesPath) {
             page(library.favoriteTracks, title: "收藏", kind: .favorites, showsBack: false)
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
                 .navigationDestination(for: DetailZoomRoute.self) { detail in
                     destination(detail.route)
-                        .modifier(DetailZoomDestination(id: detail, namespace: favoritesZoom))
+                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
                 }
         }
-        .environment(\.detailZoomNamespace, favoritesZoom)
+        .environment(\.detailZoomNamespace, zoom)
     }
 
     private var searchStack: some View {
-        NavigationStack(path: $searchPath) {
+        NavigationStack(path: $nav.searchPath) {
             searchPage
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
                 .navigationDestination(for: DetailZoomRoute.self) { detail in
                     destination(detail.route)
-                        .modifier(DetailZoomDestination(id: detail, namespace: searchZoom))
+                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
                 }
         }
-        .environment(\.detailZoomNamespace, searchZoom)
+        .environment(\.detailZoomNamespace, zoom)
     }
 
     private var searchPage: some View {
         searchResults
-            .searchable(text: $query, isPresented: $searchFieldFocused, prompt: "歌曲、艺术家、专辑、歌单")
+            .searchable(text: $nav.query, isPresented: $nav.searchFieldFocused, prompt: "歌曲、艺术家、专辑、歌单")
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("搜索")
             .navigationBarTitleDisplayMode(.large)
-            .onChange(of: tab) { _, new in
-                if new != .search { searchFieldFocused = false }
+            .onChange(of: nav.tab) { _, new in
+                if new != .search { nav.searchFieldFocused = false }
             }
     }
 
@@ -324,14 +521,14 @@ struct LibraryView: View {
     /// exist implicitly through their songs. An empty query shows the
     /// search prompt, not the whole library.
     @ViewBuilder private var searchResults: some View {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = nav.query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             ContentUnavailableView("搜索你的资料库", systemImage: "magnifyingglass",
                                    description: Text("输入歌曲、艺术家、专辑或歌单名称"))
         } else {
             let results = library.searchResults(matching: trimmed)
             if results.isEmpty {
-                ContentUnavailableView.search(text: query)
+                ContentUnavailableView.search(text: nav.query)
             } else {
                 let songContext = trackContextID(results.songs)
                 List {
@@ -341,7 +538,7 @@ struct LibraryView: View {
                                 let tracks = results.tracksByArtist[artist] ?? []
                                 browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first,
                                           groups: collectionGroups(tracks, order: .title)) {
-                                    open(.artist(artist))
+                                    actions.open(.artist(artist))
                                 }
                             }
                         }
@@ -352,7 +549,7 @@ struct LibraryView: View {
                                 browseRow(title: album.name, subtitle: album.artist,
                                           artwork: album.tracks.first { $0.artworkFilename != nil } ?? album.tracks.first,
                                           groups: collectionGroups(album.tracks, artist: artistRoute(for: album), cover: LibraryStore.coverTarget(album.tracks))) {
-                                    open(.album(album.id))
+                                    actions.open(.album(album.id))
                                 }
                             }
                         }
@@ -360,7 +557,7 @@ struct LibraryView: View {
                     if !results.playlists.isEmpty {
                         Section("歌单") {
                             ForEach(results.playlists) { playlist in
-                                Button { open(.playlist(playlist.id)) } label: {
+                                Button { actions.open(.playlist(playlist.id)) } label: {
                                     HStack(spacing: 12) {
                                         PlaylistCover(playlist: playlist, library: library)
                                             .frame(width: 48, height: 48)
@@ -389,8 +586,8 @@ struct LibraryView: View {
                                                handlers: searchHandlers(results.songs))
                                     .equatable()
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        Button("从资料库中删除", role: .destructive) { pendingDelete = [track] }
-                                        Button("添加到歌单") { playlistBatch = TrackBatch(tracks: [track]) }.tint(MusicTheme.accent)
+                                        Button("从资料库中删除", role: .destructive) { actions.delete([track]) }
+                                        Button("添加到歌单") { actions.addToPlaylist([track]) }.tint(MusicTheme.accent)
                                     }
                                     .swipeActions(edge: .leading, allowsFullSwipe: false) {
                                         Button { library.toggleFavorite(track) } label: {
@@ -415,20 +612,20 @@ struct LibraryView: View {
         SongHandlers(
             play: { player.load($0, context: songs) },
             favorite: { library.toggleFavorite($0) },
-            playlist: { playlistBatch = TrackBatch(tracks: [$0]) },
+            playlist: { actions.addToPlaylist([$0]) },
             playNext: { player.enqueue([$0], next: true) },
             addToQueue: { player.enqueue([$0], next: false) },
-            album: { open(.album($0.albumID)) },
-            artist: { open(.artist($0.primaryArtist)) },
-            lyrics: { lyricsTrack = $0 },
-            delete: { pendingDelete = [$0] },
-            identify: { matchingTrack = $0 },
+            album: { actions.open(.album($0.albumID)) },
+            artist: { actions.open(.artist($0.primaryArtist)) },
+            lyrics: { actions.lyrics($0) },
+            delete: { actions.delete([$0]) },
+            identify: { actions.identify($0) },
             updateCover: { library.startCoverUpdate([$0]) }
         )
     }
 
     private var libraryMore: some View {
-        SectionsMenu(sections: [importMenuGroup(imports)] + coverMenuGroup) {
+        SectionsMenu(sections: [importMenuGroup(actions.imports)] + coverMenuGroup) {
             Image(systemName: "ellipsis")
         }
         .accessibilityLabel("更多")
@@ -448,21 +645,10 @@ struct LibraryView: View {
         let batch = library.batchFillTargets.count
         if batch > 0 {
             entries.append(MenuAction(id: "batch-fill", title: "勾选补全（\(batch) 首）", symbol: "checklist") {
-                batchFill = true
+                actions.batchFill()
             })
         }
         return entries.isEmpty ? [] : [MenuGroup(id: "covers", entries: entries)]
-    }
-
-    private var imports: ImportCommands {
-        ImportCommands(
-            addFolder: { importKind = .folders; pickerPresented = true },
-            addFiles: { importKind = .files; pickerPresented = true },
-            newPlaylist: { creatingPlaylist = true },
-            importPlaylist: { importKind = .playlist; pickerPresented = true },
-            showFolders: { showSources = true },
-            folderPlaylists: { importKind = .folderPlaylists; pickerPresented = true }
-        )
     }
 
     private var libraryHome: some View {
@@ -482,7 +668,7 @@ struct LibraryView: View {
                 if library.tracks.isEmpty {
                     ContentUnavailableView("你的音乐，随身聆听", systemImage: "music.note.house",
                         description: Text("添加本地音乐文件夹，自动整理专辑、艺术家和歌曲。"))
-                    Button { importKind = .folders; pickerPresented = true } label: {
+                    Button { actions.imports.addFolder() } label: {
                         Label("添加音乐文件夹", systemImage: "folder.badge.plus").frame(maxWidth: .infinity).padding()
                     }.buttonStyle(.borderedProminent).disabled(library.importing)
                 } else {
@@ -521,13 +707,6 @@ struct LibraryView: View {
         .accessibilityIdentifier("library-home")
     }
 
-    private var pickerTypes: [UTType] {
-        switch importKind {
-        case .folders, .folderPlaylists: return [.folder]
-        case .files: return [.audio]
-        case .playlist: return PlaylistFileTypes.readable
-        }
-    }
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { Text("正在整理音乐").font(.headline); Spacer(); Button("取消") { library.cancelScan() } }
@@ -568,19 +747,19 @@ struct LibraryView: View {
     }
 
     private var artistIndex: some View {
-        let search = LibrarySearchQuery(artistQuery)
+        let search = LibrarySearchQuery(nav.artistQuery)
         let artists = library.artistNames.filter { search.matches($0) }
         return List(artists, id: \.self) { artist in
             let tracks = library.tracks(forArtist: artist)
             browseRow(title: artist, subtitle: "\(tracks.count) 首歌曲", artwork: tracks.first, groups: collectionGroups(tracks, order: .title)) {
-                open(.artist(artist))
+                actions.open(.artist(artist))
             }
         }
         .listStyle(.plain)
-        .searchable(text: $artistQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索艺术家")
+        .searchable(text: $nav.artistQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索艺术家")
         .scrollDismissesKeyboard(.interactively)
         .overlay {
-            if artists.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: artistQuery) }
+            if artists.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: nav.artistQuery) }
         }
         .navigationTitle("艺术家")
         .navigationBarTitleDisplayMode(.large)
@@ -589,7 +768,7 @@ struct LibraryView: View {
     }
 
     private var albumIndex: some View {
-        let search = LibrarySearchQuery(albumQuery)
+        let search = LibrarySearchQuery(nav.albumQuery)
         let albums = library.albumGroups.filter { search.matches([$0.name, $0.artist]) }
         return ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 18)], spacing: 24) {
@@ -614,10 +793,10 @@ struct LibraryView: View {
             .padding(22)
         }
         .accessibilityIdentifier("album-grid")
-        .searchable(text: $albumQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索专辑、艺术家")
+        .searchable(text: $nav.albumQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索专辑、艺术家")
         .scrollDismissesKeyboard(.interactively)
         .overlay {
-            if albums.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: albumQuery) }
+            if albums.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: nav.albumQuery) }
         }
         .navigationTitle("专辑")
         .navigationBarTitleDisplayMode(.large)
@@ -664,76 +843,16 @@ struct LibraryView: View {
             kind: kind,
             playlist: playlist,
             showsBack: showsBack,
-            imports: imports,
-            onOpen: open,
-            onAddToPlaylist: { playlistBatch = TrackBatch(tracks: $0) },
-            onDelete: { pendingDelete = $0 },
-            onLyrics: { lyricsTrack = $0 },
-            onRename: beginRename,
-            onExport: beginExport,
-            onAddSongs: { songPicker = $0 },
+            imports: actions.imports,
+            onOpen: actions.open,
+            onAddToPlaylist: { actions.addToPlaylist($0) },
+            onDelete: { actions.delete($0) },
+            onLyrics: { actions.lyrics($0) },
+            onRename: actions.rename,
+            onExport: actions.export,
+            onAddSongs: { actions.addSongs($0) },
             onDeletePlaylist: { library.removePlaylist($0) }
         )
-    }
-
-    private var playerAnimation: Animation {
-        reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
-    }
-
-    /// Mounts or asks the card to travel. Progress stays inside the card.
-    private func setPlayer(_ expanded: Bool) {
-        guard let step = playerPresentation.request(expanded) else { return }
-        guard case .prepare = step else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            miniSlot = latestMiniSlot.latest
-        }
-    }
-
-    /// Second tap on the playlist tab. Already at the home does nothing.
-    /// Every pushed page, including album and playlist detail, pops to the root.
-    private func returnToPlaylistHome() {
-        switch PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty) {
-        case .stay:
-            break
-        case .popPath:
-            var transaction = Transaction()
-            transaction.disablesAnimations = false
-            withTransaction(transaction) {
-                playlistPath = NavigationPath()
-            }
-        }
-    }
-
-    private func open(_ route: LibraryRoute) {
-        setPlayer(false)
-        lyricsTrack = nil
-        switch tab {
-        case .library: libraryPath.append(route)
-        case .playlists: playlistPath.append(route)
-        case .favorites: favoritesPath.append(route)
-        case .search: searchPath.append(route)
-        }
-    }
-
-    private func beginRename(_ playlist: Playlist) {
-        playlistName = playlist.name
-        renamingPlaylist = playlist
-    }
-
-    private func beginExport(_ playlist: Playlist, tracks: [Track]) {
-        exportText = PlaylistExchange.render(tracks)
-        exportName = playlist.name.replacingOccurrences(of: "/", with: "-")
-        exportPresented = true
-    }
-
-    private func remove(_ tracks: [Track]) {
-        for track in tracks {
-            player.stopIfCurrent(track)
-            library.remove(track)
-        }
-        pendingDelete = []
     }
 
     private func artistRoute(for album: AlbumGroup) -> String {
@@ -745,10 +864,10 @@ struct LibraryView: View {
                                   order: LibrarySort = .album) -> [MenuGroup] {
         let ordered = order.sorted(tracks)
         var go: [MenuAction] = [
-            MenuAction(id: "add", title: "添加到歌单", symbol: "text.badge.plus") { playlistBatch = TrackBatch(tracks: ordered) }
+            MenuAction(id: "add", title: "添加到歌单", symbol: "text.badge.plus") { actions.addToPlaylist(ordered) }
         ]
         if let artist {
-            go.append(MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { open(.artist(artist)) })
+            go.append(MenuAction(id: "artist", title: "前往艺术家", symbol: "music.mic") { actions.open(.artist(artist)) })
         }
         if let cover {
             go.append(MenuAction(id: "update-cover", title: "更新封面", symbol: "photo.badge.arrow.down") {
@@ -768,7 +887,7 @@ struct LibraryView: View {
         ]
         if !ordered.isEmpty {
             groups.append(MenuGroup(id: "delete", entries: [
-                MenuAction(id: "delete", title: "从资料库中删除", symbol: "trash", role: .destructive) { pendingDelete = ordered }
+                MenuAction(id: "delete", title: "从资料库中删除", symbol: "trash", role: .destructive) { actions.delete(ordered) }
             ]))
         }
         return groups
@@ -879,7 +998,7 @@ private struct AccessoryMiniPlayer: View {
         HStack(spacing: 12) {
             Button(action: open) {
                 HStack(spacing: 12) {
-                    ArtworkView(track: track, root: root, size: compact ? 28 : 44)
+                    ArtworkView(track: track, root: root, size: compact ? 24 : 32)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .contentTransition(.opacity)

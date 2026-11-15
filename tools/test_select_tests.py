@@ -63,6 +63,12 @@ class SelectionTests(unittest.TestCase):
                               ("SearchResultsTests" if path == "App/DetailZoom.swift" else "BrowseAndArtworkPerformanceTests"),
                               result["only_testing"])
 
+    def test_shell_changes_keep_the_accessory_mini_regression(self):
+        for path in ("App/LibraryView.swift", "App/PlayerCard.swift"):
+            with self.subTest(path=path):
+                self.assertIn("-only-testing:LosslessPlayerTests/MiniAccessoryStabilityTests",
+                              select_tests([path])["only_testing"])
+
     def test_search_changes_keep_matching_and_cache_regressions(self):
         for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):
             with self.subTest(path=path):

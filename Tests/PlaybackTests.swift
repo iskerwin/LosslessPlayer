@@ -452,6 +452,26 @@ final class LyricPlaybackTests: XCTestCase {
         XCTAssertEqual(player.position, 5, accuracy: 0.1)
     }
 
+    func testSkippingKeepsPausedPausedAndPlayingPlaying() throws {
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: Array(tracks.prefix(3)))
+        XCTAssertFalse(player.playing)
+        player.skip()
+        XCTAssertEqual(player.current?.id, tracks[1].id)
+        XCTAssertFalse(player.playing, "A paused player stays paused after skipping")
+        player.resume()
+        XCTAssertTrue(player.playing)
+        player.skip()
+        XCTAssertEqual(player.current?.id, tracks[2].id)
+        XCTAssertTrue(player.playing, "A playing player keeps playing after skipping")
+        player.skip(backwards: true)
+        XCTAssertEqual(player.current?.id, tracks[1].id)
+        XCTAssertTrue(player.playing)
+    }
+
     func testInvalidLyricTimeDoesNotResumeOrSwitchTracks() throws {
         let (root, library, tracks) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1078,7 +1098,7 @@ final class SearchResultsTests: XCTestCase {
         let rest = source[start.lowerBound...]
         let end = rest.range(of: "\n    private func ")
         let body = String(rest[..<(end?.lowerBound ?? rest.endIndex)])
-        XCTAssertNotNil(body.range(of: "PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty)"))
+        XCTAssertNotNil(body.range(of: "PlaylistTabNavigation.step(pathIsEmpty: nav.playlistPath.isEmpty)"))
         XCTAssertNotNil(body.range(of: "playlistPath = NavigationPath()"))
         XCTAssertNil(body.range(of: "closeCard"))
     }

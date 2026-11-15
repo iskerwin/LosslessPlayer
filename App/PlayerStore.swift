@@ -382,7 +382,8 @@ final class PlayerStore: NSObject, ObservableObject {
         if backwards && position > 3 { seek(0); return }
         let id = PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off)
             .next(after: current?.id, backwards: backwards)
-        if let track = library.track(id), track.available { load(track) }
+        // Skipping keeps the transport state: playing stays playing, paused stays paused.
+        if let track = library.track(id), track.available { load(track, autoplay: playing) }
         else { pause(); seek(0) }
     }
 
