@@ -879,7 +879,7 @@ private struct AccessoryMiniPlayer: View {
         HStack(spacing: 12) {
             Button(action: open) {
                 HStack(spacing: 12) {
-                    ArtworkView(track: track, root: root, size: compact ? 28 : 44)
+                    ArtworkView(track: track, root: root, size: compact ? 24 : 32)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .contentTransition(.opacity)
