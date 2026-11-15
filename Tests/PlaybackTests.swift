@@ -1299,6 +1299,27 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertNil(ArtworkSwipe.direction(for: CGSize(width: 0, height: 200)))
     }
 
+    func testReleaseLeavesOnlyWhenTheTrackWillActuallyChange() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let left = CGSize(width: -120, height: 0), right = CGSize(width: 120, height: 0)
+        let all = PlaybackQueue(ids: [a, b, c], repeatAll: true)
+        let once = PlaybackQueue(ids: [a, b, c], repeatAll: false)
+        func release(_ t: CGSize, _ queue: PlaybackQueue, _ current: UUID, position: Double = 0,
+                     available: @escaping (UUID) -> Bool = { _ in true }) -> ArtworkSwipe.Release? {
+            ArtworkSwipe.release(translation: t, position: position, queue: queue, current: current, available: available)
+        }
+        XCTAssertEqual(release(left, all, a), .leave(.next))
+        XCTAssertEqual(release(right, all, b), .leave(.previous))
+        XCTAssertEqual(release(right, all, a), .leave(.previous), "repeat wraps to the last track")
+        XCTAssertEqual(release(left, once, c), .stay, "end of queue without repeat does not change track")
+        XCTAssertEqual(release(right, once, a), .stay)
+        XCTAssertEqual(release(right, all, b, position: 4), .stay, "previous after 3 s restarts the song")
+        XCTAssertEqual(release(left, all, b, position: 4), .leave(.next))
+        XCTAssertEqual(release(left, PlaybackQueue(ids: [a], repeatAll: true), a), .stay, "one-song queue")
+        XCTAssertEqual(release(left, all, a, available: { $0 != b }), .stay, "unavailable neighbour")
+        XCTAssertNil(release(CGSize(width: -30, height: 0), all, a), "short drag is not a skip")
+    }
+
     func testFollowRequiresHorizontalDominance() {
         XCTAssertTrue(ArtworkSwipe.follows(CGSize(width: -80, height: 40)))
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))

@@ -378,6 +378,13 @@ final class PlayerStore: NSObject, ObservableObject {
         }
     }
 
+    /// What a released artwork swipe will do, mirroring `skip`.
+    func swipeRelease(for translation: CGSize) -> ArtworkSwipe.Release? {
+        ArtworkSwipe.release(translation: translation, position: position,
+            queue: PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off),
+            current: current?.id) { library.track($0)?.available == true }
+    }
+
     func skip(backwards: Bool = false) {
         if backwards && position > 3 { seek(0); return }
         let id = PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off)
