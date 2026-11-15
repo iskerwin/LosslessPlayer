@@ -121,102 +121,6 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testArtworkFillsTopStripAndSharesCardClipAtDragAndSpringProgress() throws {
-        let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
-        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
-        let texture = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40)).image { context in
-            UIColor.green.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
-        }
-        for scheme in [ColorScheme.light, .dark] {
-            // Includes the landing handover with hidden expanded controls,
-            // intermediate drag frames and spring overshoot. No timer drives these samples.
-            for progress in [CGFloat(0.03), 0.045, 0.06, 0.1, 0.25, 0.3, 0.5, 0.8, 0.95, 1, 1.05] {
-                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
-                let card = PlayerCard(progress: progress, miniFrame: mini, expandedFrame: expanded,
-                                      reduceMotion: false, canReopen: false, onReopen: {}) {
-                    ArtworkBackdrop(colors: [.green], image: texture, extendsIntoSafeArea: false)
-                } expanded: {
-                    // Reproduce the presenter's safe-area padding without
-                    // introducing any foreground pixels into the sampled strip.
-                    Color.clear.padding(.top, 59).padding(.bottom, 34)
-                } collapsed: {
-                    Color.red
-                }
-                let renderer = ImageRenderer(content:
-                    Color(red: 0, green: 0, blue: 1)
-                        .frame(width: 360, height: 720)
-                        .overlay(alignment: .topLeading) { card }
-                        .environment(\.colorScheme, scheme)
-                )
-                renderer.scale = 1
-                let image = try XCTUnwrap(renderer.cgImage)
-                // Normalize pixel layout instead of depending on CGImage's
-                // byte order or premultiplied-alpha representation.
-                let pixels = try rgbaPixels(in: image)
-                func channel(_ x: CGFloat, _ y: CGFloat, _ component: Int) -> UInt8 {
-                    pixels[(Int(y) * image.width + Int(x)) * 4 + component]
-                }
-                let middle = frame.midX
-                let nearCorner = frame.minX + PlayerCardMetrics.topRadius(progress) + 2
-                for x in [middle, nearCorner] {
-                    for y in [frame.minY + 2, frame.minY + 30, frame.minY + 60] {
-                        XCTAssertGreaterThan(channel(x, y, 1), 120, "Missing artwork at \(progress), \(scheme)")
-                        XCTAssertLessThan(channel(x, y, 0), 40, "Material strip at \(progress), \(scheme)")
-                        XCTAssertLessThan(channel(x, y, 2), 40)
-                    }
-                }
-                // Only the blue underlying page is visible through the corner;
-                // the oversized scaled-to-fill texture must not escape the clip.
-                XCTAssertGreaterThan(channel(frame.minX + 1, frame.minY + 1, 2), 240)
-                XCTAssertLessThan(channel(frame.minX + 1, frame.minY + 1, 1), 15)
-            }
-        }
-    }
-
-    func testCollapseCropsFullSizeBackdropWithoutCompressingDarkLowerRegion() throws {
-        let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
-        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
-        // An abrupt lower band makes compression unmistakable. The production
-        // backdrop has a gradual dark lower gradient; both must remain in the
-        // same full-screen coordinates as the expanded controls.
-        let backdrop = GeometryReader { geometry in
-            VStack(spacing: 0) {
-                // Color.green is adaptive system green (52/199/89 in light),
-                // not the pure RGB green required by these channel assertions.
-                Color(red: 0, green: 1, blue: 0).frame(height: geometry.size.height * 0.75)
-                Color.black
-            }
-        }
-        for scheme in [ColorScheme.light, .dark] {
-            for progress in [CGFloat(0.03), 0.06, 0.25, 0.5, 0.7, 0.9] {
-                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
-                let card = PlayerCard(progress: progress, miniFrame: mini, expandedFrame: expanded,
-                                      reduceMotion: false, canReopen: false, onReopen: {}) {
-                    backdrop
-                } expanded: { Color.clear } collapsed: { Color.red }
-                let renderer = ImageRenderer(content:
-                    Color.blue.frame(width: 360, height: 720)
-                        .overlay(alignment: .topLeading) { card }
-                        .environment(\.colorScheme, scheme))
-                renderer.scale = 1
-                let image = try XCTUnwrap(renderer.cgImage)
-                let pixels = try rgbaPixels(in: image)
-                for fraction in [CGFloat(0.1), 0.4, 0.7, 0.9] {
-                    let localY = frame.height * fraction
-                    let offset = (Int(frame.minY + localY) * image.width + Int(frame.midX)) * 4
-                    // Allow three 8-bit levels for rasterization. A lower dark
-                    // region above its original y=540 fails the green channel.
-                    let expected: Double = localY < 540 ? 255 : 0
-                    XCTAssertEqual(Double(pixels[offset + 1]), expected, accuracy: 3,
-                                   "Backdrop reflow at progress \(progress), fraction \(fraction), \(scheme)")
-                    XCTAssertLessThan(pixels[offset], 4)
-                    XCTAssertLessThan(pixels[offset + 2], 4)
-                }
-            }
-        }
-    }
-
     func testSharedArtworkBackgroundPreservesTextureHueAndOpaqueEdgesInBothAppearances() throws {
         let fixtures: [(String, UIImage?)] = [
             ("warm", washFixture(top: .red, bottom: .yellow)),
@@ -259,48 +163,6 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testLandedPlayerAddsNoBackingOverAccessorySurface() throws {
-        // The native accessory (or legacy inset) already owns the material.
-        // Transparent travelling content must not add a second surface even
-        // while the spring completion has not yet unmounted the card.
-        for scheme in [ColorScheme.light, .dark] {
-            for height in [CGFloat(36), 56] {
-                for reduced in [false, true] {
-                    let mini = CGRect(x: 12, y: 600, width: 336, height: height)
-                    let renderer = ImageRenderer(content:
-                        Color(red: 1, green: 0, blue: 1).frame(width: 360, height: 720)
-                            .overlay(alignment: .topLeading) {
-                                PlayerCard(progress: 0, miniFrame: mini,
-                                    expandedFrame: CGRect(x: 0, y: 0, width: 360, height: 720),
-                                    reduceMotion: reduced, canReopen: false, onReopen: {}) {
-                                        Color.black
-                                    } expanded: { Color.black } collapsed: { Color.clear }
-                            }
-                            .environment(\.colorScheme, scheme))
-                    renderer.scale = 1
-                    let image = try XCTUnwrap(renderer.cgImage)
-                    let pixels = try rgbaPixels(in: image)
-                    for x in [30, 180, 330] {
-                        let offset = (Int(mini.midY) * image.width + x) * 4
-                        let expected = [255, 0, 255, 255]
-                        for channel in 0..<4 {
-                            XCTAssertEqual(Int(pixels[offset + channel]), expected[channel], accuracy: 2)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func washFixture(top: UIColor, bottom: UIColor) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { context in
-            top.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 120, height: 60))
-            bottom.setFill()
-            context.fill(CGRect(x: 0, y: 60, width: 120, height: 60))
-        }
-    }
-
     func testNativeCollectionPushDoesNotChangeLightWindowAppearance() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -336,10 +198,6 @@ final class PlayerCardRenderingTests: XCTestCase {
         for kind in [CollectionPage.Kind.album, .playlist] {
             try await checkReturnAppearance(kind: kind)
         }
-    }
-
-    func testPlayerReturnHasNoDelayedAppearanceChange() async throws {
-        try await checkReturnAppearance(kind: nil)
     }
 
     /// Keep one window, controller and SwiftUI identity for the entire sequence.
@@ -422,155 +280,6 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
-    func testExpandedContentStaysOpaqueUntilLandingHandover() throws {
-        let mini = CGRect(x: 12, y: 600, width: 336, height: 56)
-        let expanded = CGRect(x: 0, y: 0, width: 360, height: 720)
-        for scheme in [ColorScheme.light, .dark] {
-            // Render both resting states, serial handover, former fade windows,
-            // and overshoot. Sample inside the clip, away from rounded edges.
-            for progress in [CGFloat(-0.05), 0, 0.03, 0.045, 0.06, 0.1, 0.25, 0.3, 0.5, 0.65, 1, 1.05] {
-                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
-                let card = PlayerCard(progress: progress, miniFrame: mini, expandedFrame: expanded,
-                                      reduceMotion: false, canReopen: false, onReopen: {}) {
-                    Color(red: 0, green: 1, blue: 0)
-                } expanded: {
-                    Color(red: 1, green: 0, blue: 0)
-                } collapsed: {
-                    Color(red: 0, green: 0, blue: 1)
-                }
-                let renderer = ImageRenderer(content:
-                    Color.white.frame(width: 360, height: 720)
-                        .overlay(alignment: .topLeading) { card }
-                        .environment(\.colorScheme, scheme)
-                )
-                renderer.scale = 1
-                let image = try XCTUnwrap(renderer.cgImage)
-                let pixels = try rgbaPixels(in: image)
-                let offset = (Int(frame.minY + 28) * image.width + Int(frame.midX)) * 4
-                let pixel = Array(pixels[offset..<(offset + 4)])
-                let expected: [UInt8]
-                if progress <= 0 {
-                    expected = [0, 0, 255] // Mini owns the landed card, including overshoot.
-                } else if progress == 0.03 {
-                    expected = [0, 255, 0] // Continuous background between serial content fades.
-                } else if progress < 0.06 {
-                    expected = [128, 128, 0] // Expanded fades only immediately before landing.
-                } else {
-                    expected = [255, 0, 0] // Expanded stays fully opaque throughout travel.
-                }
-                for component in 0..<3 {
-                    XCTAssertEqual(Double(pixel[component]), Double(expected[component]), accuracy: 3,
-                                   "Wrong content at \(progress), \(scheme), channel \(component)")
-                }
-            }
-        }
-    }
-
-    func testLibraryShellDoesNotStoreCardProgress() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(contentsOf: root.appendingPathComponent("App/LibraryView.swift"), encoding: .utf8)
-        XCTAssertNil(source.range(of: "playerProgress"))
-        XCTAssertNil(source.range(of: "detailProgress"))
-        XCTAssertNotNil(source.range(of: "PlayerMotionHost"))
-        XCTAssertNil(source.range(of: "DetailMotionHost"))
-    }
-
-    func testPlayerProgressWritesDoNotEvaluateTheShell() throws {
-        let probe = TransitionEvaluationProbe()
-        let bridge = PlayerGestureBridge()
-        let ready = expectation(description: "player card appeared")
-        let window = try show(PlayerShellProbe(probe: probe, bridge: bridge, ready: {
-            guard !probe.didReady else { return }
-            probe.didReady = true
-            ready.fulfill()
-        }))
-        defer { hide(window) }
-        wait(for: [ready], timeout: 2)
-        let shellBaseline = probe.shell
-        let cardBaseline = probe.card
-        for step in 1...30 {
-            let seen = probe.card
-            bridge.follow(CGFloat(step) * 8)
-            flushUntil(probe: probe, changesFrom: seen)
-        }
-        XCTAssertGreaterThanOrEqual(probe.card - cardBaseline, 20, "card \(probe.card) shell \(probe.shell)")
-        XCTAssertLessThanOrEqual(probe.shell - shellBaseline, 2, "card \(probe.card) shell \(probe.shell)")
-    }
-
-    private var displacedKey: UIWindow?
-    private var layoutView: UIView?
-
-    private func show<Content: View>(_ root: Content) throws -> UIWindow {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-        let previous = scene.windows.first(where: \.isKeyWindow)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
-        let controller = UIHostingController(rootView: root)
-        window.rootViewController = controller
-        window.makeKeyAndVisible()
-        controller.view.layoutIfNeeded()
-        displacedKey = previous
-        layoutView = controller.view
-        return window
-    }
-
-    private func hide(_ window: UIWindow) {
-        window.isHidden = true
-        window.rootViewController = nil
-        displacedKey?.makeKeyAndVisible()
-        displacedKey = nil
-        layoutView = nil
-    }
-
-    /// Nested `RunLoop.run` returns without committing SwiftUI, so a progress
-    /// write looked like it never reached the card. `wait` runs the main queue
-    /// the update is scheduled on. The deadline is not the pass condition.
-    private func flushUntil(probe: TransitionEvaluationProbe, changesFrom seen: Int) {
-        let done = expectation(description: "card progress committed")
-        let start = Date()
-        func tick() {
-            CATransaction.flush()
-            layoutView?.layoutIfNeeded()
-            if probe.card != seen || Date().timeIntervalSince(start) >= 0.2 {
-                done.fulfill()
-                return
-            }
-            DispatchQueue.main.async(execute: tick)
-        }
-        DispatchQueue.main.async(execute: tick)
-        wait(for: [done], timeout: 1)
-    }
-}
-
-private final class TransitionEvaluationProbe {
-    var shell = 0
-    var card = 0
-    var didReady = false
-}
-
-private struct PlayerShellProbe: View {
-    var probe: TransitionEvaluationProbe
-    var bridge: PlayerGestureBridge
-    var ready: () -> Void
-
-    var body: some View {
-        let _ = probe.shell += 1
-        PlayerMotionHost(presented: true, generation: 1,
-                         miniFrame: CGRect(x: 0, y: 700, width: 320, height: 56),
-                         expandedFrame: CGRect(x: 0, y: 0, width: 390, height: 844),
-                         reduceMotion: false, animation: .linear(duration: 0.3),
-                         canReopen: false, gestures: bridge, onReopen: {},
-                         onMounted: { ready(); return nil }, onComplete: { _ in },
-                         onEvaluate: { probe.card += 1 }) {
-            Color.black
-        } expanded: {
-            Color.red
-        } collapsed: {
-            Color.blue
-        }
-    }
 }
 
 @MainActor
@@ -594,7 +303,7 @@ private struct AppearanceProbe: UIViewRepresentable {
     }
 }
 
-/// Uses the real destination and card types, with the same local dark scope as
+/// Uses the real destination types, with the same local dark scope as
 /// LibraryView. It isolates preference propagation, not native tab-bar animation.
 private struct ReturnAppearanceHarness: View {
     @Namespace private var zoom
@@ -606,11 +315,7 @@ private struct ReturnAppearanceHarness: View {
     var contentProbe: AppearanceProbeView
 
     var body: some View {
-        GeometryReader { geometry in
-            let expanded = CGRect(origin: .zero, size: geometry.size)
-            let mini = CGRect(x: 12, y: geometry.size.height - 80,
-                              width: geometry.size.width - 24, height: 56)
-            Color(uiColor: .systemBackground)
+        Color(uiColor: .systemBackground)
                 .overlay(alignment: .topLeading) {
                     AppearanceProbe(view: baseProbe).frame(width: 8, height: 8)
                 }
@@ -630,23 +335,7 @@ private struct ReturnAppearanceHarness: View {
                                 }
                         }
                     }
-                    if state.mounted {
-                        if kind == nil {
-                            PlayerCard(progress: state.progress, miniFrame: mini,
-                                expandedFrame: expanded, reduceMotion: false,
-                                canReopen: false, onReopen: {}) {
-                                    NowPlayingBackground(library: library, player: player)
-                                } expanded: {
-                                    NowPlayingView(library: library, player: player)
-                                        .overlay { AppearanceProbe(view: contentProbe).frame(width: 8, height: 8) }
-                                        .environment(\.colorScheme, .dark)
-                                } collapsed: {
-                                    MiniPlayer(library: library, player: player, compact: false) {}
-                                }
-                        }
-                    }
                 }
-        }
     }
 }
 

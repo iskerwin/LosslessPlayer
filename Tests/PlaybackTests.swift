@@ -1341,96 +1341,10 @@ final class ArtworkAnalysisTests: XCTestCase {
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
-    func testDiscardingCurrentTrackClearsEveryPresentationPhase() {
-        for phase in 0..<4 {
-            var state = PlayerPresentationState()
-            _ = state.request(true)
-            if phase > 0 { _ = state.beginMountedPresentation() }
-            if phase > 1 { state.complete(state.generation) }
-            if phase > 2 { _ = state.request(false) }
-            let staleGeneration = state.generation
 
-            state.discard()
-            XCTAssertFalse(state.presented)
-            XCTAssertFalse(state.mounted)
-            XCTAssertFalse(state.settled)
-            XCTAssertNil(state.beginMountedPresentation())
-            state.complete(staleGeneration)
-            XCTAssertFalse(state.mounted)
-            XCTAssertFalse(state.settled)
 
-            // A later song must create a fresh collapsed card, and old
-            // completions must not settle or remove that card.
-            XCTAssertEqual(state.request(true), .prepare(state.generation))
-            XCTAssertEqual(state.beginMountedPresentation(), state.generation)
-            state.complete(staleGeneration)
-            XCTAssertTrue(state.mounted)
-            XCTAssertFalse(state.settled)
-            state.complete(state.generation)
-            XCTAssertTrue(state.settled)
-        }
-    }
 
-    func testMiniSlotCacheKeepsLatestNativePositionAndRejectsInvalidGeometry() {
-        let cache = PlayerMiniSlotCache()
-        let expanded = PlayerMiniSlot(frame: CGRect(x: 21, y: 705, width: 348, height: 56), compact: false)
-        let inline = PlayerMiniSlot(frame: CGRect(x: 21, y: 761, width: 260, height: 36), compact: true)
-        XCTAssertTrue(cache.record(expanded))
-        XCTAssertFalse(cache.record(expanded))
-        XCTAssertTrue(cache.record(inline))
-        XCTAssertEqual(cache.latest, inline)
-        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: .zero)))
-        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: CGRect(x: CGFloat.infinity, y: 0, width: 300, height: 56))))
-        XCTAssertEqual(cache.latest, inline)
-    }
 
-    func testColdPlayerPresentationRequiresAMountedStartingLayout() {
-        var state = PlayerPresentationState()
-        XCTAssertEqual(state.request(true), .prepare(1))
-        XCTAssertTrue(state.mounted)
-        XCTAssertFalse(state.settled)
-        state.complete(1)
-        XCTAssertFalse(state.settled, "Completion cannot bypass the cold card's starting layout")
-        XCTAssertEqual(state.beginMountedPresentation(), 1)
-        XCTAssertNil(state.beginMountedPresentation())
-        state.complete(1)
-        XCTAssertTrue(state.settled)
-        XCTAssertEqual(state.request(false), .animate(2))
-        XCTAssertTrue(state.mounted)
-        state.complete(2)
-        XCTAssertFalse(state.mounted)
-    }
-
-    func testReopeningRejectsStaleCloseCompletion() {
-        var state = PlayerPresentationState()
-        _ = state.request(true)
-        _ = state.beginMountedPresentation()
-        state.complete(1)
-        XCTAssertEqual(state.request(false), .animate(2))
-        XCTAssertEqual(state.request(true), .animate(3))
-        state.complete(2)
-        XCTAssertTrue(state.mounted)
-        XCTAssertFalse(state.settled)
-        state.complete(3)
-        XCTAssertTrue(state.presented)
-        XCTAssertTrue(state.settled)
-    }
-
-    func testClosingDuringPreparationCannotStartTheOldOpen() {
-        var state = PlayerPresentationState()
-        _ = state.request(true)
-        _ = state.request(false)
-        XCTAssertNil(state.beginMountedPresentation())
-        state.complete(1)
-        XCTAssertTrue(state.mounted)
-        state.complete(2)
-        XCTAssertFalse(state.mounted)
-        XCTAssertFalse(state.presented)
-    }
-
-    /// Same groupings `LibraryStore.rebuildDerived` keeps on the snapshot.
-    /// Re-reading them must stay cheaper than rebuilding from the view, and
-    /// must match the filters the pages used before the cache existed.
     func testDerivedGroupingsMatchFiltersAndAreCheaperToReread() {
         var tracks: [Track] = []
         tracks.reserveCapacity(600)
@@ -1666,58 +1580,7 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertTrue(preview === large)
     }
 
-    func testCardDragFollowsFingerOneToOneAndClampsAtRestingFrames() {
-        // Portrait, short/landscape, and tablet; the safe top is part of travel.
-        for (mini, expanded) in [
-            (CGRect(x: 8, y: 690, width: 377, height: 56), CGRect(x: 0, y: -59, width: 393, height: 852)),
-            (CGRect(x: 0, y: 260, width: 844, height: 56), CGRect(x: 0, y: 0, width: 844, height: 390)),
-            (CGRect(x: 16, y: 900, width: 992, height: 80), CGRect(x: 0, y: -24, width: 1024, height: 1024))
-        ] {
-            let distance = mini.minY - expanded.minY
-            for drag in [CGFloat(0), 45, 90, 91, distance / 2, distance, distance + 80] {
-                let progress = PlayerCardMetrics.progress(for: drag, distance: distance)
-                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
-                XCTAssertEqual(frame.minY - expanded.minY, min(drag, distance), accuracy: 0.001)
-            }
-            XCTAssertEqual(PlayerCardMetrics.frame(progress: 0, mini: mini, expanded: expanded), mini)
-            XCTAssertEqual(PlayerCardMetrics.frame(progress: 1, mini: mini, expanded: expanded), expanded)
-            XCTAssertEqual(PlayerCardMetrics.progress(for: -40, distance: distance), 1)
-        }
-        XCTAssertEqual(PlayerCardMetrics.progress(for: 90, distance: 0), 1)
-    }
 
-    func testPlayerTopCornersStayLargeThroughPullAndLanding() {
-        for step in -100...1100 {
-            let radius = PlayerCardMetrics.topRadius(CGFloat(step) / 1000)
-            XCTAssertGreaterThanOrEqual(radius, 18)
-            XCTAssertLessThanOrEqual(radius, 32)
-        }
-        XCTAssertEqual(PlayerCardMetrics.topRadius(1), 32)
-        XCTAssertEqual(PlayerCardMetrics.topRadius(0), 18)
-    }
-
-    func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
-        for step in -100...1100 {
-            let progress = CGFloat(step) / 1000
-            let mini = PlayerCardMetrics.miniOpacity(progress)
-            let expanded = PlayerCardMetrics.expandedOpacity(progress)
-            XCTAssertTrue((0...1).contains(mini))
-            XCTAssertTrue((0...1).contains(expanded))
-            XCTAssertTrue(mini == 0 || expanded == 0, "Two covers visible at progress \(progress)")
-            if progress >= 0.06 {
-                XCTAssertEqual(expanded, 1, "Expanded sheet dissolved before landing at \(progress)")
-            }
-            if progress >= 0.03 {
-                XCTAssertEqual(mini, 0, "Mini appeared before landing at \(progress)")
-            }
-        }
-        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0), 1)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0), 0)
-        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0.015), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.045), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.03), 0)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(1), 1)
-    }
 
 }
 
