@@ -78,8 +78,9 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 }
 
 enum AudioTags {
+    /// 7: a full read keeps embedded lyrics when no sidecar .lrc is present.
     /// 6: untagged files named 歌名-艺人 take their title and artist from the name.
-    static let catalogVersion = 6
+    static let catalogVersion = 7
 
     /// A file with neither title nor artist tag, named 歌名-艺人, takes both
     /// from its name, split at the last hyphen.
@@ -94,7 +95,7 @@ enum AudioTags {
         track.artist = artist
     }
 
-    enum Role: Equatable { case track, disc, artist, artists, album, albumArtist, genre, year, compilation }
+    enum Role: Equatable { case track, disc, artist, artists, album, albumArtist, genre, year, compilation, lyrics }
 
     static func role(for key: String) -> Role? {
         let value = key.lowercased()
@@ -108,6 +109,9 @@ enum AudioTags {
         if value.hasSuffix("©gen") || value.hasSuffix("/gen") || value.hasSuffix("tcon") || value.hasSuffix("genre") { return .genre }
         if value.hasSuffix("©day") || value.hasSuffix("tdrc") || value.hasSuffix("tyer") || value.hasSuffix("/date") || value.hasSuffix("year") { return .year }
         if value.hasSuffix("cpil") || value.hasSuffix("tcmp") || value.contains("compilation") { return .compilation }
+        if value.hasSuffix("uslt") || value.contains("/uslt") || value.hasSuffix("©lyr") || value.hasSuffix("/lyr")
+            || leaf == "lyrics" || leaf == "unsyncedlyrics"
+            || value.hasSuffix(":lyrics") || value.hasSuffix(":unsyncedlyrics") { return .lyrics }
         return nil
     }
 

@@ -90,7 +90,10 @@ actor AudioScanner {
                 let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                 if var track = old[relative], track.fileSize == Int64(values.fileSize ?? -1),
                    track.modifiedAt == values.contentModificationDate, track.catalogVersion == AudioTags.catalogVersion {
-                    track.missing = false; track.lyrics = sidecarLyrics(file)
+                    track.missing = false
+                    // A sidecar replaces stored lyrics. With no .lrc, keep the text from
+                    // the last full read so embedded lyrics survive this skip.
+                    if let sidecar = sidecarLyrics(file) { track.lyrics = sidecar }
                     if track.artworkFilename == nil, let image = artwork(beside: file) {
                         track.artworkFilename = storeThumbnail(at: image, id: track.id, record: true)
                     }
@@ -135,7 +138,7 @@ actor AudioScanner {
                 track.artworkFilename = storeThumbnail(at: image, id: track.id)
             }
         }
-        track.lyrics = sidecarLyrics(url)
+        track.lyrics = sidecarLyrics(url) ?? track.lyrics
         track.title = track.title == file.deletingPathExtension().lastPathComponent ? url.deletingPathExtension().lastPathComponent : track.title
         AudioTags.fillFromFilename(&track, stem: url.deletingPathExtension().lastPathComponent)
         if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: file) }
@@ -222,8 +225,8 @@ actor AudioScanner {
                 }
             }
         }
-        track.lyrics = sidecarLyrics(url)
         let fullMetadata = (try? await AVURLAsset(url: url).load(.metadata)) ?? []
+        var embeddedLyrics: String?
         var explicitArtists: [String] = []
         var alternateArtist: [String] = []
         for item in fullMetadata {
@@ -250,6 +253,11 @@ actor AudioScanner {
                 if track.year == nil, let value = try? await item.load(.stringValue) { track.year = AudioTags.year(from: value) }
             case .compilation:
                 if track.compilation != true { track.compilation = await compilation(from: item) }
+            case .lyrics:
+                if embeddedLyrics == nil, let value = try? await item.load(.stringValue),
+                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    embeddedLyrics = value
+                }
             }
         }
         let comments = flac.comments
@@ -270,6 +278,8 @@ actor AudioScanner {
         if track.year == nil, let value = firstNonempty(["DATE"]) { track.year = AudioTags.year(from: value) }
         if track.trackNumber == nil, let value = firstNonempty(["TRACKNUMBER"]) { track.trackNumber = AudioTags.number(from: value) }
         if track.discNumber == nil, let value = firstNonempty(["DISCNUMBER"]) { track.discNumber = AudioTags.number(from: value) }
+        if embeddedLyrics == nil { embeddedLyrics = firstNonempty(["LYRICS", "UNSYNCEDLYRICS"]) }
+        track.lyrics = sidecarLyrics(url) ?? embeddedLyrics
         track.catalogVersion = AudioTags.catalogVersion
         return track
     }
