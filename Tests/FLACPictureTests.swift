@@ -278,7 +278,10 @@ final class FLACPictureTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("song.flac")
         try playableFLAC(["TITLE=Song", "LYRICS=Imported embedded"]).write(to: source)
-        let imported = try await AudioScanner(root: root.appendingPathComponent("Library")).importCopy(source)
+        // The app creates its library folder before importing; the copy needs it to exist.
+        let library = root.appendingPathComponent("Library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let imported = try await AudioScanner(root: library).importCopy(source)
         XCTAssertEqual(imported.lyrics, "Imported embedded")
     }
 
