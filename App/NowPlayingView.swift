@@ -29,25 +29,6 @@ enum ArtworkSwipe {
     static func follows(_ translation: CGSize) -> Bool {
         abs(translation.width) > abs(translation.height) * 1.5
     }
-
-    /// What a released swipe will do, decided from the player's own state so the
-    /// cover can leave at once instead of waiting for the track to change (the
-    /// change only lands after the transport fade).
-    enum Release: Equatable {
-        /// The track will change; the cover carries on in the swipe direction.
-        case leave(Direction)
-        /// Same track again (restart, end of queue, one-song queue); the cover returns.
-        case stay
-    }
-
-    static func release(translation: CGSize, position: Double, queue: PlaybackQueue,
-                        current: UUID?, available: (UUID) -> Bool) -> Release? {
-        guard let direction = direction(for: translation) else { return nil }
-        let backwards = direction == .previous
-        if backwards && position > 3 { return .stay }
-        guard let id = queue.next(after: current, backwards: backwards), id != current, available(id) else { return .stay }
-        return .leave(direction)
-    }
 }
 
 /// Header appearance mapping, independent of PlayerCard presentation.
@@ -207,21 +188,10 @@ struct NowPlayingView: View {
     @State private var queueDrag: QueueRowDrag?
     @State private var details = false
     @State private var playlistTarget: Track?
-    /// Horizontal cover offset, owned here so a successful swipe never snaps back:
-    /// it follows the finger, then either leaves or returns with an explicit animation.
-    @State private var coverX: CGFloat = 0
-    @GestureState private var coverDragging = false
-    /// Set from release until the new track lands (the change follows the transport fade).
-    @State private var leaving: ArtworkSwipe.Direction?
-    @State private var leavingID: UUID?
-    @State private var headerWidth: CGFloat = 390
     /// MPVolumeView and AVRoutePickerView are expensive to create; mounting
     /// them during the presentation's first frames drops the zoom. They
     /// mount once it has settled, into reserved frames of the same size.
     @State private var chromeReady = false
-    /// Direction of the most recent track change, so the artwork/title slide
-    /// the way Music does: next slides in from the right, previous from the left.
-    @State private var skipDirection: ArtworkSwipe.Direction = .next
     @State private var swipeHaptic = 0
     /// Parsed off the main thread when the lyrics panel needs new text.
     /// The playback clock must not re-run the regex
@@ -264,22 +234,6 @@ struct NowPlayingView: View {
         .onChange(of: panel) { _, _ in queueDrag = nil }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { queueDrag = nil }
-        }
-        .onChange(of: current?.id) { _, _ in
-            // The new cover is already in place; clear the swipe state without animating.
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { leaving = nil; leavingID = nil; coverX = 0 }
-        }
-        .onChange(of: player.errorMessage) { _, message in
-            // A load that fails never changes the track; bring the cover back.
-            guard message != nil, leavingID != nil else { return }
-            leaving = nil; leavingID = nil
-            returnCover()
-        }
-        .onChange(of: coverDragging) { _, dragging in
-            // A drag that ends without `onEnded` (interrupted) must not leave the cover offset.
-            if !dragging, leavingID == nil, coverX != 0 { returnCover() }
         }
         .onChange(of: queueVisible) { _, interactive in
             if !interactive { queueDrag = nil }
@@ -358,47 +312,15 @@ struct NowPlayingView: View {
     /// Only the header owns skip/dismiss gestures; queue scrolling stays native.
     private var artworkGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .updating($coverDragging) { _, state, _ in state = true }
-            .onChanged { value in
-                guard leavingID == nil, !reduceMotion else { return }
-                coverX = ArtworkSwipe.follows(value.translation) ? value.translation.width : 0
-            }
             .onEnded { value in
-                guard leavingID == nil else { return }
-                guard let release = player.swipeRelease(for: value.translation) else {
-                    if value.translation.height > 90,
-                       value.translation.height > abs(value.translation.width) * 1.5 {
-                        onClose()
-                    } else {
-                        returnCover()
-                    }
-                    return
+                if let direction = ArtworkSwipe.direction(for: value.translation) {
+                    swipeHaptic += 1
+                    if direction == .next { player.skip() } else { player.skip(backwards: true) }
+                } else if value.translation.height > 90,
+                          value.translation.height > abs(value.translation.width) * 1.5 {
+                    onClose()
                 }
-                let direction: ArtworkSwipe.Direction = value.translation.width < 0 ? .next : .previous
-                skipDirection = direction
-                swipeHaptic += 1
-                if case .leave = release, !reduceMotion {
-                    leaving = direction
-                    leavingID = current?.id
-                    withAnimation(.easeIn(duration: 0.22)) {
-                        coverX = direction == .next ? -headerWidth : headerWidth
-                    }
-                } else {
-                    returnCover()
-                }
-                if direction == .next { player.skip() } else { player.skip(backwards: true) }
             }
-    }
-
-    private func returnCover() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { coverX = 0 }
-    }
-
-    /// The new cover enters from the side opposite to where the old one left.
-    private var coverInsertion: AnyTransition {
-        guard !reduceMotion, let leaving else { return .opacity }
-        let x = leaving == .next ? headerWidth : -headerWidth
-        return AnyTransition.offset(x: x).combined(with: .opacity)
     }
 
     private var stage: some View {
@@ -416,7 +338,6 @@ struct NowPlayingView: View {
                 reduceMotion: reduceMotion)
             VStack(spacing: 0) {
                 morphHeader(size: geometry.size, look: look)
-                    .onChange(of: geometry.size.width, initial: true) { _, width in headerWidth = width }
                 if queueVisible {
                     ScrollView {
                         queuePanel
@@ -452,17 +373,15 @@ struct NowPlayingView: View {
                 .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                 .compositingGroup()
                 .scaleEffect(player.playing ? 1 : 0.86)
-                .offset(x: reduceMotion || (leavingID != nil && current?.id != leavingID) ? 0 : coverX)
                 .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                 .offset(x: origin.x * (1 - t), y: origin.y * (1 - t))
                 .opacity(look.largeArtworkOpacity)
                 .allowsHitTesting(look.largeArtworkOpacity >= 0.5)
                 .accessibilityHidden(look.largeArtworkOpacity < 0.5)
-                // The whole artwork is the unit that changes with the track. A swipe
-                // has already sent the old cover away, so only the new one animates in.
+                // A track change swaps the cover in place with a short crossfade.
                 .id(current?.id)
-                .transition(.asymmetric(insertion: coverInsertion, removal: leaving == nil ? .opacity : .identity))
-                .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: current?.id)
             if reduceMotion {
                 ArtworkView(track: current, root: library.root, size: 72, placeholder: .neutral)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -489,17 +408,6 @@ struct NowPlayingView: View {
         // Tap dismissal and the 16pt directional drag recognize separately.
         .simultaneousGesture(artworkGesture)
         .sensoryFeedback(.selection, trigger: swipeHaptic)
-    }
-
-    /// Track-change transition, the way Music slides artwork: the incoming
-    /// track enters from the skip direction, the outgoing one leaves the
-    /// opposite way, both fading. Used by the artwork and the title block.
-    private var trackTransition: AnyTransition {
-        let incoming: Edge = skipDirection == .next ? .trailing : .leading
-        let outgoing: Edge = skipDirection == .next ? .leading : .trailing
-        return .asymmetric(
-            insertion: .move(edge: incoming).combined(with: .opacity),
-            removal: .move(edge: outgoing).combined(with: .opacity))
     }
 
     private var titleBlock: some View { titleBlock(compact: false) }
@@ -552,7 +460,7 @@ struct NowPlayingView: View {
                     }
                 }
                 .id(current?.id)
-                .transition(trackTransition)
+                .transition(.opacity)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let current {
                     Button { library.toggleFavorite(current) } label: {
@@ -595,11 +503,11 @@ struct NowPlayingView: View {
     private var transport: some View {
         let symbol = player.playing ? "pause.fill" : "play.fill"
         return HStack {
-            transportButton("backward.fill", label: "上一首", size: 34) { skipDirection = .previous; player.skip(backwards: true) }
+            transportButton("backward.fill", label: "上一首", size: 34) { player.skip(backwards: true) }
             Spacer()
             transportButton(symbol, label: player.playing ? "暂停" : "播放", size: 44) { player.toggle() }
             Spacer()
-            transportButton("forward.fill", label: "下一首", size: 34) { skipDirection = .next; player.skip() }
+            transportButton("forward.fill", label: "下一首", size: 34) { player.skip() }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 10)
