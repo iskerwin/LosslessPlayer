@@ -44,6 +44,7 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(result["screenshots"])
         self.assertIn("-only-testing:LosslessPlayerTests/MigrationAndLyricsTests", result["only_testing"])
         self.assertIn("-only-testing:LosslessPlayerTests/LyricPlaybackTests", result["only_testing"])
+        self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardRenderingTests", result["only_testing"])
 
     def test_mixed_paths_union_and_deduplicate(self):
         engine = select_tests(["App/EnginePlayer.swift"])

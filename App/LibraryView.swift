@@ -7,7 +7,7 @@ struct LibraryView: View {
     @State private var nav = LibraryNavigation()
     @State private var commands = LibraryCommands()
     /// UIKit owns the player presentation (full screen, zooming from the
-    /// mini). `playerSettled` mounts the heavy system chrome after it appears.
+    /// mini). `playerSettled` tells accessibility the zoom has finished.
     @State private var showPlayer = false
     @State private var playerSettled = false
     @State private var playerZoom = PlayerZoomAnchor()
