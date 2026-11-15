@@ -192,14 +192,12 @@ struct NowPlayingView: View {
     @State private var queueDrag: QueueRowDrag?
     @State private var details = false
     @State private var playlistTarget: Track?
-    @GestureState private var artworkDrag: CGSize = .zero
     /// MPVolumeView and AVRoutePickerView are expensive to create; mounting
     /// them during the presentation's first frames drops the zoom. They
     /// mount once it has settled, into reserved frames of the same size.
     @State private var chromeReady = false
-    /// Direction of the most recent track change, so the artwork/title slide
-    /// the way Music does: next slides in from the right, previous from the left.
-    @State private var skipDirection: ArtworkSwipe.Direction = .next
+    /// Ticks once per swipe that changes the track, for the haptic.
+    @State private var swipeHaptic = 0
     /// Parsed off the main thread when the lyrics panel needs new text.
     /// The playback clock must not re-run the regex
     /// on every tick, and the clock is observed only by the scrubber and
@@ -322,15 +320,12 @@ struct NowPlayingView: View {
     /// Only the header owns skip/pull gestures; queue scrolling stays native.
     private var artworkGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .updating($artworkDrag) { value, state, _ in
-                state = value.translation
-            }
             .onChanged { value in
                 reportPull(value.translation)
             }
             .onEnded { value in
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
-                    skipDirection = direction
+                    swipeHaptic += 1
                     onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
@@ -352,10 +347,6 @@ struct NowPlayingView: View {
         }
     }
 
-    /// Horizontal follow for the artwork drag while it is horizontal-dominant.
-    private var artworkSwipeX: CGFloat {
-        ArtworkSwipe.follows(artworkDrag) ? artworkDrag.width : 0
-    }
 
     private var stage: some View {
         lyricsPanel
@@ -404,15 +395,13 @@ struct NowPlayingView: View {
         return ZStack(alignment: .topLeading) {
             ArtworkView(track: current, root: library.root, size: look.artworkSide, placeholder: .neutral)
                 .id(current?.id)
-                .transition(artworkTransition)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
+                // A track change swaps the cover in place with a short crossfade.
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: current?.id)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                 .compositingGroup()
                 .scaleEffect(player.playing ? 1 : 0.86)
-                .animation(reduceMotion || artworkDrag != .zero ? nil : .spring(response: 0.35, dampingFraction: 0.9)) { content in
-                    content.offset(x: reduceMotion ? 0 : artworkSwipeX)
-                }
                 .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.82), value: player.playing)
                 .offset(x: origin.x * (1 - t), y: origin.y * (1 - t))
                 .opacity(look.largeArtworkOpacity)
@@ -443,19 +432,7 @@ struct NowPlayingView: View {
         .accessibilityIdentifier("now-playing-artwork")
         // Tap dismissal and the 16pt directional drag recognize separately.
         .simultaneousGesture(artworkGesture)
-    }
-
-    private var artworkTransition: AnyTransition { .opacity }
-
-    /// Track-change transition, the way Music slides artwork: the incoming
-    /// track enters from the skip direction, the outgoing one leaves the
-    /// opposite way, both fading. Used by the artwork and the title block.
-    private var trackTransition: AnyTransition {
-        let incoming: Edge = skipDirection == .next ? .trailing : .leading
-        let outgoing: Edge = skipDirection == .next ? .leading : .trailing
-        return .asymmetric(
-            insertion: .move(edge: incoming).combined(with: .opacity),
-            removal: .move(edge: outgoing).combined(with: .opacity))
+        .sensoryFeedback(.selection, trigger: swipeHaptic)
     }
 
     private var titleBlock: some View { titleBlock(compact: false) }
@@ -508,7 +485,7 @@ struct NowPlayingView: View {
                     }
                 }
                 .id(current?.id)
-                .transition(trackTransition)
+                .transition(.opacity)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let current {
                     Button { library.toggleFavorite(current) } label: {
@@ -551,11 +528,11 @@ struct NowPlayingView: View {
     private var transport: some View {
         let symbol = player.playing ? "pause.fill" : "play.fill"
         return HStack {
-            transportButton("backward.fill", label: "上一首", size: 34) { skipDirection = .previous; player.skip(backwards: true) }
+            transportButton("backward.fill", label: "上一首", size: 34) { player.skip(backwards: true) }
             Spacer()
             transportButton(symbol, label: player.playing ? "暂停" : "播放", size: 44) { player.toggle() }
             Spacer()
-            transportButton("forward.fill", label: "下一首", size: 34) { skipDirection = .next; player.skip() }
+            transportButton("forward.fill", label: "下一首", size: 34) { player.skip() }
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 10)
