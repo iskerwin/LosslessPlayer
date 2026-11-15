@@ -250,6 +250,22 @@ def xcodebuild_test(udid, selectors, result, minutes, env=None):
     return passed_count(result)
 
 
+@contextlib.contextmanager
+def app_log(udid, path):
+    """Record the app's own log during UI tests; the xcresult does not keep it."""
+    with open(path, 'w') as handle:
+        stream = subprocess.Popen(
+            ['xcrun', 'simctl', 'spawn', udid, 'log', 'stream', '--level', 'debug',
+             '--predicate', 'process == "LosslessPlayer"'],
+            stdout=handle, stderr=subprocess.STDOUT)
+        try:
+            yield
+        finally:
+            time.sleep(2)
+            stream.terminate()
+            stream.wait(timeout=30)
+
+
 def execute(plan):
     """Run exactly the planned tests; returns the proof for this tree and plan."""
     udid = prepare()
@@ -261,8 +277,9 @@ def execute(plan):
         temporary = Path('/tmp/lossless-screenshots')
         shots.mkdir(parents=True, exist_ok=True)
         try:
-            ui = xcodebuild_test(udid, plan['ui_testing'], ROOT / 'build/UIResults.xcresult', UI_MINUTES,
-                                 env=dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots)))
+            with app_log(udid, ROOT / 'AppLog.log'):
+                ui = xcodebuild_test(udid, plan['ui_testing'], ROOT / 'build/UIResults.xcresult', UI_MINUTES,
+                                     env=dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots)))
         finally:
             # Keep screenshots for diagnosis even when an interaction test fails.
             if temporary.is_dir():
