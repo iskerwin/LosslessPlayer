@@ -1098,7 +1098,7 @@ final class SearchResultsTests: XCTestCase {
         let rest = source[start.lowerBound...]
         let end = rest.range(of: "\n    private func ")
         let body = String(rest[..<(end?.lowerBound ?? rest.endIndex)])
-        XCTAssertNotNil(body.range(of: "PlaylistTabNavigation.step(pathIsEmpty: playlistPath.isEmpty)"))
+        XCTAssertNotNil(body.range(of: "PlaylistTabNavigation.step(pathIsEmpty: nav.playlistPath.isEmpty)"))
         XCTAssertNotNil(body.range(of: "playlistPath = NavigationPath()"))
         XCTAssertNil(body.range(of: "closeCard"))
     }
