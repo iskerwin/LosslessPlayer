@@ -55,9 +55,11 @@ MAPPING = {
     # Track.swift also defines PlaybackQueue, RepeatMode and playback migration.
     "App/Track.swift": (CATALOG | {"GaplessPlaybackTests"}, False),
     # AlbumGroup and SearchResults live in LibraryView, used by LibraryStore.
-    "App/LibraryView.swift": (CATALOG, True),
-    # Player spring and native detail navigation wiring.
-    "App/PlayerCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests"}, True),
+    # The shell also hosts the native accessory mini (MiniAccessoryStabilityTests).
+    "App/LibraryView.swift": (CATALOG | {"MiniAccessoryStabilityTests"}, True),
+    # Player spring, accessory mini slot and native detail navigation wiring.
+    "App/PlayerCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests",
+                              "MiniAccessoryStabilityTests"}, True),
     "App/DetailZoom.swift": ({"SearchResultsTests", "PlayerCardRenderingTests"}, True),
     # LyricsLine.parse is here, alongside scrubber, swipe and palette helpers.
     "App/NowPlayingView.swift": ({

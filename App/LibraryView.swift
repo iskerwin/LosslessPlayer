@@ -205,6 +205,8 @@ struct LibraryView: View {
                 .allowsHitTesting(!playerMounted)
                 .accessibilityHidden(playerMounted)
         }
+        .onAppear { MiniAccessoryProbe.mounts += 1 }
+        .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
     }
 
     private func receiveMiniSlot(_ slot: PlayerMiniSlot) {

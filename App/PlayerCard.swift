@@ -224,6 +224,14 @@ final class PlayerMiniSlotCache {
     }
 }
 
+/// Mounts of the native accessory's mini and the track it last showed. A
+/// remount drops a tap that lands during it, so a regression test asserts
+/// that store updates reach the mounted mini without replacing it.
+@MainActor enum MiniAccessoryProbe {
+    static var mounts = 0
+    static var trackID: UUID?
+}
+
 /// Native accessory ownership keeps placement and content in the same animation.
 struct PlayerMiniSlotView<Content: View>: View {
     var onMeasure: (PlayerMiniSlot) -> Void
