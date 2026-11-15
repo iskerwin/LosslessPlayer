@@ -1,6 +1,8 @@
 import XCTest
 import SwiftUI
 import UIKit
+import MediaPlayer
+import AVKit
 @testable import LosslessPlayer
 
 /// Recreates the old inner List traits and 8 pt vertical padding without
@@ -171,6 +173,45 @@ final class PlayerCardRenderingTests: XCTestCase {
             bottom.setFill()
             context.fill(CGRect(x: 0, y: 60, width: 120, height: 60))
         }
+    }
+
+    /// The volume bar and AirPlay button used to wait for the presentation to
+    /// settle and then fade in, so they showed about a second after the player.
+    func testPlayerShowsSystemVolumeAndRouteBeforePresentationSettles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        let player = PlayerStore(library: library)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let originalKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            originalKey?.makeKeyAndVisible()
+        }
+        let host = UIHostingController(rootView:
+            NowPlayingView(library: library, player: player, presentationSettled: false))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.layoutIfNeeded()
+
+        func contains<T: UIView>(_ type: T.Type, in view: UIView) -> Bool {
+            view is T || view.subviews.contains { contains(type, in: $0) }
+        }
+        // Poll the main queue, where SwiftUI commits representables. The
+        // timeout only bounds a failure; the presentation never settles here.
+        let mounted = expectation(description: "native volume and route views mounted")
+        func poll() {
+            if contains(MPVolumeView.self, in: host.view), contains(AVRoutePickerView.self, in: host.view) {
+                mounted.fulfill()
+            } else {
+                DispatchQueue.main.async(execute: poll)
+            }
+        }
+        DispatchQueue.main.async(execute: poll)
+        wait(for: [mounted], timeout: 5)
     }
 
     func testNativeCollectionPushDoesNotChangeLightWindowAppearance() async throws {
