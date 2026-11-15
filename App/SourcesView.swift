@@ -35,6 +35,13 @@ struct SourcesView: View {
                         Button("取消授权并移除资料库条目", systemImage: "folder.badge.minus", role: .destructive) { removing = folder }.disabled(library.importing)
                     }
                 }
+                Section {
+                    NavigationLink {
+                        AudioDiagnosticsView(library: library)
+                    } label: {
+                        Label("音频诊断", systemImage: "waveform.badge.magnifyingglass")
+                    }
+                }
                 if library.importing {
                     Section("正在扫描") {
                         ProgressView(value: library.progress)

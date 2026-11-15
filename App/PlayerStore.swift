@@ -117,6 +117,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func load(_ track: Track, autoplay: Bool = true, at time: Double = 0, context: [Track]? = nil, keepTransport: Bool = false) {
         guard track.available else { errorMessage = "文件已移动或删除，请重新扫描文件夹"; return }
+        AudioDiagnostics.shared.mark("切歌 → \(track.title)\(autoplay ? "" : "（不自动播放）")")
         pause(discardingPreload: false)
         engine.prepareForLoad { [self] in
             do {
@@ -190,6 +191,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func resume() {
         guard engine.hasFile else { return }
+        AudioDiagnostics.shared.mark("播放")
         do {
             if let current { try prepareSession(for: current, activate: true) }
             playing = try engine.play()
@@ -206,15 +208,18 @@ final class PlayerStore: NSObject, ObservableObject {
     /// track at launch does not interrupt other apps' audio.
     private func prepareSession(for track: Track, activate: Bool) throws {
         let session = AVAudioSession.sharedInstance()
-        if session.category != .playback || session.mode != .default {
+        let categoryChanged = session.category != .playback || session.mode != .default
+        if categoryChanged {
             try session.setCategory(.playback, mode: .default)
         }
         let route = session.currentRoute.outputs.first.map { AudioRouteKind.from($0.portType) } ?? .other
-        if let rate = AudioSessionRatePolicy.preference(sourceRate: track.sampleRate, route: route,
-                                                       currentPreference: session.preferredSampleRate) {
+        let rate = AudioSessionRatePolicy.preference(sourceRate: track.sampleRate, route: route,
+                                                     currentPreference: session.preferredSampleRate)
+        if let rate {
             try session.setPreferredSampleRate(rate)
         }
         if activate { try session.setActive(true) }
+        AudioDiagnostics.shared.sessionActivation(categoryChanged: categoryChanged, preferredRate: rate, activate: activate)
     }
 
     private func prepareSessionPassively(for track: Track) {
@@ -222,6 +227,7 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func pause() {
+        AudioDiagnostics.shared.mark("暂停")
         pause(discardingPreload: true)
     }
 
@@ -249,6 +255,7 @@ final class PlayerStore: NSObject, ObservableObject {
 
     func seek(_ time: Double) {
         guard engine.hasFile, time.isFinite else { return }
+        AudioDiagnostics.shared.mark(String(format: "跳转 %.1fs", time))
         position = min(max(0, time), engine.duration)
         engine.seek(to: position)
         releaseNextAccess()

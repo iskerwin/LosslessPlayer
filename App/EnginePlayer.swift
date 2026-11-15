@@ -46,6 +46,7 @@ final class EnginePlayer {
         engine.attach(node)
         node.volume = 1.0
         engine.mainMixerNode.outputVolume = 1.0
+        AudioDiagnostics.shared.attach(engine)
     }
 
     /// Opens `url` and schedules it from the start (or `time`), without
