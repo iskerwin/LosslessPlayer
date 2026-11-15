@@ -830,6 +830,165 @@ struct ArtworkBackgroundSurface: View {
     }
 }
 
+private struct PlaybackScrubber: View {
+    @ObservedObject var playbackClock: PlaybackClock
+    var duration: Double
+    var trackID: UUID?
+    var seek: (Double) -> Void
+    @State private var scrubbing = false
+    @State private var draft: Double = 0
+
+    private var shown: Double { scrubbing ? draft : min(playbackClock.position, duration) }
+
+    var body: some View {
+        VStack(spacing: -PlayerControlMetrics.timestampOverlap) {
+            ThinScrubber(value: Binding(
+                get: { shown },
+                set: { draft = $0 }
+            ), range: 0...(duration > 0 ? duration : 1), onEditingChanged: { editing in
+                if editing {
+                    draft = playbackClock.position
+                    scrubbing = true
+                } else {
+                    if scrubbing, duration > 0 { seek(draft) }
+                    scrubbing = false
+                }
+            }, onCancel: { scrubbing = false })
+            .id(trackID)
+            .disabled(duration == 0)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue(duration > 0 ? "\(clock(shown))，共 \(clock(duration))" : "时长未知")
+            .accessibilityIdentifier("playback-progress")
+            HStack {
+                Text(duration > 0 ? clock(shown) : "--:--")
+                Spacer()
+                Text(duration > 0 ? "−" + clock(max(0, duration - shown)) : "--:--")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+            .allowsHitTesting(false)
+        }
+        .onChange(of: trackID) { _, _ in scrubbing = false }
+    }
+}
+
+private struct PlaybackLyrics: View {
+    @ObservedObject var clock: PlaybackClock
+    var lines: [LyricsLine]
+    var seek: (Double) -> Void
+
+    var body: some View {
+        LyricsScroll(lines: lines, position: clock.position, seek: seek)
+    }
+}
+
+struct PressScaleStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+enum ScrubberMap {
+    static func fraction(value: Double, in range: ClosedRange<Double>) -> Double {
+        let span = range.upperBound - range.lowerBound
+        guard span.isFinite, span > 0, range.lowerBound.isFinite, value.isFinite else { return 0 }
+        return min(1, max(0, (value - range.lowerBound) / span))
+    }
+
+    static func value(x: CGFloat, width: CGFloat, in range: ClosedRange<Double>) -> Double {
+        let span = range.upperBound - range.lowerBound
+        guard width.isFinite, x.isFinite, width > 0, span.isFinite, span > 0 else { return range.lowerBound }
+        let fraction = min(1, max(0, Double(x / width)))
+        return range.lowerBound + fraction * span
+    }
+}
+
+struct ThinScrubber: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double> = 0...1
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    var onCancel: () -> Void = {}
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+    @GestureState private var fingerDown = false
+    @State private var dragging = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let fraction = ScrubberMap.fraction(value: value, in: range)
+            let thickness = dragging ? PlayerControlMetrics.activeTrackHeight : PlayerControlMetrics.restingTrackHeight
+            // The played part is clipped by the track's capsule, so near zero it
+            // still follows the rounded end instead of narrowing into a sliver.
+            ZStack(alignment: .leading) {
+                Color.white.opacity(contrast == .increased ? 0.5 : 0.28)
+                Color.white.frame(width: width * fraction)
+            }
+            .frame(height: thickness)
+            .clipShape(Capsule())
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($fingerDown) { _, state, _ in state = true }
+                    .onChanged { gesture in
+                        guard isEnabled else { return }
+                        if !dragging {
+                            dragging = true
+                            onEditingChanged(true)
+                        }
+                        value = ScrubberMap.value(x: gesture.location.x, width: width, in: range)
+                    }
+                    .onEnded { _ in
+                        guard dragging else { return }
+                        dragging = false
+                        if isEnabled { onEditingChanged(false) }
+                        else { onCancel() }
+                    }
+            )
+        }
+        .frame(height: PlayerControlMetrics.minimumHitHeight)
+        .opacity(isEnabled ? 1 : 0.45)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: dragging)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
+            let step = min(10, range.upperBound - range.lowerBound)
+            let delta: Double
+            switch direction {
+            case .increment: delta = step
+            case .decrement: delta = -step
+            @unknown default: return
+            }
+            let next = min(range.upperBound, max(range.lowerBound, value + delta))
+            onEditingChanged(true)
+            value = next
+            onEditingChanged(false)
+        }
+        .onChange(of: fingerDown) { _, active in
+            if !active && dragging {
+                dragging = false
+                onCancel()
+            }
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled && dragging {
+                dragging = false
+                onCancel()
+            }
+        }
+        .onDisappear {
+            if dragging { onCancel() }
+        }
+    }
+}
+
 /// One tint per cover and one tone per appearance, shared by the player and the
 /// album/playlist pages so every artwork background is the same kind of surface.
 enum ArtworkColors {
