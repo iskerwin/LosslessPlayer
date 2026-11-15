@@ -224,6 +224,20 @@ final class PlayerMiniSlotCache {
     }
 }
 
+/// Distinct native accessory minis that appeared, and the track the mini
+/// last showed. A replaced mini drops a tap that lands during the swap, so
+/// regression tests assert that updates reach the mounted mini instead. A
+/// reattach of the same mini appears again without adding an instance.
+@MainActor enum MiniAccessoryProbe {
+    static var instances: Set<UUID> = []
+    static var trackID: UUID?
+
+    static func reset() {
+        instances = []
+        trackID = nil
+    }
+}
+
 /// Native accessory ownership keeps placement and content in the same animation.
 struct PlayerMiniSlotView<Content: View>: View {
     var onMeasure: (PlayerMiniSlot) -> Void
