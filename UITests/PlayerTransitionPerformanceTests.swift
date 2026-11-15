@@ -42,7 +42,7 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
             let frame = stableMiniFrame(in: app)
             let player = app.descendants(matching: .any)["now-playing"]
             startMeasuring()
-            let openedAt = tapOpening(frame, in: app, player: player)
+            let openedAt = sendTap(frame, in: app)
             waitUntilSettled(player, openedAt: openedAt)
             stopMeasuring()
             // A full close unmounts the card, so the next open is cold again.
@@ -58,24 +58,13 @@ final class PlayerTransitionPerformanceTests: XCTestCase {
     /// The accessory reports a title before its screen frame is usable, and
     /// that title's accessibility activation point misses the open control.
     /// Screenshot coverage taps the stable frame's center for the same reason.
-    /// That center tap is sometimes dropped outright (run 43248405785: the
-    /// library never changed). A dropped tap leaves now-playing absent and is
-    /// repeated once. It does not spend the 8s settle budget; that budget
-    /// still starts at the tap the wait follows.
+    /// The 8s settle budget starts at the tap.
     private func presentSettledPlayer(in app: XCUIApplication, file: StaticString = #filePath,
                                       line: UInt = #line) -> XCUIElement {
         let player = app.descendants(matching: .any)["now-playing"]
-        let openedAt = tapOpening(stableMiniFrame(in: app, file: file, line: line), in: app, player: player,
-                                  file: file, line: line)
+        let openedAt = sendTap(stableMiniFrame(in: app, file: file, line: line), in: app)
         waitUntilSettled(player, openedAt: openedAt)
         return player
-    }
-
-    private func tapOpening(_ frame: CGRect, in app: XCUIApplication, player: XCUIElement,
-                            file: StaticString = #filePath, line: UInt = #line) -> Date {
-        let first = sendTap(frame, in: app)
-        if player.waitForExistence(timeout: 2) { return first }
-        return sendTap(stableMiniFrame(in: app, file: file, line: line), in: app)
     }
 
     private func sendTap(_ frame: CGRect, in app: XCUIApplication) -> Date {

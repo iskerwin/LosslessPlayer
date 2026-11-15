@@ -3,8 +3,8 @@ import AVFoundation
 
 /// Lossless playback engine: `AVAudioFile` streams into an `AVAudioPlayerNode`
 /// connected straight to the engine's main mixer — no EQ, no effects, no
-/// converter nodes in between — with both digital volumes pinned at 1.0 so
-/// samples are not scaled on the way out.
+/// converter nodes in between — with unity gain during steady playback. Only
+/// transport boundaries use a short node-volume envelope; the mixer stays at 1.0.
 ///
 /// The main mixer and the system output are still Apple's; whether the chain
 /// stays bit-perfect depends on the session sample rate and the route, which
@@ -19,6 +19,15 @@ final class EnginePlayer {
 
     private let engine: AVAudioEngine
     private let node = AVAudioPlayerNode()
+    private lazy var envelope = TransportEnvelopeDriver(node: node) { [weak self] token in
+        self?.performTransport(token)
+    }
+    private var transportDepth = 0
+    private var performingToken: UInt64 = 0
+    private var handlingNaturalFinish = false
+    private var transportAction: (() -> Void)?
+    private var wantsPlayback = false
+    private var pendingOperation: TransportFader.Operation?
     private var file: AVAudioFile?
     private var segmentStartFrame: AVAudioFramePosition = 0
     var onAdvance: ((UUID) -> Void)?
@@ -29,8 +38,8 @@ final class EnginePlayer {
     private var scheduledEndFrame: AVAudioFramePosition = 0
 
     private(set) var duration: Double = 0
-    var hasFile: Bool { file != nil }
-    var isPlaying: Bool { node.isPlaying }
+    var hasFile: Bool { file != nil && pendingOperation != .stop }
+    var isPlaying: Bool { wantsPlayback }
 
     init(engine: AVAudioEngine = AVAudioEngine()) {
         self.engine = engine
@@ -48,57 +57,140 @@ final class EnginePlayer {
         guard next.length > 0, next.fileFormat.sampleRate > 0 else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        queue.invalidate(.trackChange)
-        nextFile = nil
-        // The mixer/output stream stays running when the decoded format is
-        // unchanged. Stopping it also tears down the Bluetooth render stream.
-        if file == nil || !GaplessCompatibility.canJoin(node.outputFormat(forBus: 0), next.processingFormat) {
-            node.stop()
-            engine.stop()
-            engine.disconnectNodeOutput(node)
-            engine.connect(node, to: engine.mainMixerNode, format: next.processingFormat)
+        wantsPlayback = false
+        let reconfigures = file == nil || !GaplessCompatibility.canJoin(node.outputFormat(forBus: 0), next.processingFormat)
+        transport(.load, silence: reconfigures ? .reconfiguration : .renderStop) { [self] in
+            queue.invalidate(.trackChange)
+            nextFile = nil
+            // Preserve the output render stream for same-format replacements.
+            if reconfigures {
+                node.stop()
+                engine.stop()
+                engine.disconnectNodeOutput(node)
+                engine.connect(node, to: engine.mainMixerNode, format: next.processingFormat)
+            }
+            file = next
+            duration = Double(next.length) / next.fileFormat.sampleRate
+            schedule(from: frame(for: time), allowPreload: true)
+            if !engine.isRunning { engine.prepare() }
+            restartIfWanted()
         }
-        node.volume = 1.0
-        engine.mainMixerNode.outputVolume = 1.0
-        file = next
-        duration = Double(next.length) / next.fileFormat.sampleRate
-        schedule(from: frame(for: time), allowPreload: true)
-        if !engine.isRunning { engine.prepare() }
     }
 
-    /// Starts or resumes playback. Returns whether the node is playing.
+    /// PlayerStore changes session rate only after old rendering is silent and
+    /// paused. The closure includes session preparation and the new load.
+    func prepareForLoad(_ action: @escaping () -> Void) {
+        wantsPlayback = false
+        // The opaque action can change the session rate before loading; keep
+        // the conservative reconfiguration hold even for a same-format file.
+        transport(.load) { [self] in
+            node.pause()
+            action()
+        }
+    }
+
+    /// Starts or resumes playback. Returns the accepted playback intent while
+    /// an earlier transport operation finishes its silent-window work.
     @discardableResult
     func play() throws -> Bool {
-        guard file != nil else { return false }
+        guard hasFile || pendingOperation == .load else { return false }
         if !engine.isRunning { try engine.start() }
-        node.play()
-        return node.isPlaying
+        wantsPlayback = true
+        if let operation = pendingOperation {
+            // A pause that repairs an interrupted load must still rebuild the
+            // segment at zero; ordinary pause/resume can reverse immediately.
+            if operation != .pause || queue.currentToken == nil { return true }
+            transportAction = nil
+            pendingOperation = nil
+        }
+        if node.isPlaying {
+            envelope.resumeRendering()
+        } else {
+            transport(.play) { [self] in node.play() }
+        }
+        return true
     }
 
     func pause() {
-        node.pause()
+        wantsPlayback = false
+        // Keep a pending seek/tail rebuild, but leave its result paused.
+        if pendingOperation == .seek || pendingOperation == .invalidatePreload || pendingOperation == .stop { return }
+        let repairCancelledLoad = pendingOperation == .load
+        transport(.pause) { [self] in
+            let time = currentTime
+            node.pause()
+            if repairCancelledLoad {
+                schedule(from: frame(for: time), allowPreload: false)
+            }
+            restartIfWanted()
+        }
     }
 
     func stop() {
-        queue.invalidate(.trackChange)
-        nextFile = nil
-        node.stop()
-        engine.stop()
-        file = nil
-        duration = 0
-        segmentStartFrame = 0
+        wantsPlayback = false
+        transport(.stop) { [self] in
+            queue.invalidate(.trackChange)
+            nextFile = nil
+            node.stop()
+            engine.stop()
+            file = nil
+            duration = 0
+            segmentStartFrame = 0
+        }
     }
 
     func seek(to time: Double) {
         guard file != nil else { return }
-        let wasPlaying = node.isPlaying
-        queue.invalidate(.seek)
-        nextFile = nil
-        schedule(from: frame(for: time), allowPreload: false)
-        if wasPlaying {
-            if !engine.isRunning { try? engine.start() }
-            node.play()
+        transport(.seek) { [self] in
+            queue.invalidate(.seek)
+            nextFile = nil
+            schedule(from: frame(for: time), allowPreload: false)
+            restartIfWanted()
         }
+    }
+
+    private func restartIfWanted() {
+        if wantsPlayback {
+            if !engine.isRunning { try? engine.start() }
+            if engine.isRunning { node.play() }
+        }
+    }
+
+    private func transport(_ operation: TransportFader.Operation, silence: TransportFader.Silence? = nil,
+                           action: @escaping () -> Void) {
+        // Reject completions from the old segment as soon as replacement is
+        // requested, including callbacks queued during the fade-out.
+        switch operation {
+        case .load, .stop, .seek, .invalidatePreload:
+            queue.invalidate(operation == .seek ? .seek : .trackChange)
+            nextFile = nil
+        case .pause, .play: break
+        }
+        // A natural end has no live segment to drain. Its existing synchronous
+        // finish/load chain must stay outside the user-transport envelope.
+        if handlingNaturalFinish {
+            action()
+            return
+        }
+        transportAction = action
+        pendingOperation = operation
+        if let token = envelope.request(operation, audible: node.isPlaying, silence: silence) {
+            performTransport(token)
+        }
+    }
+
+    private func performTransport(_ token: UInt64) {
+        guard envelope.isCurrent(token) else { return }
+        let action = transportAction
+        transportAction = nil
+        pendingOperation = nil
+        transportDepth += 1
+        performingToken = token
+        action?()
+        transportDepth -= 1
+        // Session preparation -> load -> autoplay can nest synchronously.
+        // Keep one silent window until the entire render restart has completed.
+        if transportDepth == 0 { envelope.performed(performingToken) }
     }
 
     /// Playback position in seconds. `playerTime` counts samples rendered
@@ -137,19 +229,29 @@ final class EnginePlayer {
     /// AVAudioPlayerNode cannot remove just its tail. Rebuild only the current
     /// segment at the current position, and reject callbacks from the old tail.
     func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
-        let hadPending = nextFile != nil
-        let time = currentTime
-        let wasPlaying = node.isPlaying
-        guard hadPending else {
+        let needsRebuild = nextFile != nil || (pendingOperation != nil && queue.currentToken == nil && file != nil)
+        if reason == .interruption {
+            // The system may already have stopped rendering. Discard any old
+            // closure before restoring unity; never leave a half-faded transport.
+            node.pause()
+            transportAction = nil
+            pendingOperation = nil
+            envelope.invalidate()
+            wantsPlayback = false
+        }
+        guard needsRebuild else {
             queue.disablePreload()
+            if reason == .routeChange, wantsPlayback {
+                transport(.play) { [self] in restartIfWanted() }
+            }
             return
         }
-        queue.invalidate(reason)
-        nextFile = nil
-        schedule(from: frame(for: time), allowPreload: false)
-        if wasPlaying {
-            if !engine.isRunning { try? engine.start() }
-            if engine.isRunning { node.play() }
+        transport(.invalidatePreload) { [self] in
+            let time = currentTime
+            queue.invalidate(reason)
+            nextFile = nil
+            schedule(from: frame(for: time), allowPreload: false)
+            restartIfWanted()
         }
     }
 
@@ -184,7 +286,10 @@ final class EnginePlayer {
     private func completed(_ token: UUID) {
         switch queue.complete(token) {
         case .ignored: return
-        case .finished: onFinish?()
+        case .finished:
+            handlingNaturalFinish = true
+            defer { handlingNaturalFinish = false }
+            onFinish?()
         case .advanced(let id):
             guard let next = nextFile else { return }
             file = next

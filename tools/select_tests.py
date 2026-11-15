@@ -23,7 +23,7 @@ import sys
 
 TARGET = "LosslessPlayerTests"
 PLAYBACK = {"PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests",
-            "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests"}
+            "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests", "TransportFaderTests"}
 # These integration classes instantiate PlayerStore -> EnginePlayer, not just
 # LibraryStore (testToggleStartsFirstAvailableTrack / upcoming queue mutations).
 PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests", "LyricPlaybackTests"}
@@ -42,6 +42,8 @@ CATALOG = LIBRARY | {
 # A value is (XCTest classes, affects screenshots). No wildcard source mapping.
 MAPPING = {
     "App/EnginePlayer.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
+    "App/TransportFader.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
+    "App/TransportEnvelopeDriver.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/GaplessPlayback.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/AudioPath.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
     "App/PlayerStore.swift": (PLAYBACK | PLAYER_INTEGRATION, False),
@@ -53,10 +55,12 @@ MAPPING = {
     # Track.swift also defines PlaybackQueue, RepeatMode and playback migration.
     "App/Track.swift": (CATALOG | {"GaplessPlaybackTests"}, False),
     # AlbumGroup and SearchResults live in LibraryView, used by LibraryStore.
-    "App/LibraryView.swift": (CATALOG, True),
-    # Player and detail springs live on these cards, not on the library shell.
-    "App/PlayerCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests"}, True),
-    "App/DetailCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests"}, True),
+    # The shell also hosts the native accessory mini (MiniAccessoryStabilityTests).
+    "App/LibraryView.swift": (CATALOG | {"MiniAccessoryStabilityTests"}, True),
+    # Player spring, accessory mini slot and native detail navigation wiring.
+    "App/PlayerCard.swift": ({"BrowseAndArtworkPerformanceTests", "PlayerCardRenderingTests",
+                              "MiniAccessoryStabilityTests"}, True),
+    "App/DetailZoom.swift": ({"SearchResultsTests", "PlayerCardRenderingTests"}, True),
     # LyricsLine.parse is here, alongside scrubber, swipe and palette helpers.
     "App/NowPlayingView.swift": ({
         "MigrationAndLyricsTests", "PlaybackQueueTests", "ArtworkSwipeTests",

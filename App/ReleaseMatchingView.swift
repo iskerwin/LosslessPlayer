@@ -196,10 +196,88 @@ struct CoverReportSheet: View {
                     }
                 }
             }
-            .navigationTitle("更新封面")
+            .navigationTitle(report.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }
         .accessibilityIdentifier("cover-report")
+    }
+}
+
+/// Checked songs are looked up one after another. The shared client keeps
+/// the gap between requests; this screen only chooses which songs to ask.
+struct BatchFillView: View {
+    @ObservedObject var library: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<UUID> = []
+
+    private var tracks: [Track] { library.batchFillTargets }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if tracks.isEmpty {
+                    ContentUnavailableView("没有要补全的歌曲", systemImage: "checkmark.circle",
+                        description: Text("缺专辑名或缺封面的歌曲会出现在这里。"))
+                } else {
+                    Section {
+                        ForEach(tracks) { track in
+                            Button { toggle(track) } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: selected.contains(track.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selected.contains(track.id) ? MusicTheme.accent : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.title).foregroundStyle(.primary).lineLimit(1)
+                                        Text(detail(track)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                            .accessibilityIdentifier("batch-fill-\(track.id)")
+                        }
+                    } footer: {
+                        Text("勾选后一起查。每首歌仍按原来的间隔依次查询，不会同时发出多条请求。离线时停在当前这一首，没查的下次再选。")
+                    }
+                }
+            }
+            .navigationTitle("补全缺失信息")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
+                }
+                if !tracks.isEmpty {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(selected.count == tracks.count ? "取消全选" : "全选") {
+                            selected = selected.count == tracks.count ? [] : Set(tracks.map(\.id))
+                        }
+                    }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button("查询所选（\(selected.count)）") { search() }
+                        .disabled(selected.isEmpty || library.coverProgress != nil || library.importing)
+                        .accessibilityIdentifier("batch-fill-search")
+                }
+            }
+        }
+        .tint(MusicTheme.accent)
+    }
+
+    private func detail(_ track: Track) -> String {
+        var parts = [track.artist]
+        if !track.hasAlbum { parts.append("缺专辑名") }
+        if track.artworkFilename == nil { parts.append("缺封面") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func toggle(_ track: Track) {
+        if selected.contains(track.id) { selected.remove(track.id) }
+        else { selected.insert(track.id) }
+    }
+
+    private func search() {
+        let chosen = tracks.filter { selected.contains($0.id) }
+        library.startBatchFill(chosen)
+        dismiss()
     }
 }
