@@ -188,10 +188,6 @@ struct NowPlayingView: View {
     @State private var queueDrag: QueueRowDrag?
     @State private var details = false
     @State private var playlistTarget: Track?
-    /// MPVolumeView and AVRoutePickerView are expensive to create; mounting
-    /// them during the presentation's first frames drops the zoom. They
-    /// mount once it has settled, into reserved frames of the same size.
-    @State private var chromeReady = false
     /// Ticks once per swipe that changes the track, for the haptic.
     @State private var swipeHaptic = 0
     /// Parsed off the main thread when the lyrics panel needs new text.
@@ -240,10 +236,6 @@ struct NowPlayingView: View {
             if !interactive { queueDrag = nil }
         }
         .onDisappear { queueDrag = nil }
-        .task(id: presentationSettled) {
-            guard presentationSettled else { return }
-            chromeReady = true
-        }
         .accessibilityAction(.escape) { onClose() }
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(library: library, tracks: [track])
@@ -284,7 +276,7 @@ struct NowPlayingView: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 // Keep native volume touches inside the control, including its icons.
-                SystemVolumeBar(ready: chromeReady)
+                SystemVolumeBar()
                     .gesture(TapGesture().onEnded { })
                     .padding(.top, 32)
                 bottomRow
@@ -531,17 +523,11 @@ struct NowPlayingView: View {
                 panel = panel == .lyrics ? .artwork : .lyrics
             }
             Spacer()
-            ZStack {
-                if chromeReady {
-                    RoutePicker()
-                        .accessibilityLabel("选择音频输出")
-                        .accessibilityIdentifier("player-route-picker")
-                        .transition(.opacity)
-                }
-            }
-            .frame(width: 48, height: 44)
-            .gesture(TapGesture().onEnded { })
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: chromeReady)
+            RoutePicker()
+                .accessibilityLabel("选择音频输出")
+                .accessibilityIdentifier("player-route-picker")
+                .frame(width: 48, height: 44)
+                .gesture(TapGesture().onEnded { })
             Spacer()
             bottomButton("list.bullet", label: "显示播放队列") {
                 if panel == .lyrics {
@@ -1219,27 +1205,16 @@ private struct LyricsReaderBody: View {
     }
 }
 
+/// Mounted with the player from its first frame. The system zoom animates
+/// in the render server, so creating these views does not stall it.
 struct SystemVolumeBar: View {
-    /// False only during the presentation's first moments: the reserved
-    /// frame keeps the layout identical while the native view is deferred.
-    var ready: Bool = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         HStack(spacing: PlayerControlMetrics.volumeIconSpacing) {
             VolumeSpeaker(symbol: "speaker.fill", alignment: .leading)
-            Group {
-                if ready {
-                    NativeVolumeView()
-                        .accessibilityIdentifier("player-system-volume")
-                        .transition(.opacity)
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: PlayerControlMetrics.minimumHitHeight)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: ready)
+            NativeVolumeView()
+                .accessibilityIdentifier("player-system-volume")
+                .frame(maxWidth: .infinity)
+                .frame(height: PlayerControlMetrics.minimumHitHeight)
             VolumeSpeaker(symbol: "speaker.wave.3.fill", alignment: .trailing)
         }
         .foregroundStyle(.white.opacity(0.6))
