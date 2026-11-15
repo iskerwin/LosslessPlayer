@@ -163,10 +163,8 @@ struct NowPlayingView: View {
     @ObservedObject var player: PlayerStore
     var onOpen: (LibraryRoute) -> Void
     var onDelete: (Track) -> Void
-    /// The containing card owns all expand/collapse geometry and animation.
+    /// The system presentation owns expand/collapse; this only asks to dismiss.
     var onClose: () -> Void
-    var onPull: (CGFloat) -> Void
-    var onPullCancelled: () -> Void
     var presentationSettled: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -174,14 +172,12 @@ struct NowPlayingView: View {
     @ScaledMetric(relativeTo: .title2) private var titleHeight: CGFloat = 72
     @ScaledMetric(relativeTo: .headline) private var compactHeaderHeight: CGFloat = PlayerScrollMorph.compactHeight
 
-    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, onPull: @escaping (CGFloat) -> Void = { _ in }, onPullCancelled: @escaping () -> Void = {}, presentationSettled: Bool = true) {
+    init(library: LibraryStore, player: PlayerStore, onOpen: @escaping (LibraryRoute) -> Void = { _ in }, onDelete: @escaping (Track) -> Void = { _ in }, onClose: @escaping () -> Void = {}, presentationSettled: Bool = true) {
         self.library = library
         self.player = player
         self.onOpen = onOpen
         self.onDelete = onDelete
         self.onClose = onClose
-        self.onPull = onPull
-        self.onPullCancelled = onPullCancelled
         self.presentationSettled = presentationSettled
     }
 
@@ -306,47 +302,27 @@ struct NowPlayingView: View {
 
     private var dismissGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .onChanged { reportPull($0.translation) }
             .onEnded { value in
                 if value.translation.height > 90,
                    value.translation.height > abs(value.translation.width) * 1.5 {
                     onClose()
-                } else {
-                    onPullCancelled()
                 }
             }
     }
 
-    /// Only the header owns skip/pull gestures; queue scrolling stays native.
+    /// Only the header owns skip/dismiss gestures; queue scrolling stays native.
     private var artworkGesture: some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .onChanged { value in
-                reportPull(value.translation)
-            }
             .onEnded { value in
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
                     swipeHaptic += 1
-                    onPullCancelled()
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
                     onClose()
-                } else {
-                    onPullCancelled()
                 }
             }
     }
-
-    /// The presenter converts vertical points directly into card progress.
-    private func reportPull(_ translation: CGSize) {
-        guard !reduceMotion else { return }
-        if translation.height > abs(translation.width) * 1.5 {
-            onPull(max(0, translation.height))
-        } else {
-            onPull(0)
-        }
-    }
-
 
     private var stage: some View {
         lyricsPanel
