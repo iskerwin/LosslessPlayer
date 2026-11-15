@@ -3,35 +3,91 @@ import SwiftUI
 import XCTest
 @testable import LosslessPlayer
 
-/// The native bottom accessory rebuilds its mini whenever the view that
-/// applies `tabViewBottomAccessory` is re-evaluated, and a tap landing
-/// during that rebuild is lost (cold-launch mini taps that never opened the
-/// player). Store updates must reach the mounted mini without replacing it.
+/// The native bottom accessory replaces its mini whenever the view that
+/// applies `tabViewBottomAccessory` re-runs its body, and a tap landing
+/// during the swap is lost (cold-launch mini taps that never opened the
+/// player). Run 43708252094 traced the app root re-running at launch and
+/// right as the first touch arrived. Every update below must reach the
+/// mounted mini without replacing it.
 @MainActor
 final class MiniAccessoryStabilityTests: XCTestCase {
     func testStoreUpdatesKeepTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.storeUpdate)
+    }
+
+    func testParentReRenderKeepsTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.reRender)
+    }
+
+    func testParentEnvironmentChangeKeepsTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.environment)
+    }
+
+    func testScenePhaseChangeKeepsTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.scenePhase)
+    }
+
+    func testKeyWindowChangeKeepsTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.keyWindow)
+    }
+
+    func testTabSwitchKeepsTheMountedAccessoryMini() throws {
+        try assertMiniSurvives(.tabSwitch)
+    }
+
+    private func assertMiniSurvives(_ trigger: ParentTrigger, file: StaticString = #filePath,
+                                    line: UInt = #line) throws {
         guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
         let (root, library, tracks) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let player = PlayerStore(library: library)
         defer { player.pause() }
         player.load(tracks[0], autoplay: false, context: tracks)
-        MiniAccessoryProbe.mounts = 0
-        MiniAccessoryProbe.trackID = nil
+        MiniAccessoryProbe.reset()
+        let parent = ParentProbe()
 
-        let window = try show(LibraryView(library: library, player: player))
+        let window = try show(ParentHarness(probe: parent, trigger: trigger, library: library, player: player))
         defer { hide(window) }
         waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID == tracks[0].id }
         flushMainQueue()
-        XCTAssertEqual(MiniAccessoryProbe.mounts, 1, "Launch layout replaced the mini")
+        XCTAssertEqual(MiniAccessoryProbe.instances.count, 1, "Launch layout replaced the mini", file: file, line: line)
 
-        // A library change the shell observes, then a playback change the
-        // mini itself shows. Neither may replace the mounted mini.
-        library.toggleFavorite(tracks[2])
-        player.load(tracks[1], autoplay: false, context: tracks)
-        waitUntil("mini shows the second track") { MiniAccessoryProbe.trackID == tracks[1].id }
-        flushMainQueue()
-        XCTAssertEqual(MiniAccessoryProbe.mounts, 1, "A store update replaced the mini")
+        for round in 1...2 {
+            switch trigger {
+            case .storeUpdate:
+                // A library change the shell observes, then a playback change
+                // the mini itself shows.
+                library.toggleFavorite(tracks[2])
+                let next = tracks[round % 2]
+                player.load(next, autoplay: false, context: tracks)
+                waitUntil("mini shows the next track") { MiniAccessoryProbe.trackID == next.id }
+            case .keyWindow:
+                let other = UIWindow(windowScene: try XCTUnwrap(window.windowScene))
+                other.makeKeyAndVisible()
+                flushMainQueue()
+                other.isHidden = true
+                window.makeKeyAndVisible()
+            case .tabSwitch:
+                let tabs = try XCTUnwrap(tabBarController(in: window), file: file, line: line)
+                tabs.selectedIndex = round % 2 == 1 ? 1 : 0
+            case .reRender, .environment, .scenePhase:
+                let seen = parent.evaluations
+                parent.tick += 1
+                waitUntil("parent re-ran") { parent.evaluations > seen }
+            }
+            flushMainQueue()
+        }
+        XCTAssertEqual(MiniAccessoryProbe.instances.count, 1, "\(trigger) replaced the mini", file: file, line: line)
+    }
+
+    private func tabBarController(in window: UIWindow) -> UITabBarController? {
+        var pending = [window.rootViewController].compactMap { $0 }
+        while !pending.isEmpty {
+            let controller = pending.removeFirst()
+            if let tabs = controller as? UITabBarController { return tabs }
+            pending += controller.children
+        }
+        return nil
     }
 
     private func fixture() throws -> (URL, LibraryStore, [Track]) {
@@ -95,5 +151,42 @@ final class MiniAccessoryStabilityTests: XCTestCase {
         let turned = expectation(description: "main queue turned")
         DispatchQueue.main.async { DispatchQueue.main.async { turned.fulfill() } }
         wait(for: [turned], timeout: 5)
+    }
+}
+
+private enum ParentTrigger { case storeUpdate, reRender, environment, scenePhase, keyWindow, tabSwitch }
+
+private final class ParentProbe: ObservableObject {
+    @Published var tick = 0
+    var evaluations = 0
+}
+
+private struct ParentTickKey: EnvironmentKey { static let defaultValue = 0 }
+
+private extension EnvironmentValues {
+    var parentTick: Int {
+        get { self[ParentTickKey.self] }
+        set { self[ParentTickKey.self] = newValue }
+    }
+}
+
+/// Stands in for the App body above LibraryView.
+private struct ParentHarness: View {
+    @ObservedObject var probe: ParentProbe
+    let trigger: ParentTrigger
+    let library: LibraryStore
+    let player: PlayerStore
+
+    var body: some View {
+        let _ = probe.evaluations += 1
+        let tick = probe.tick
+        switch trigger {
+        case .environment:
+            LibraryView(library: library, player: player).environment(\.parentTick, tick)
+        case .scenePhase:
+            LibraryView(library: library, player: player).environment(\.scenePhase, tick % 2 == 1 ? .inactive : .active)
+        case .storeUpdate, .reRender, .keyWindow, .tabSwitch:
+            LibraryView(library: library, player: player)
+        }
     }
 }

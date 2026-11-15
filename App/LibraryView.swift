@@ -5,6 +5,7 @@ struct LibraryView: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     @State private var nav = LibraryNavigation()
+    @State private var commands = LibraryCommands()
     /// The overlay owns player travel; the native accessory owns the resting
     /// mini. Completion transfers ownership in one update.
     @State private var playerPresentation = PlayerPresentationState()
@@ -42,10 +43,9 @@ struct LibraryView: View {
                                        width: geometry.size.width,
                                        height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
             let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            LibraryTabs(library: library, player: player, nav: nav, actions: actions,
-                        hasCurrent: player.current != nil, miniHidden: playerMounted,
-                        onMiniMeasure: receiveMiniSlot, openPlayer: { setPlayer(true) })
-                .equatable()
+            let _ = commands.update(actions: actions, onMiniMeasure: receiveMiniSlot, openPlayer: { setPlayer(true) })
+            LibraryTabs(library: library, player: player, nav: nav, commands: commands,
+                        hasCurrent: player.current != nil, miniHidden: playerMounted)
                 .accessibilityHidden(showPlayer)
                 .overlay(alignment: .topLeading) {
                     if player.current != nil, playerMounted, miniFrame.width > 0 {
@@ -292,6 +292,23 @@ struct LibraryView: View {
     }
 }
 
+/// The shell's closures behind one stable reference. Closures made in the
+/// root body are new values on every evaluation, and handing them to
+/// LibraryTabs made SwiftUI treat it as changed and re-run its body. Each
+/// root evaluation refreshes them here, where LibraryTabs does not compare.
+private final class LibraryCommands {
+    var actions = LibraryActions.none
+    var onMiniMeasure: (PlayerMiniSlot) -> Void = { _ in }
+    var openPlayer: () -> Void = {}
+
+    func update(actions: LibraryActions, onMiniMeasure: @escaping (PlayerMiniSlot) -> Void,
+                openPlayer: @escaping () -> Void) {
+        self.actions = actions
+        self.onMiniMeasure = onMiniMeasure
+        self.openPlayer = openPlayer
+    }
+}
+
 /// What browse pages ask of the shell: navigation that also closes the
 /// player, and the sheets, alerts and pickers the shell presents.
 private struct LibraryActions {
@@ -306,27 +323,25 @@ private struct LibraryActions {
     var addSongs: (Playlist) -> Void
     var createPlaylist: () -> Void
     var batchFill: () -> Void
+
+    static let none = LibraryActions(open: { _ in }, imports: ImportCommands(addFolder: {}, addFiles: {}, newPlaylist: {},
+        importPlaylist: {}, showFolders: {}, folderPlaylists: {}), addToPlaylist: { _ in }, delete: { _ in },
+        lyrics: { _ in }, identify: { _ in }, rename: { _ in }, export: { _, _ in }, addSongs: { _ in },
+        createPlaylist: {}, batchFill: {})
 }
 
 /// Applies the TabView and the native bottom accessory. The accessory
 /// replaces its mini whenever this body runs, and a tap landing during the
-/// replacement is lost. So this body depends only on whether there is a mini
-/// and whether the player covers it; the tabs and the mini observe the
-/// stores themselves, and the shell's own updates stop at `==`.
-private struct LibraryTabs: View, Equatable {
+/// replacement is lost. So it holds only references and the two flags that
+/// change the accessory, and re-runs only when one of them changes; the tabs
+/// and the mini observe the stores themselves.
+private struct LibraryTabs: View {
     let library: LibraryStore
     let player: PlayerStore
     @Bindable var nav: LibraryNavigation
-    let actions: LibraryActions
+    let commands: LibraryCommands
     var hasCurrent: Bool
     var miniHidden: Bool
-    var onMiniMeasure: (PlayerMiniSlot) -> Void
-    var openPlayer: () -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.library === rhs.library && lhs.player === rhs.player && lhs.nav === rhs.nav
-            && lhs.hasCurrent == rhs.hasCurrent && lhs.miniHidden == rhs.miniHidden
-    }
 
     @ViewBuilder var body: some View {
         if #available(iOS 26.1, *) {
@@ -350,7 +365,8 @@ private struct LibraryTabs: View, Equatable {
     /// The overlay owns it only during player presentation, with one handover
     /// at animation completion. There is no detached glass surface at rest.
     private var miniPlayer: some View {
-        AccessoryMini(library: library, player: player, hidden: miniHidden, onMeasure: onMiniMeasure, open: openPlayer)
+        AccessoryMini(library: library, player: player, hidden: miniHidden,
+                      onMeasure: { [commands] in commands.onMiniMeasure($0) }, open: { [commands] in commands.openPlayer() })
     }
 
     @available(iOS 26, *)
@@ -377,7 +393,7 @@ private struct LibraryTabs: View, Equatable {
     }
 
     private func browser(_ root: AppTab) -> some View {
-        LibraryBrowser(library: library, player: player, nav: nav, actions: actions, root: root)
+        LibraryBrowser(library: library, player: player, nav: nav, actions: commands.actions, root: root)
     }
 
     /// Second tap on the playlist tab. Already at the home does nothing.
@@ -404,6 +420,7 @@ private struct AccessoryMini: View {
     var hidden: Bool
     var onMeasure: (PlayerMiniSlot) -> Void
     var open: () -> Void
+    @State private var instance = UUID()
 
     var body: some View {
         PlayerMiniSlotView(onMeasure: onMeasure) { compact in
@@ -412,7 +429,7 @@ private struct AccessoryMini: View {
                 .allowsHitTesting(!hidden)
                 .accessibilityHidden(hidden)
         }
-        .onAppear { MiniAccessoryProbe.mounts += 1 }
+        .onAppear { MiniAccessoryProbe.instances.insert(instance) }
         .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
     }
 }

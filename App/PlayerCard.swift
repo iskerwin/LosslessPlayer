@@ -224,12 +224,18 @@ final class PlayerMiniSlotCache {
     }
 }
 
-/// Mounts of the native accessory's mini and the track it last showed. A
-/// remount drops a tap that lands during it, so a regression test asserts
-/// that store updates reach the mounted mini without replacing it.
+/// Distinct native accessory minis that appeared, and the track the mini
+/// last showed. A replaced mini drops a tap that lands during the swap, so
+/// regression tests assert that updates reach the mounted mini instead. A
+/// reattach of the same mini appears again without adding an instance.
 @MainActor enum MiniAccessoryProbe {
-    static var mounts = 0
+    static var instances: Set<UUID> = []
     static var trackID: UUID?
+
+    static func reset() {
+        instances = []
+        trackID = nil
+    }
 }
 
 /// Native accessory ownership keeps placement and content in the same animation.
