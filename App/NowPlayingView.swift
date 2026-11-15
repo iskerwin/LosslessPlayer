@@ -942,10 +942,14 @@ struct ThinScrubber: View {
             let width = max(geo.size.width, 1)
             let fraction = ScrubberMap.fraction(value: value, in: range)
             let thickness = dragging ? PlayerControlMetrics.activeTrackHeight : PlayerControlMetrics.restingTrackHeight
+            // The played part is clipped by the track's capsule, so near zero it
+            // still follows the rounded end instead of narrowing into a sliver.
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(contrast == .increased ? 0.5 : 0.28)).frame(height: thickness)
-                Capsule().fill(Color.white).frame(width: width * fraction, height: thickness)
+                Color.white.opacity(contrast == .increased ? 0.5 : 0.28)
+                Color.white.frame(width: width * fraction)
             }
+            .frame(height: thickness)
+            .clipShape(Capsule())
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .contentShape(Rectangle())
             .gesture(
