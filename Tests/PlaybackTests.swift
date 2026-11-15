@@ -1324,6 +1324,17 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
+
+    /// The zoom's interactive dismissal must leave sideways drags to the
+    /// skip swipe (run 43696246454: a right swipe closed the player).
+    func testOnlyAMostlyDownwardPullStartsTheZoomDismissal() {
+        XCTAssertTrue(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 0, dy: 600)))
+        XCTAssertTrue(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: -300, dy: 400)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 900, dy: 40)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: -900, dy: 40)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 0, dy: -600)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: .zero))
+    }
 }
 
 final class ArtworkAnalysisTests: XCTestCase {

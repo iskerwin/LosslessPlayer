@@ -63,6 +63,12 @@ class SelectionTests(unittest.TestCase):
                               ("SearchResultsTests" if path == "App/DetailZoom.swift" else "BrowseAndArtworkPerformanceTests"),
                               result["only_testing"])
 
+    def test_player_presentation_keeps_the_dismiss_pan_rule(self):
+        result = select_tests(["App/PlayerPresentation.swift"])
+        self.assertFalse(result["full"])
+        self.assertTrue(result["screenshots"])
+        self.assertIn("-only-testing:LosslessPlayerTests/ArtworkSwipeTests", result["only_testing"])
+
     def test_search_changes_keep_matching_and_cache_regressions(self):
         for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):
             with self.subTest(path=path):

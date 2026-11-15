@@ -14,11 +14,11 @@ struct LibraryView: View {
     @Namespace private var favoritesZoom
     @Namespace private var searchZoom
     @State private var searchFieldFocused = false
-    /// The system owns the player presentation (full-screen cover with a zoom
-    /// from the mini). `playerSettled` mounts the heavy system chrome after it.
+    /// UIKit owns the player presentation (full screen, zooming from the
+    /// mini). `playerSettled` mounts the heavy system chrome after it appears.
     @State private var showPlayer = false
     @State private var playerSettled = false
-    @Namespace private var playerZoom
+    @State private var playerZoom = PlayerZoomAnchor()
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -42,17 +42,15 @@ struct LibraryView: View {
 
     var body: some View {
         playerTabs
-            .fullScreenCover(isPresented: $showPlayer) {
-                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                    showPlayer = false
-                    pendingDelete = [track]
-                }, onClose: { showPlayer = false }, presentationSettled: playerSettled)
-                .background { NowPlayingBackground(library: library, player: player).ignoresSafeArea() }
-                .environment(\.colorScheme, .dark)
-                .modifier(PlayerZoom(namespace: playerZoom))
-                .task {
-                    try? await Task.sleep(for: .milliseconds(350))
-                    playerSettled = true
+            .background {
+                PlayerPresentation(isPresented: $showPlayer, anchor: playerZoom,
+                                   onSettled: { playerSettled = true }) {
+                    NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                        showPlayer = false
+                        pendingDelete = [track]
+                    }, onClose: { showPlayer = false }, presentationSettled: playerSettled)
+                    .background { NowPlayingBackground(library: library, player: player).ignoresSafeArea() }
+                    .environment(\.colorScheme, .dark)
                 }
             }
             .onChange(of: showPlayer) { _, shown in if !shown { playerSettled = false } }
@@ -788,7 +786,7 @@ struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     var compact: Bool
-    var zoom: Namespace.ID
+    var zoom: PlayerZoomAnchor
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
@@ -810,7 +808,7 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
-    var zoom: Namespace.ID
+    var zoom: PlayerZoomAnchor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -832,7 +830,7 @@ private struct AccessoryMiniPlayer: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .modifier(PlayerZoomSource(namespace: zoom))
+            .background(PlayerZoomSource(anchor: zoom))
             .accessibilityHint("展开播放器")
             .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {
@@ -905,26 +903,4 @@ struct TextFileDocument: FileDocument {
 func clock(_ seconds: Double) -> String {
     let value = seconds.isFinite ? Int(max(0, seconds)) : 0
     return String(format: "%d:%02d", value / 60, value % 60)
-}
-
-private struct PlayerZoomSource: ViewModifier {
-    var namespace: Namespace.ID
-    func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
-            content.matchedTransitionSource(id: "nowPlaying", in: namespace)
-        } else {
-            content
-        }
-    }
-}
-
-private struct PlayerZoom: ViewModifier {
-    var namespace: Namespace.ID
-    func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
-            content.navigationTransition(.zoom(sourceID: "nowPlaying", in: namespace))
-        } else {
-            content
-        }
-    }
 }
