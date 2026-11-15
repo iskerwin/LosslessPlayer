@@ -2,6 +2,7 @@ name: Lossless CI
 run-name: "${{ github.event_name == 'pull_request' && format('CI · PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'CI · 每周全量 · main' || format('CI · 手动测试 · {0}', github.ref_name) }}"
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
   # Sunday 22:00 Beijing: the full suite on main, verify only, so what PR
   # selection misses is found within a week. Publishes nothing.
@@ -24,7 +25,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   gate:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: macos-26
     timeout-minutes: 60
     steps:

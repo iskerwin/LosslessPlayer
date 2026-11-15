@@ -6,13 +6,18 @@
                                                    verify the pushed current branch; never publishes
     python3 tools/ship.py preview                  pushed branch: build a phone preview (N.k), no simulator tests
     python3 tools/ship.py dev                      latest main: reuse the PR proof or test, then publish dev
+    python3 tools/ship.py version patch|minor|major|X.Y.Z
+                                                   raise marketing version and start a changelog section
     python3 tools/ship.py watch [--once]           follow the newest cloud runs
 """
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+
+from versioning import marketing_match, version_tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = 'iskerwin/LosslessPlayer'
@@ -69,6 +74,41 @@ def dev(_):
     dispatch('dev.yml', require_pushed(main_only=True))
 
 
+def version(args):
+    project = ROOT / 'project.yml'
+    text = project.read_text()
+    try:
+        match = marketing_match(text)
+        current = version_tuple(match[3])
+        if args.value in ('patch', 'minor', 'major'):
+            index = {'major': 0, 'minor': 1, 'patch': 2}[args.value]
+            parts = list(current)
+            parts[index] += 1
+            parts[index + 1:] = [0] * (2 - index)
+            new = '.'.join(map(str, parts))
+        else:
+            new = args.value
+        if version_tuple(new) <= current:
+            raise ValueError(f'新版本 {new} 必须高于当前版本 {match[3]}')
+    except ValueError as error:
+        raise Failure(str(error)) from error
+    changelog = ROOT / 'CHANGELOG.md'
+    updated = None
+    if changelog.exists():
+        old = changelog.read_text()
+        # Preserve the document title/preamble and all previous releases.
+        section = re.search(r'^## ', old, re.MULTILINE)
+        position = section.start() if section else len(old)
+        preamble = old[:position].rstrip()
+        updated = (preamble + '\n\n' if preamble else '') + f'## {new}（开发中）\n\n' + old[position:]
+    project.write_text(text[:match.start(3)] + new + text[match.end(3):])
+    if updated is not None:
+        changelog.write_text(updated)
+    else:
+        print('CHANGELOG.md 不存在，已跳过新版本小节；文件引入后再维护更新记录。')
+    print(f'版本已提高：{match[3]} → {new}')
+
+
 def watch(args):
     subprocess.run(['gh', 'run', 'list', '-R', REPO, '-L', '8'], cwd=ROOT, check=True)
     if not args.once:
@@ -86,6 +126,9 @@ def main(argv):
     parsed.set_defaults(func=test)
     commands.add_parser('preview').set_defaults(func=preview)
     commands.add_parser('dev').set_defaults(func=dev)
+    parsed = commands.add_parser('version')
+    parsed.add_argument('value', help='patch / minor / major / X.Y.Z，必须高于当前版本')
+    parsed.set_defaults(func=version)
     parsed = commands.add_parser('watch')
     parsed.add_argument('--once', action='store_true')
     parsed.set_defaults(func=watch)

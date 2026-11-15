@@ -86,11 +86,10 @@ class SelectionTests(unittest.TestCase):
                               select_tests([path])["only_testing"])
 
     def test_uncertain_inputs_never_narrow(self):
-        for path in ("App/NewView.swift", "README.md", "project.yml",
+        for path in ("project.yml",
                      "Tests/PlaybackTests.swift", "UITests/GlassScreenshots.swift",
                      "tools/select_tests.py", "tools/test_select_tests.py",
-                     ".github/workflows/ios.yml", "App/Assets.xcassets/new.png",
-                     "App/Odd\nName.swift", "App/EnginePlayer.swift "):
+                     ".github/workflows/ios.yml", "unknown.config"):
             with self.subTest(path=path):
                 result = select_tests(["App/EnginePlayer.swift", path])
                 self.assertEqual(result["only_testing"], FULL)
@@ -98,6 +97,27 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(result["screenshots"])
         self.assertEqual(select_tests([])["only_testing"], FULL)
         self.assertEqual(select_tests(["App/EnginePlayer.swift"], full=True)["only_testing"], FULL)
+
+    def test_unmapped_app_paths_select_all_units_and_list_every_file(self):
+        paths = ["App/NewView.swift", "App/Other.swift"]
+        result = select_tests(paths)
+        self.assertEqual(result["only_testing"], FULL)
+        self.assertFalse(result["screenshots"])
+        for path in paths:
+            self.assertIn(path, result["reason"])
+        self.assertTrue(select_tests(paths + ["App/PlayerCard.swift"])["screenshots"])
+
+    def test_docs_add_no_tests_but_never_hide_sensitive_paths(self):
+        docs = ["README.md", "AGENTS.md", "docs/example.txt", "App/notes.md"]
+        result = select_tests(docs)
+        self.assertEqual(result["only_testing"], [])
+        self.assertFalse(result["screenshots"])
+        self.assertFalse(result["full"])
+        self.assertEqual(select_tests(docs + ["App/EnginePlayer.swift"]),
+                         select_tests(["App/EnginePlayer.swift"]))
+        for path in ("tools/README.md", "Tests/notes.md", "UITests/notes.md",
+                     ".github/workflows/notes.md", "project.yml"):
+            self.assertTrue(select_tests(docs + [path])["full"])
 
     def test_audited_files_and_classes_exist(self):
         classes = set()
