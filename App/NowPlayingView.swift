@@ -196,6 +196,7 @@ struct NowPlayingView: View {
     /// Direction of the most recent track change, so the artwork/title slide
     /// the way Music does: next slides in from the right, previous from the left.
     @State private var skipDirection: ArtworkSwipe.Direction = .next
+    @State private var swipeHaptic = 0
     /// Parsed off the main thread when the lyrics panel needs new text.
     /// The playback clock must not re-run the regex
     /// on every tick, and the clock is observed only by the scrubber and
@@ -321,6 +322,7 @@ struct NowPlayingView: View {
             .onEnded { value in
                 if let direction = ArtworkSwipe.direction(for: value.translation) {
                     skipDirection = direction
+                    swipeHaptic += 1
                     if direction == .next { player.skip() } else { player.skip(backwards: true) }
                 } else if value.translation.height > 90,
                           value.translation.height > abs(value.translation.width) * 1.5 {
@@ -380,9 +382,6 @@ struct NowPlayingView: View {
         let t = look.artworkTravel
         return ZStack(alignment: .topLeading) {
             ArtworkView(track: current, root: library.root, size: look.artworkSide, placeholder: .neutral)
-                .id(current?.id)
-                .transition(artworkTransition)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: .black.opacity(0.28), radius: 18, y: 10)
                 .compositingGroup()
@@ -395,6 +394,11 @@ struct NowPlayingView: View {
                 .opacity(look.largeArtworkOpacity)
                 .allowsHitTesting(look.largeArtworkOpacity >= 0.5)
                 .accessibilityHidden(look.largeArtworkOpacity < 0.5)
+                // The whole artwork, finger offset included, is the unit that
+                // changes with the track, so a swipe carries on in its direction.
+                .id(current?.id)
+                .transition(reduceMotion ? .opacity : trackTransition)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.35), value: current?.id)
             if reduceMotion {
                 ArtworkView(track: current, root: library.root, size: 72, placeholder: .neutral)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -420,9 +424,8 @@ struct NowPlayingView: View {
         .accessibilityIdentifier("now-playing-artwork")
         // Tap dismissal and the 16pt directional drag recognize separately.
         .simultaneousGesture(artworkGesture)
+        .sensoryFeedback(.selection, trigger: swipeHaptic)
     }
-
-    private var artworkTransition: AnyTransition { .opacity }
 
     /// Track-change transition, the way Music slides artwork: the incoming
     /// track enters from the skip direction, the outgoing one leaves the
