@@ -12,6 +12,7 @@ tools/select_tests.py. A passing gate leaves .ship/proof.json; Dev reuses it whe
 main is that same tree with the same plan, and otherwise runs the same tests itself.
 """
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
