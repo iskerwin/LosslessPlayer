@@ -118,50 +118,52 @@ final class PlayerStore: NSObject, ObservableObject {
     func load(_ track: Track, autoplay: Bool = true, at time: Double = 0, context: [Track]? = nil, keepTransport: Bool = false) {
         guard track.available else { errorMessage = "文件已移动或删除，请重新扫描文件夹"; return }
         pause(discardingPreload: false)
-        do {
-            let newAccess: URL?
-            if let id = track.folderID {
-                guard let folder = library.snapshot.folders.first(where: { $0.id == id }) else {
-                    throw CocoaError(.fileReadNoPermission)
+        engine.prepareForLoad { [self] in
+            do {
+                let newAccess: URL?
+                if let id = track.folderID {
+                    guard let folder = library.snapshot.folders.first(where: { $0.id == id }) else {
+                        throw CocoaError(.fileReadNoPermission)
+                    }
+                    newAccess = try library.resolve(folder)
+                } else { newAccess = nil }
+                let scoped = newAccess?.startAccessingSecurityScopedResource() == true
+                var accepted = false
+                defer { if scoped && !accepted { newAccess?.stopAccessingSecurityScopedResource() } }
+                // Wired outputs can follow the source rate before connection.
+                // Wireless outputs retain their system-selected rate across tracks.
+                // The request is only a preference; `updateOutput` re-reads the
+                // actual rate afterwards and the path assessment judges that.
+                if autoplay { try prepareSession(for: track, activate: true) }
+                else { prepareSessionPassively(for: track) }
+                try engine.load(url: library.url(for: track), at: time)
+                releaseNextAccess()
+                accessRoot?.stopAccessingSecurityScopedResource()
+                accessRoot = scoped ? newAccess : nil
+                accepted = true
+                if !keepTransport {
+                    if let context {
+                        shuffle = false
+                        setQueue(context.map(\.id), replacingContext: true)
+                    } else if !queueIDs.contains(track.id) {
+                        shuffle = false
+                        setQueue(library.tracks.filter(\.available).map(\.id), replacingContext: true)
+                    }
                 }
-                newAccess = try library.resolve(folder)
-            } else { newAccess = nil }
-            let scoped = newAccess?.startAccessingSecurityScopedResource() == true
-            var accepted = false
-            defer { if scoped && !accepted { newAccess?.stopAccessingSecurityScopedResource() } }
-            // Wired outputs can follow the source rate before connection.
-            // Wireless outputs retain their system-selected rate across tracks.
-            // The request is only a preference; `updateOutput` re-reads the
-            // actual rate afterwards and the path assessment judges that.
-            if autoplay { try prepareSession(for: track, activate: true) }
-            else { prepareSessionPassively(for: track) }
-            try engine.load(url: library.url(for: track), at: time)
-            releaseNextAccess()
-            accessRoot?.stopAccessingSecurityScopedResource()
-            accessRoot = scoped ? newAccess : nil
-            accepted = true
-            if !keepTransport {
-                if let context {
-                    shuffle = false
-                    setQueue(context.map(\.id), replacingContext: true)
-                } else if !queueIDs.contains(track.id) {
-                    shuffle = false
-                    setQueue(library.tracks.filter(\.available).map(\.id), replacingContext: true)
+                engine.enablePreloadForLoadedTrack()
+                current = track
+                position = min(max(0, time), engine.duration)
+                library.remember(id: track.id, position: position)
+                updateOutput()
+                updateNowPlaying()
+                if autoplay {
+                    resume()
+                    if playing { library.recordPlay(id: track.id) }
                 }
+            } catch {
+                invalidatePreload(.trackChange)
+                errorMessage = "播放失败：\(error.localizedDescription)"
             }
-            engine.enablePreloadForLoadedTrack()
-            current = track
-            position = min(max(0, time), engine.duration)
-            library.remember(id: track.id, position: position)
-            updateOutput()
-            updateNowPlaying()
-            if autoplay {
-                resume()
-                if playing { library.recordPlay(id: track.id) }
-            }
-        } catch {
-            invalidatePreload(.trackChange)
-            errorMessage = "播放失败：\(error.localizedDescription)"
         }
     }
 
@@ -380,7 +382,8 @@ final class PlayerStore: NSObject, ObservableObject {
         if backwards && position > 3 { seek(0); return }
         let id = PlaybackQueue(ids: queuedTracks.map(\.id), repeatAll: repeatMode != .off)
             .next(after: current?.id, backwards: backwards)
-        if let track = library.track(id), track.available { load(track) }
+        // Skipping keeps the transport state: playing stays playing, paused stays paused.
+        if let track = library.track(id), track.available { load(track, autoplay: playing) }
         else { pause(); seek(0) }
     }
 
