@@ -118,10 +118,6 @@ final class PlaybackQueueTests: XCTestCase {
         let mp3 = Track(id: UUID(), filename: "b.mp3", title: "B", artist: "X", album: "Y", duration: 1, sampleRate: 44100, bitDepth: 0)
         XCTAssertEqual(lossless.qualityBadge, "Lossless")
         XCTAssertEqual(mp3.qualityBadge, "MP3")
-        var brightness: CGFloat = 1
-        let dark = ArtworkColors.darkened(UIColor(hue: 0.6, saturation: 0.9, brightness: 1, alpha: 1))
-        XCTAssertTrue(dark.getHue(nil, saturation: nil, brightness: &brightness, alpha: nil))
-        XCTAssertLessThanOrEqual(brightness, 0.36)
         XCTAssertEqual(ScrubberMap.fraction(value: 4, in: 0...211), 4 / 211, accuracy: 0.0001)
         XCTAssertEqual(ScrubberMap.value(x: 50, width: 100, in: 0...10), 5, accuracy: 0.0001)
     }
@@ -1324,6 +1320,17 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: -80, height: 60)))
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
+
+    /// The zoom's interactive dismissal must leave sideways drags to the
+    /// skip swipe (run 43696246454: a right swipe closed the player).
+    func testOnlyAMostlyDownwardPullStartsTheZoomDismissal() {
+        XCTAssertTrue(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 0, dy: 600)))
+        XCTAssertTrue(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: -300, dy: 400)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 900, dy: 40)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: -900, dy: 40)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 0, dy: -600)))
+        XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: .zero))
+    }
 }
 
 final class ArtworkAnalysisTests: XCTestCase {
@@ -1342,115 +1349,56 @@ final class ArtworkAnalysisTests: XCTestCase {
         XCTAssertTrue(image.downscaled(maxPixel: 300) === image)
     }
 
-    func testAnalysisBuildsPaletteAndTexture() {
-        let analysis = ArtworkAnalysis.make(from: solidImage(width: 200, height: 200))
-        XCTAssertEqual(analysis.palette.count, 4)
-        guard let backdrop = analysis.backdrop else {
-            return XCTFail("missing backdrop texture")
+    private func hsb(_ color: UIColor) -> (h: CGFloat, s: CGFloat, b: CGFloat) {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0
+        XCTAssertTrue(color.getHue(&h, saturation: &s, brightness: &b, alpha: nil))
+        return (h, s, b)
+    }
+
+    func testDominantColourFollowsTheCoverNotTheBackground() {
+        // A mostly black cover with a small red mark is red, not grey.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { context in
+            UIColor.black.setFill(); context.fill(CGRect(x: 0, y: 0, width: 120, height: 120))
+            UIColor.red.setFill(); context.fill(CGRect(x: 30, y: 30, width: 60, height: 60))
         }
-        XCTAssertLessThanOrEqual(max(backdrop.size.width, backdrop.size.height), 40.5)
+        let red = hsb(ArtworkColors.dominant(from: image))
+        XCTAssertTrue(red.h < 0.04 || red.h > 0.96, "hue \(red.h)")
+        XCTAssertGreaterThan(red.s, 0.8)
+        let grey = hsb(ArtworkColors.dominant(from: solidImage(width: 80, height: 80, color: UIColor(white: 0.5, alpha: 1))))
+        XCTAssertLessThan(grey.s, 0.05, "a colourless cover stays grey")
+        XCTAssertEqual(ArtworkColors.dominant(from: nil), ArtworkColors.neutral)
+    }
+
+    func testToneKeepsTextReadableInBothAppearances() {
+        for hue in stride(from: CGFloat(0), through: 1, by: 0.1) {
+            let tint = UIColor(hue: hue, saturation: 1, brightness: 1, alpha: 1)
+            let dark = hsb(ArtworkColors.tone(for: tint, dark: true))
+            let light = hsb(ArtworkColors.tone(for: tint, dark: false))
+            XCTAssertLessThanOrEqual(dark.b, 0.33, "dark tone too bright at hue \(hue)")
+            XCTAssertGreaterThanOrEqual(light.b, 0.89, "light tone too dark at hue \(hue)")
+            XCTAssertLessThanOrEqual(light.s, 0.31)
+            let gap = abs(dark.h - hue)
+            XCTAssertLessThan(min(gap, 1 - gap), 0.01, "hue is kept (it wraps at 1)")
+        }
+        let grey = UIColor(white: 0.5, alpha: 1)
+        XCTAssertLessThan(hsb(ArtworkColors.tone(for: grey, dark: true)).s, 0.01)
+        XCTAssertLessThan(hsb(ArtworkColors.tone(for: grey, dark: false)).s, 0.01)
     }
 
     func testAnalysisCacheRoundTrip() {
         let cache = ArtworkAnalysisCache.shared
         let analysis = ArtworkAnalysis.make(from: solidImage(width: 80, height: 80))
         cache.store(analysis, for: "analysis-test.jpg")
-        XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.palette.count, 4)
+        XCTAssertEqual(cache.analysis(for: "analysis-test.jpg")?.tint, analysis.tint)
         XCTAssertNil(cache.analysis(for: "analysis-missing.jpg"))
     }
 }
 
 final class BrowseAndArtworkPerformanceTests: XCTestCase {
-    func testDiscardingCurrentTrackClearsEveryPresentationPhase() {
-        for phase in 0..<4 {
-            var state = PlayerPresentationState()
-            _ = state.request(true)
-            if phase > 0 { _ = state.beginMountedPresentation() }
-            if phase > 1 { state.complete(state.generation) }
-            if phase > 2 { _ = state.request(false) }
-            let staleGeneration = state.generation
 
-            state.discard()
-            XCTAssertFalse(state.presented)
-            XCTAssertFalse(state.mounted)
-            XCTAssertFalse(state.settled)
-            XCTAssertNil(state.beginMountedPresentation())
-            state.complete(staleGeneration)
-            XCTAssertFalse(state.mounted)
-            XCTAssertFalse(state.settled)
 
-            // A later song must create a fresh collapsed card, and old
-            // completions must not settle or remove that card.
-            XCTAssertEqual(state.request(true), .prepare(state.generation))
-            XCTAssertEqual(state.beginMountedPresentation(), state.generation)
-            state.complete(staleGeneration)
-            XCTAssertTrue(state.mounted)
-            XCTAssertFalse(state.settled)
-            state.complete(state.generation)
-            XCTAssertTrue(state.settled)
-        }
-    }
 
-    func testMiniSlotCacheKeepsLatestNativePositionAndRejectsInvalidGeometry() {
-        let cache = PlayerMiniSlotCache()
-        let expanded = PlayerMiniSlot(frame: CGRect(x: 21, y: 705, width: 348, height: 56), compact: false)
-        let inline = PlayerMiniSlot(frame: CGRect(x: 21, y: 761, width: 260, height: 36), compact: true)
-        XCTAssertTrue(cache.record(expanded))
-        XCTAssertFalse(cache.record(expanded))
-        XCTAssertTrue(cache.record(inline))
-        XCTAssertEqual(cache.latest, inline)
-        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: .zero)))
-        XCTAssertFalse(cache.record(PlayerMiniSlot(frame: CGRect(x: CGFloat.infinity, y: 0, width: 300, height: 56))))
-        XCTAssertEqual(cache.latest, inline)
-    }
 
-    func testColdPlayerPresentationRequiresAMountedStartingLayout() {
-        var state = PlayerPresentationState()
-        XCTAssertEqual(state.request(true), .prepare(1))
-        XCTAssertTrue(state.mounted)
-        XCTAssertFalse(state.settled)
-        state.complete(1)
-        XCTAssertFalse(state.settled, "Completion cannot bypass the cold card's starting layout")
-        XCTAssertEqual(state.beginMountedPresentation(), 1)
-        XCTAssertNil(state.beginMountedPresentation())
-        state.complete(1)
-        XCTAssertTrue(state.settled)
-        XCTAssertEqual(state.request(false), .animate(2))
-        XCTAssertTrue(state.mounted)
-        state.complete(2)
-        XCTAssertFalse(state.mounted)
-    }
-
-    func testReopeningRejectsStaleCloseCompletion() {
-        var state = PlayerPresentationState()
-        _ = state.request(true)
-        _ = state.beginMountedPresentation()
-        state.complete(1)
-        XCTAssertEqual(state.request(false), .animate(2))
-        XCTAssertEqual(state.request(true), .animate(3))
-        state.complete(2)
-        XCTAssertTrue(state.mounted)
-        XCTAssertFalse(state.settled)
-        state.complete(3)
-        XCTAssertTrue(state.presented)
-        XCTAssertTrue(state.settled)
-    }
-
-    func testClosingDuringPreparationCannotStartTheOldOpen() {
-        var state = PlayerPresentationState()
-        _ = state.request(true)
-        _ = state.request(false)
-        XCTAssertNil(state.beginMountedPresentation())
-        state.complete(1)
-        XCTAssertTrue(state.mounted)
-        state.complete(2)
-        XCTAssertFalse(state.mounted)
-        XCTAssertFalse(state.presented)
-    }
-
-    /// Same groupings `LibraryStore.rebuildDerived` keeps on the snapshot.
-    /// Re-reading them must stay cheaper than rebuilding from the view, and
-    /// must match the filters the pages used before the cache existed.
     func testDerivedGroupingsMatchFiltersAndAreCheaperToReread() {
         var tracks: [Track] = []
         tracks.reserveCapacity(600)
@@ -1686,58 +1634,7 @@ final class BrowseAndArtworkPerformanceTests: XCTestCase {
         XCTAssertTrue(preview === large)
     }
 
-    func testCardDragFollowsFingerOneToOneAndClampsAtRestingFrames() {
-        // Portrait, short/landscape, and tablet; the safe top is part of travel.
-        for (mini, expanded) in [
-            (CGRect(x: 8, y: 690, width: 377, height: 56), CGRect(x: 0, y: -59, width: 393, height: 852)),
-            (CGRect(x: 0, y: 260, width: 844, height: 56), CGRect(x: 0, y: 0, width: 844, height: 390)),
-            (CGRect(x: 16, y: 900, width: 992, height: 80), CGRect(x: 0, y: -24, width: 1024, height: 1024))
-        ] {
-            let distance = mini.minY - expanded.minY
-            for drag in [CGFloat(0), 45, 90, 91, distance / 2, distance, distance + 80] {
-                let progress = PlayerCardMetrics.progress(for: drag, distance: distance)
-                let frame = PlayerCardMetrics.frame(progress: progress, mini: mini, expanded: expanded)
-                XCTAssertEqual(frame.minY - expanded.minY, min(drag, distance), accuracy: 0.001)
-            }
-            XCTAssertEqual(PlayerCardMetrics.frame(progress: 0, mini: mini, expanded: expanded), mini)
-            XCTAssertEqual(PlayerCardMetrics.frame(progress: 1, mini: mini, expanded: expanded), expanded)
-            XCTAssertEqual(PlayerCardMetrics.progress(for: -40, distance: distance), 1)
-        }
-        XCTAssertEqual(PlayerCardMetrics.progress(for: 90, distance: 0), 1)
-    }
 
-    func testPlayerTopCornersStayLargeThroughPullAndLanding() {
-        for step in -100...1100 {
-            let radius = PlayerCardMetrics.topRadius(CGFloat(step) / 1000)
-            XCTAssertGreaterThanOrEqual(radius, 18)
-            XCTAssertLessThanOrEqual(radius, 32)
-        }
-        XCTAssertEqual(PlayerCardMetrics.topRadius(1), 32)
-        XCTAssertEqual(PlayerCardMetrics.topRadius(0), 18)
-    }
-
-    func testCardCoverVisibilityNeverOverlapsInEitherDirectionOrOvershoot() {
-        for step in -100...1100 {
-            let progress = CGFloat(step) / 1000
-            let mini = PlayerCardMetrics.miniOpacity(progress)
-            let expanded = PlayerCardMetrics.expandedOpacity(progress)
-            XCTAssertTrue((0...1).contains(mini))
-            XCTAssertTrue((0...1).contains(expanded))
-            XCTAssertTrue(mini == 0 || expanded == 0, "Two covers visible at progress \(progress)")
-            if progress >= 0.06 {
-                XCTAssertEqual(expanded, 1, "Expanded sheet dissolved before landing at \(progress)")
-            }
-            if progress >= 0.03 {
-                XCTAssertEqual(mini, 0, "Mini appeared before landing at \(progress)")
-            }
-        }
-        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0), 1)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0), 0)
-        XCTAssertEqual(PlayerCardMetrics.miniOpacity(0.015), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.045), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(0.03), 0)
-        XCTAssertEqual(PlayerCardMetrics.expandedOpacity(1), 1)
-    }
 
 }
 
