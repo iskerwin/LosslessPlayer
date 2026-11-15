@@ -163,6 +163,15 @@ final class PlayerCardRenderingTests: XCTestCase {
         }
     }
 
+    private func washFixture(top: UIColor, bottom: UIColor) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { context in
+            top.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 60))
+            bottom.setFill()
+            context.fill(CGRect(x: 0, y: 60, width: 120, height: 60))
+        }
+    }
+
     func testNativeCollectionPushDoesNotChangeLightWindowAppearance() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
