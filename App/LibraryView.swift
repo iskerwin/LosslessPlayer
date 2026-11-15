@@ -14,15 +14,11 @@ struct LibraryView: View {
     @Namespace private var favoritesZoom
     @Namespace private var searchZoom
     @State private var searchFieldFocused = false
-    /// The overlay owns player travel; the native accessory owns the resting
-    /// mini. Completion transfers ownership in one update.
-    @State private var playerPresentation = PlayerPresentationState()
-    private var showPlayer: Bool { playerPresentation.presented }
-    private var playerMounted: Bool { playerPresentation.mounted }
-    private var playerSettled: Bool { playerPresentation.settled }
-    @State private var miniSlot = PlayerMiniSlot()
-    @State private var playerGestures = PlayerGestureBridge()
-    @State private var latestMiniSlot = PlayerMiniSlotCache()
+    /// The system owns the player presentation (full-screen cover with a zoom
+    /// from the mini). `playerSettled` mounts the heavy system chrome after it.
+    @State private var showPlayer = false
+    @State private var playerSettled = false
+    @Namespace private var playerZoom
     @State private var showSources = false
     @State private var importKind: ImportKind = .files
     @State private var pickerPresented = false
@@ -44,58 +40,24 @@ struct LibraryView: View {
     @State private var exportName = "playlist"
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
-    /// Spring for the player card. The shell does not read its progress.
-    static let playerSpring: Animation = .spring(response: 0.45, dampingFraction: 0.86)
-
     var body: some View {
-        GeometryReader { geometry in
-            let origin = geometry.frame(in: .global).origin
-            let expandedFrame = CGRect(x: 0, y: -geometry.safeAreaInsets.top,
-                                       width: geometry.size.width,
-                                       height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
-            let miniFrame = miniSlot.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            playerTabs
-                .accessibilityHidden(showPlayer)
-                .overlay(alignment: .topLeading) {
-                    if player.current != nil, playerMounted, miniFrame.width > 0 {
-                        PlayerMotionHost(presented: showPlayer,
-                                         generation: playerPresentation.generation,
-                                         miniFrame: miniFrame, expandedFrame: expandedFrame,
-                                         reduceMotion: reduceMotion, animation: playerAnimation,
-                                         canReopen: playerMounted && !showPlayer,
-                                         gestures: playerGestures,
-                                         onReopen: { setPlayer(true) },
-                                         onMounted: { playerPresentation.beginMountedPresentation() },
-                                         onComplete: { playerPresentation.complete($0) }) {
-                            NowPlayingBackground(library: library, player: player)
-                        } expanded: {
-                            NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
-                                setPlayer(false)
-                                pendingDelete = [track]
-                            }, onClose: { setPlayer(false) }, onPull: { playerGestures.follow($0) },
-                            onPullCancelled: { playerGestures.cancel() },
-                            presentationSettled: playerSettled)
-                            .environment(\.colorScheme, .dark)
-                            .padding(.top, geometry.safeAreaInsets.top)
-                            .padding(.bottom, geometry.safeAreaInsets.bottom)
-                            .accessibilityHidden(!showPlayer)
-                            .allowsHitTesting(showPlayer)
-                        } collapsed: {
-                            MiniPlayer(library: library, player: player, compact: miniSlot.compact) { setPlayer(true) }
-                                .accessibilityHidden(showPlayer)
-                                .allowsHitTesting(!showPlayer)
-                        }
-                        .zIndex(1)
-                    }
+        playerTabs
+            .fullScreenCover(isPresented: $showPlayer) {
+                NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
+                    showPlayer = false
+                    pendingDelete = [track]
+                }, onClose: { showPlayer = false }, presentationSettled: playerSettled)
+                .background { NowPlayingBackground(library: library, player: player).ignoresSafeArea() }
+                .environment(\.colorScheme, .dark)
+                .modifier(PlayerZoom(namespace: playerZoom))
+                .task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    playerSettled = true
                 }
-        }
+            }
+            .onChange(of: showPlayer) { _, shown in if !shown { playerSettled = false } }
             .onChange(of: player.current?.id) { _, currentID in
-                guard currentID == nil else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    playerPresentation.discard()
-                }
+                if currentID == nil { showPlayer = false }
             }
             .sheet(isPresented: $showSources) {
                 SourcesView(library: library, player: player)
@@ -195,23 +157,12 @@ struct LibraryView: View {
             }
     }
 
-    /// At rest the native host owns the visible mini and its scroll animation.
-    /// The overlay owns it only during player presentation, with one handover
-    /// at animation completion. There is no detached glass surface at rest.
+    /// The native accessory owns the resting mini and its scroll animation; it
+    /// is also the source of the system zoom into the player.
     private var miniPlayer: some View {
-        PlayerMiniSlotView(onMeasure: receiveMiniSlot) { compact in
-            MiniPlayer(library: library, player: player, compact: compact) { setPlayer(true) }
-                .opacity(playerMounted ? 0 : 1)
-                .allowsHitTesting(!playerMounted)
-                .accessibilityHidden(playerMounted)
+        PlayerMiniSlotView { compact in
+            MiniPlayer(library: library, player: player, compact: compact, zoom: playerZoom) { showPlayer = true }
         }
-    }
-
-    private func receiveMiniSlot(_ slot: PlayerMiniSlot) {
-        guard latestMiniSlot.record(slot), playerMounted, slot != miniSlot else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { miniSlot = slot }
     }
 
     @ViewBuilder private var playerTabs: some View {
@@ -676,21 +627,6 @@ struct LibraryView: View {
         )
     }
 
-    private var playerAnimation: Animation {
-        reduceMotion ? .easeInOut(duration: 0.25) : Self.playerSpring
-    }
-
-    /// Mounts or asks the card to travel. Progress stays inside the card.
-    private func setPlayer(_ expanded: Bool) {
-        guard let step = playerPresentation.request(expanded) else { return }
-        guard case .prepare = step else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            miniSlot = latestMiniSlot.latest
-        }
-    }
-
     /// Second tap on the playlist tab. Already at the home does nothing.
     /// Every pushed page, including album and playlist detail, pops to the root.
     private func returnToPlaylistHome() {
@@ -707,7 +643,7 @@ struct LibraryView: View {
     }
 
     private func open(_ route: LibraryRoute) {
-        setPlayer(false)
+        showPlayer = false
         lyricsTrack = nil
         switch tab {
         case .library: libraryPath.append(route)
@@ -852,6 +788,7 @@ struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     var compact: Bool
+    var zoom: Namespace.ID
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
@@ -859,7 +796,7 @@ struct MiniPlayer: View {
     var body: some View {
         AccessoryMiniPlayer(compact: compact, title: title, artist: artist, track: player.current,
                             root: library.root, playing: player.playing, toggle: { player.toggle() },
-                            skip: { player.skip() }, open: open)
+                            skip: { player.skip() }, open: open, zoom: zoom)
     }
 }
 
@@ -873,6 +810,7 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
+    var zoom: Namespace.ID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -894,6 +832,7 @@ private struct AccessoryMiniPlayer: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .modifier(PlayerZoomSource(namespace: zoom))
             .accessibilityHint("展开播放器")
             .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {
@@ -966,4 +905,26 @@ struct TextFileDocument: FileDocument {
 func clock(_ seconds: Double) -> String {
     let value = seconds.isFinite ? Int(max(0, seconds)) : 0
     return String(format: "%d:%02d", value / 60, value % 60)
+}
+
+private struct PlayerZoomSource: ViewModifier {
+    var namespace: Namespace.ID
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.matchedTransitionSource(id: "nowPlaying", in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PlayerZoom: ViewModifier {
+    var namespace: Namespace.ID
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.navigationTransition(.zoom(sourceID: "nowPlaying", in: namespace))
+        } else {
+            content
+        }
+    }
 }
