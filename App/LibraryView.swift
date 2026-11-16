@@ -358,8 +358,8 @@ private struct AccessoryMini: View {
         PlayerMiniSlotView { compact in
             MiniPlayer(library: library, player: player, compact: compact, open: open)
         }
-        .onAppear { MiniAccessoryProbe.instances.insert(instance) }
-        .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
+        .onAppear { MiniAccessoryProbe.appeared(instance, for: player) }
+        .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.showed(id, for: player) }
     }
 }
 
