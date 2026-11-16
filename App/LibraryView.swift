@@ -290,16 +290,17 @@ private struct LibraryTabs: View {
         } else {
             legacyTabs.safeAreaInset(edge: .bottom, spacing: 0) {
                 if hasCurrent {
-                    miniPlayer
+                    miniPlayer.background(PlayerZoomSource(anchor: zoom))
                 }
             }
         }
     }
 
     /// The native accessory owns the resting mini and its scroll animation; it
-    /// is also the source of the system zoom into the player.
+    /// is also the source of the system zoom into the player (see
+    /// `PlayerZoomAnchor`).
     private var miniPlayer: some View {
-        AccessoryMini(library: library, player: player, zoom: zoom, open: { [commands] in commands.openPlayer() })
+        AccessoryMini(library: library, player: player, open: { [commands] in commands.openPlayer() })
     }
 
     @available(iOS 26, *)
@@ -350,13 +351,12 @@ private struct LibraryTabs: View {
 private struct AccessoryMini: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
-    let zoom: PlayerZoomAnchor
     var open: () -> Void
     @State private var instance = UUID()
 
     var body: some View {
         PlayerMiniSlotView { compact in
-            MiniPlayer(library: library, player: player, compact: compact, zoom: zoom, open: open)
+            MiniPlayer(library: library, player: player, compact: compact, open: open)
         }
         .onAppear { MiniAccessoryProbe.instances.insert(instance) }
         .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.trackID = id }
@@ -900,7 +900,6 @@ struct MiniPlayer: View {
     @ObservedObject var library: LibraryStore
     @ObservedObject var player: PlayerStore
     var compact: Bool
-    var zoom: PlayerZoomAnchor
     var open: () -> Void
     private var title: String { player.current?.title ?? "未在播放" }
     private var artist: String { player.current?.artist ?? "" }
@@ -908,7 +907,7 @@ struct MiniPlayer: View {
     var body: some View {
         AccessoryMiniPlayer(compact: compact, title: title, artist: artist, track: player.current,
                             root: library.root, playing: player.playing, toggle: { player.toggle() },
-                            skip: { player.skip() }, open: open, zoom: zoom)
+                            skip: { player.skip() }, open: open)
     }
 }
 
@@ -922,7 +921,6 @@ private struct AccessoryMiniPlayer: View {
     var toggle: () -> Void
     var skip: () -> Void
     var open: () -> Void
-    var zoom: PlayerZoomAnchor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -944,7 +942,6 @@ private struct AccessoryMiniPlayer: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background(PlayerZoomSource(anchor: zoom))
             .accessibilityHint("展开播放器")
             .accessibilityIdentifier("mini-player-open")
             Button(action: toggle) {

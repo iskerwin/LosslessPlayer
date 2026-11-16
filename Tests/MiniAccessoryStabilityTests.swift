@@ -31,6 +31,29 @@ final class MiniAccessoryStabilityTests: XCTestCase {
         try assertMiniSurvives(.keyWindow)
     }
 
+    /// The player zooms from the native accessory, found from UIKit, since
+    /// nothing inside the accessory may be a UIKit view.
+    func testPlayerZoomSourceIsTheNativeAccessory() throws {
+        guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: tracks)
+        MiniAccessoryProbe.reset()
+
+        let window = try show(LibraryView(library: library, player: player))
+        defer { hide(window) }
+        waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID == tracks[0].id }
+        flushMainQueue()
+        let source = try XCTUnwrap(PlayerZoomAnchor().source(in: window), "No native accessory to zoom from")
+        XCTAssertTrue(source.window === window)
+        let frame = source.convert(source.bounds, to: window)
+        XCTAssertFalse(frame.isEmpty)
+        XCTAssertTrue(window.bounds.contains(frame), "\(frame) is outside the window \(window.bounds)")
+        XCTAssertGreaterThan(frame.minY, window.bounds.midY, "\(frame) is not at the bottom of the window")
+    }
+
     private func assertMiniSurvives(_ trigger: ParentTrigger, file: StaticString = #filePath,
                                     line: UInt = #line) throws {
         guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
