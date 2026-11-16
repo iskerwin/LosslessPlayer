@@ -11,12 +11,30 @@ enum PlayerDismissPan {
     }
 }
 
-/// The mini's UIKit view the player zooms out of and back into.
-final class PlayerZoomAnchor {
+/// What the player zooms out of and back into. On iOS 26 that is the native
+/// bottom accessory, found from UIKit when the player opens: a UIKit view
+/// inside the accessory's content made the system replace the accessory on
+/// updates, and a tap landing during the swap was lost. Earlier systems have
+/// no accessory, so the inset mini marks itself with `PlayerZoomSource`.
+@MainActor final class PlayerZoomAnchor {
     weak var view: UIView?
+
+    func source(in window: UIWindow?) -> UIView? {
+        if let view { return view }
+        guard #available(iOS 26, *), let root = window?.rootViewController else { return nil }
+        var stack = [root]
+        while let controller = stack.popLast() {
+            if let tabs = controller as? UITabBarController, let accessory = tabs.bottomAccessory {
+                return accessory.contentView
+            }
+            stack += controller.children
+        }
+        return nil
+    }
 }
 
-/// Marks the view it backs as the zoom source.
+/// Marks the view it backs as the zoom source. Only for the pre-iOS 26
+/// inset mini; never inside the native accessory.
 struct PlayerZoomSource: UIViewRepresentable {
     var anchor: PlayerZoomAnchor
 
@@ -81,7 +99,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         }
 
         private func present() {
-            guard let presenter, presenter.view.window != nil else { return }
+            guard let presenter, let window = presenter.view.window else { return }
             let host = PlayerHostingController(rootView: makePlayer())
             host.modalPresentationStyle = .fullScreen
             host.overrideUserInterfaceStyle = .dark
@@ -92,7 +110,9 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
                 options.interactiveDismissShouldBegin = { context in
                     PlayerDismissPan.shouldBegin(velocity: context.velocity)
                 }
-                host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor] _ in anchor?.view }
+                host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor, weak window] _ in
+                    MainActor.assumeIsolated { anchor?.source(in: window) }
+                }
             }
             self.host = host
             presenter.present(host, animated: true)
