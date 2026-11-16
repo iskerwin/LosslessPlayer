@@ -66,6 +66,8 @@ MAPPING = {
     "App/NowPlayingView.swift": ({
         "MigrationAndLyricsTests", "PlaybackQueueTests", "ArtworkSwipeTests",
         "ArtworkAnalysisTests", "BrowseAndArtworkPerformanceTests", "LyricPlaybackTests",
+        # Hosts the player to check the native volume and route views mount at once.
+        "PlayerCardRenderingTests",
     }, True),
     # PlayerDismissPan decides which pans may close the zoomed player.
     "App/PlayerPresentation.swift": ({"ArtworkSwipeTests"}, True),

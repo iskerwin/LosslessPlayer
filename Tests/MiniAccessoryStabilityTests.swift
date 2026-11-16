@@ -31,6 +31,60 @@ final class MiniAccessoryStabilityTests: XCTestCase {
         try assertMiniSurvives(.keyWindow)
     }
 
+    /// A mini from another window, like an earlier test's while it tears
+    /// down, can still report after `reset()`. Run 43811026418 counted one
+    /// against the mini under test and failed with nothing replaced.
+    func testProbeIgnoresTheMiniOfAnotherPlayer() throws {
+        guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let earlier = PlayerStore(library: library)
+        defer { earlier.pause() }
+        earlier.load(tracks[2], autoplay: false, context: tracks)
+        let earlierWindow = try show(LibraryView(library: library, player: earlier))
+        let originalKey = displacedKey
+        waitUntil("earlier mini shows its track") { MiniAccessoryProbe.trackID(for: earlier) == tracks[2].id }
+
+        MiniAccessoryProbe.reset()
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: tracks)
+        let window = try show(LibraryView(library: library, player: player))
+        waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID(for: player) == tracks[0].id }
+        earlier.load(tracks[1], autoplay: false, context: tracks)
+        waitUntil("earlier mini shows its next track") { MiniAccessoryProbe.trackID(for: earlier) == tracks[1].id }
+        flushMainQueue()
+
+        XCTAssertEqual(MiniAccessoryProbe.trackID(for: player), tracks[0].id)
+        XCTAssertEqual(MiniAccessoryProbe.instances(for: player).count, 1)
+        hide(window)
+        displacedKey = originalKey
+        hide(earlierWindow)
+    }
+
+    /// The player zooms from the native accessory, found from UIKit, since
+    /// nothing inside the accessory may be a UIKit view.
+    func testPlayerZoomSourceIsTheNativeAccessory() throws {
+        guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
+        let (root, library, tracks) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(tracks[0], autoplay: false, context: tracks)
+        MiniAccessoryProbe.reset()
+
+        let window = try show(LibraryView(library: library, player: player))
+        defer { hide(window) }
+        waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID(for: player) == tracks[0].id }
+        flushMainQueue()
+        let source = try XCTUnwrap(PlayerZoomAnchor().source(in: window), "No native accessory to zoom from")
+        XCTAssertTrue(source.window === window)
+        let frame = source.convert(source.bounds, to: window)
+        XCTAssertFalse(frame.isEmpty)
+        XCTAssertTrue(window.bounds.contains(frame), "\(frame) is outside the window \(window.bounds)")
+        XCTAssertGreaterThan(frame.minY, window.bounds.midY, "\(frame) is not at the bottom of the window")
+    }
+
     private func assertMiniSurvives(_ trigger: ParentTrigger, file: StaticString = #filePath,
                                     line: UInt = #line) throws {
         guard #available(iOS 26.1, *) else { throw XCTSkip("Native bottom accessory only") }
@@ -44,9 +98,9 @@ final class MiniAccessoryStabilityTests: XCTestCase {
 
         let window = try show(ParentHarness(probe: parent, trigger: trigger, library: library, player: player))
         defer { hide(window) }
-        waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID == tracks[0].id }
+        waitUntil("mini shows the first track") { MiniAccessoryProbe.trackID(for: player) == tracks[0].id }
         flushMainQueue()
-        XCTAssertEqual(MiniAccessoryProbe.instances.count, 1, "Launch layout replaced the mini", file: file, line: line)
+        XCTAssertEqual(MiniAccessoryProbe.instances(for: player).count, 1, "Launch layout replaced the mini", file: file, line: line)
 
         for round in 1...2 {
             switch trigger {
@@ -56,7 +110,7 @@ final class MiniAccessoryStabilityTests: XCTestCase {
                 library.toggleFavorite(tracks[2])
                 let next = tracks[round % 2]
                 player.load(next, autoplay: false, context: tracks)
-                waitUntil("mini shows the next track") { MiniAccessoryProbe.trackID == next.id }
+                waitUntil("mini shows the next track") { MiniAccessoryProbe.trackID(for: player) == next.id }
             case .keyWindow:
                 let other = UIWindow(windowScene: try XCTUnwrap(window.windowScene))
                 other.makeKeyAndVisible()
@@ -70,7 +124,7 @@ final class MiniAccessoryStabilityTests: XCTestCase {
             }
             flushMainQueue()
         }
-        XCTAssertEqual(MiniAccessoryProbe.instances.count, 1, "\(trigger) replaced the mini", file: file, line: line)
+        XCTAssertEqual(MiniAccessoryProbe.instances(for: player).count, 1, "\(trigger) replaced the mini", file: file, line: line)
     }
 
     private func fixture() throws -> (URL, LibraryStore, [Track]) {
