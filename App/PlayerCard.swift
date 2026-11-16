@@ -37,13 +37,31 @@ struct PlayerMiniGlass: ViewModifier {
 /// last showed. A replaced mini drops a tap that lands during the swap, so
 /// regression tests assert that updates reach the mounted mini instead. A
 /// reattach of the same mini appears again without adding an instance.
+/// Kept per player: a mini from an earlier test's window can still report
+/// after `reset()`, and must not count against the mini under test.
 @MainActor enum MiniAccessoryProbe {
-    static var instances: Set<UUID> = []
-    static var trackID: UUID?
+    private static var mounted: [ObjectIdentifier: Set<UUID>] = [:]
+    private static var shown: [ObjectIdentifier: UUID] = [:]
+
+    static func appeared(_ instance: UUID, for player: PlayerStore) {
+        mounted[ObjectIdentifier(player), default: []].insert(instance)
+    }
+
+    static func showed(_ trackID: UUID?, for player: PlayerStore) {
+        shown[ObjectIdentifier(player)] = trackID
+    }
+
+    static func instances(for player: PlayerStore) -> Set<UUID> {
+        mounted[ObjectIdentifier(player)] ?? []
+    }
+
+    static func trackID(for player: PlayerStore) -> UUID? {
+        shown[ObjectIdentifier(player)]
+    }
 
     static func reset() {
-        instances = []
-        trackID = nil
+        mounted = [:]
+        shown = [:]
     }
 }
 
