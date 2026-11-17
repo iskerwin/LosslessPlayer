@@ -40,10 +40,15 @@ BUNDLE_ID = 'com.iskerwin.LosslessPlayer'
 IPA_NAME = 'LosslessPlayer-dev-unsigned.ipa'
 IPA_CONFIGURATION = 'Release'
 SCREENSHOTS = ('library.png', 'songs.png', 'playlist.png', 'now-playing.png')
+# The iPad sidebar class runs on an iPad simulator only, in its own stage.
+WHOLE_UI = '-only-testing:LosslessPlayerUITests'
+IPAD_UI = 'LosslessPlayerUITests/IPadSidebarTests'
+IPAD_SCREENSHOTS = ('ipad-sidebar-library.png', 'ipad-player.png', 'ipad-portrait.png')
 SELECTOR = re.compile(r'LosslessPlayer(?:UI)?Tests(?:/[A-Za-z_]\w*){0,2}')
 # Phase limits. A limit is a failure, never a pass.
 UNIT_MINUTES = 15
 UI_MINUTES = 20
+IPAD_MINUTES = 10
 IPA_MINUTES = 20
 
 
@@ -208,7 +213,7 @@ def find_pr_proof(plan):
 # ---- simulator tests ------------------------------------------------------
 
 def prepare(simulator=True):
-    """Pin the newest Xcode 26, generate the project and (for tests) boot one iPhone simulator."""
+    """Pin the newest Xcode 26, generate the project and (for tests) boot an iPhone simulator."""
     apps = sorted(Path('/Applications').glob('Xcode_26*.app'), key=lambda p: [
         int(n) for n in re.findall(r'\d+', p.name)])
     if not apps:
@@ -220,15 +225,31 @@ def prepare(simulator=True):
     run(['xcodegen', 'generate'])
     if not simulator:
         return None
+    return boot('iPhone')
+
+
+def boot(family):
+    """Boot the first available iOS 26 simulator of this family (iPhone or iPad)."""
     data = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))
     devices = [d for runtime, items in data['devices'].items() if 'iOS-26' in runtime
-               for d in items if 'iPhone' in d['name']]
+               for d in items if d['name'].startswith(family)]
     if not devices:
-        raise Failure('没有可用的 iOS 26 iPhone 模拟器')
+        raise Failure(f'没有可用的 iOS 26 {family} 模拟器')
     udid = sorted(devices, key=lambda d: d['name'])[0]['udid']
     subprocess.run(['xcrun', 'simctl', 'boot', udid], capture_output=True)
     run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], timeout=8 * 60)
     return udid
+
+
+def split_ui(selectors):
+    """(iPhone, iPad) UI selectors. The whole UI target runs the iPad class on iPad only."""
+    ipad_class = f'-only-testing:{IPAD_UI}'
+    ipad = [s for s in selectors if s == ipad_class or s.startswith(ipad_class + '/')]
+    phone = [s for s in selectors if s not in ipad]
+    if WHOLE_UI in selectors:
+        phone.append(f'-skip-testing:{IPAD_UI}')
+        ipad = [ipad_class]
+    return phone, ipad
 
 
 def passed_count(result):
@@ -283,16 +304,22 @@ def execute(plan):
         shots = ROOT / 'build/screenshots'
         temporary = Path('/tmp/lossless-screenshots')
         shots.mkdir(parents=True, exist_ok=True)
+        phone, ipad = split_ui(plan['ui_testing'])
+        env = dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots))
         try:
-            with app_log(udid, ROOT / 'AppLog.log'):
-                ui = xcodebuild_test(udid, plan['ui_testing'], ROOT / 'build/UIResults.xcresult', UI_MINUTES,
-                                     env=dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots)))
+            if phone:
+                with app_log(udid, ROOT / 'AppLog.log'):
+                    ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
+            if ipad:
+                ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
+                                      env=env)
         finally:
             # Keep screenshots for diagnosis even when an interaction test fails.
             if temporary.is_dir():
                 shutil.copytree(temporary, shots, dirs_exist_ok=True)
-        if plan['ui_testing'] == ['-only-testing:LosslessPlayerUITests']:
-            missing = [n for n in SCREENSHOTS if not (shots / n).is_file() or not (shots / n).stat().st_size]
+        if plan['ui_testing'] == [WHOLE_UI]:
+            missing = [n for n in SCREENSHOTS + IPAD_SCREENSHOTS
+                       if not (shots / n).is_file() or not (shots / n).stat().st_size]
             if missing:
                 raise Failure(f'缺少截图：{missing}')
     if not unit and not ui:

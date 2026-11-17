@@ -52,5 +52,6 @@ jobs:
             *.log
             TestResults.xcresult
             build/UIResults.xcresult
+            build/IPadResults.xcresult
             build/screenshots
             dist/

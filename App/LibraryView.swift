@@ -215,6 +215,10 @@ struct LibraryView: View {
     var playlistPath = NavigationPath()
     var favoritesPath = NavigationPath()
     var searchPath = NavigationPath()
+    var artistsPath = NavigationPath()
+    var albumsPath = NavigationPath()
+    var songsPath = NavigationPath()
+    var recentPath = NavigationPath()
     var query = ""
     var artistQuery = ""
     var albumQuery = ""
@@ -226,6 +230,10 @@ struct LibraryView: View {
         case .playlists: playlistPath.append(route)
         case .favorites: favoritesPath.append(route)
         case .search: searchPath.append(route)
+        case .artists: artistsPath.append(route)
+        case .albums: albumsPath.append(route)
+        case .songs: songsPath.append(route)
+        case .recent: recentPath.append(route)
         }
     }
 }
@@ -303,16 +311,40 @@ private struct LibraryTabs: View {
         AccessoryMini(library: library, player: player, open: { [commands] in commands.openPlayer() })
     }
 
+    /// Read once: the shell must not re-run on size-class changes (see above),
+    /// so the iPad sidebar follows the device, not the current width.
+    private static let usesSidebar = UIDevice.current.userInterfaceIdiom == .pad
+
     @available(iOS 26, *)
-    private var glassTabs: some View {
+    @ViewBuilder private var glassTabs: some View {
+        if Self.usesSidebar {
+            tabs.tabViewStyle(.sidebarAdaptable)
+                .searchReselect(title: "搜索") { nav.searchFieldFocused = true }
+                .tabReselect(title: "歌单") { returnToPlaylistHome() }
+        } else {
+            tabs.searchReselect(title: "搜索") { nav.searchFieldFocused = true }
+                .tabReselect(title: "歌单") { returnToPlaylistHome() }
+        }
+    }
+
+    @available(iOS 26, *)
+    private var tabs: some View {
         TabView(selection: $nav.tab) {
             Tab("资料库", systemImage: "square.stack", value: AppTab.library) { browser(.library) }
             Tab("歌单", systemImage: "music.note.list", value: AppTab.playlists) { browser(.playlists) }
             Tab("收藏", systemImage: "star.fill", value: AppTab.favorites) { browser(.favorites) }
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search) { browser(.search) }
+            if Self.usesSidebar {
+                // Sidebar only: hidden when the iPad falls back to a tab bar.
+                TabSection("浏览") {
+                    Tab("艺术家", systemImage: "music.mic", value: AppTab.artists) { browser(.artists) }
+                    Tab("专辑", systemImage: "square.stack", value: AppTab.albums) { browser(.albums) }
+                    Tab("歌曲", systemImage: "music.note", value: AppTab.songs) { browser(.songs) }
+                    Tab("最近播放", systemImage: "clock", value: AppTab.recent) { browser(.recent) }
+                }
+                .defaultVisibility(.hidden, for: .tabBar)
+            }
         }
-        .searchReselect(title: "搜索") { nav.searchFieldFocused = true }
-        .tabReselect(title: "歌单") { returnToPlaylistHome() }
     }
 
     private var legacyTabs: some View {
@@ -374,57 +406,38 @@ private struct LibraryBrowser: View {
 
     @ViewBuilder var body: some View {
         switch root {
-        case .library: libraryStack
-        case .playlists: playlistStack
-        case .favorites: favoritesStack
-        case .search: searchStack
-        }
-    }
-
-    private var libraryStack: some View {
-        NavigationStack(path: $nav.libraryPath) {
-            libraryHome
-                .navigationTitle("资料库")
-                .navigationBarTitleDisplayMode(.large)
-                .trailingGlass { libraryMore }
-                .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-                .navigationDestination(for: DetailZoomRoute.self) { detail in
-                    destination(detail.route)
-                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
-                }
-        }
-        .environment(\.detailZoomNamespace, zoom)
-    }
-
-    private var playlistStack: some View {
-        NavigationStack(path: $nav.playlistPath) {
-            PlaylistHome(library: library, player: player, imports: actions.imports, onOpen: actions.open, onRename: actions.rename, onCreate: {
-                actions.createPlaylist()
-            }, onAddSongs: { actions.addSongs($0) }, onAddToPlaylist: { actions.addToPlaylist($0) })
-            .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-            .navigationDestination(for: DetailZoomRoute.self) { detail in
-                destination(detail.route)
-                    .modifier(DetailZoomDestination(id: detail, namespace: zoom))
+        case .library:
+            stack($nav.libraryPath) {
+                libraryHome
+                    .navigationTitle("资料库")
+                    .navigationBarTitleDisplayMode(.large)
+                    .trailingGlass { libraryMore }
             }
+        case .playlists:
+            stack($nav.playlistPath) {
+                PlaylistHome(library: library, player: player, imports: actions.imports, onOpen: actions.open, onRename: actions.rename, onCreate: {
+                    actions.createPlaylist()
+                }, onAddSongs: { actions.addSongs($0) }, onAddToPlaylist: { actions.addToPlaylist($0) })
+            }
+        case .favorites:
+            stack($nav.favoritesPath) { page(library.favoriteTracks, title: "收藏", kind: .favorites, showsBack: false) }
+        case .search:
+            stack($nav.searchPath) { searchPage }
+        case .artists:
+            stack($nav.artistsPath) { artistIndex }
+        case .albums:
+            stack($nav.albumsPath) { albumIndex }
+        case .songs:
+            stack($nav.songsPath) { page(library.tracks, title: "歌曲", kind: .songs, showsBack: false) }
+        case .recent:
+            stack($nav.recentPath) { page(library.recentlyPlayed, title: "最近播放", kind: .recent, showsBack: false) }
         }
-        .environment(\.detailZoomNamespace, zoom)
     }
 
-    private var favoritesStack: some View {
-        NavigationStack(path: $nav.favoritesPath) {
-            page(library.favoriteTracks, title: "收藏", kind: .favorites, showsBack: false)
-                .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
-                .navigationDestination(for: DetailZoomRoute.self) { detail in
-                    destination(detail.route)
-                        .modifier(DetailZoomDestination(id: detail, namespace: zoom))
-                }
-        }
-        .environment(\.detailZoomNamespace, zoom)
-    }
-
-    private var searchStack: some View {
-        NavigationStack(path: $nav.searchPath) {
-            searchPage
+    /// One tab's navigation stack: every tab pushes the same routes.
+    private func stack<Root: View>(_ path: Binding<NavigationPath>, @ViewBuilder root: () -> Root) -> some View {
+        NavigationStack(path: path) {
+            root()
                 .navigationDestination(for: LibraryRoute.self) { route in destination(route) }
                 .navigationDestination(for: DetailZoomRoute.self) { detail in
                     destination(detail.route)
@@ -830,6 +843,8 @@ enum LibraryRoute: Hashable {
 
 private enum AppTab: Hashable {
     case library, playlists, favorites, search
+    /// iPad sidebar only: the library's browse pages as their own sections.
+    case artists, albums, songs, recent
 }
 
 /// Search results grouped the way Music presents them: matching artists
