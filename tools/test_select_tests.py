@@ -75,6 +75,13 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["full"])
         self.assertTrue(result["screenshots"])
         self.assertIn("-only-testing:LosslessPlayerTests/ArtworkSwipeTests", result["only_testing"])
+        self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardDragTests", result["only_testing"])
+
+    def test_player_card_transition_runs_its_pull_tests_and_screenshots(self):
+        result = select_tests(["App/PlayerCardTransition.swift"])
+        self.assertFalse(result["full"])
+        self.assertTrue(result["screenshots"])
+        self.assertIn("-only-testing:LosslessPlayerTests/PlayerCardDragTests", result["only_testing"])
 
     def test_search_changes_keep_matching_and_cache_regressions(self):
         for path in ("App/LibraryStore.swift", "App/LibraryView.swift", "App/LibraryCatalog.swift"):

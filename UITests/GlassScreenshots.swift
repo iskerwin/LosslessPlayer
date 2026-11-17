@@ -446,6 +446,27 @@ final class GlassScreenshots: XCTestCase {
         }
     }
 
+    /// A short, slow pull lets go of the card: it springs back to full screen.
+    func testShortPullSpringsBackToFullScreen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        try tapMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已展开"),
+                                                object: app.buttons["收起播放器"])
+        wait(for: [settled], timeout: 8)
+        let resting = player.frame
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 90)),
+                   withVelocity: 120, thenHoldForDuration: 0.3)
+        let back = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            player.exists && player.frame == resting
+        }, object: nil)
+        wait(for: [back], timeout: 5)
+    }
+
     /// Control case, split out so a failure summary names the broken half:
     /// if this fails, skip/load is broken in the UI context; if only the
     /// swipe case below fails, the gesture is. Button queries are scoped to

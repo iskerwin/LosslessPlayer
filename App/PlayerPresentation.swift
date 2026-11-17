@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Which pans may start the zoom's interactive dismissal. Only a mostly
+/// Which pans may start pulling the player card down. Only a mostly
 /// downward pull closes the player; sideways drags belong to the artwork's
 /// skip swipe. SwiftUI's zoom cover let the system pan take a rightward
 /// swipe and close the player instead of going back a track.
@@ -50,9 +50,10 @@ struct PlayerZoomSource: UIViewRepresentable {
     }
 }
 
-/// Presents the player full screen from UIKit, zooming from the mini on
-/// iOS 18 and later. UIKit is needed for `interactiveDismissShouldBegin`,
-/// which SwiftUI's zoom transition does not expose.
+/// Presents the player full screen from UIKit. On iOS 18 and later the card
+/// grows out of the mini, follows a pull straight down and shrinks back into
+/// the mini (`PlayerCardTransition`), as in Music; the system zoom shrank the
+/// page while it was pulled. iOS 17 uses the plain full-screen cover.
 struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     var anchor: PlayerZoomAnchor
@@ -85,7 +86,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         coordinator.sync()
     }
 
-    @MainActor final class Coordinator {
+    @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         weak var presenter: UIViewController?
         var anchor: PlayerZoomAnchor?
         var isPresented: Binding<Bool> = .constant(false)
@@ -94,6 +95,25 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         fileprivate var host: PlayerHostingController?
         /// The current dismissal was asked for by the app, not a user pull.
         private var dismissing = false
+
+        /// Holds the transition delegate, which UIKit references weakly.
+        private var transition: PlayerCardTransition?
+        private var drag: PlayerCardDrag?
+
+        @objc private func pulled(_ pan: UIPanGestureRecognizer) {
+            guard let host, let drag else { return }
+            let translation = pan.translation(in: host.view.superview).y
+            switch pan.state {
+            case .changed:
+                drag.update(translation: translation)
+            case .ended, .cancelled:
+                let velocity = pan.state == .ended ? pan.velocity(in: host.view.superview).y : 0
+                // A pull closes like the system pull did: didDismiss reports it.
+                if drag.end(translation: translation, velocity: velocity) { host.dismiss(animated: true) }
+            default:
+                break
+            }
+        }
 
         func sync() {
             if isPresented.wrappedValue {
@@ -112,21 +132,34 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
             host.onAppeared = { [weak self] in self?.onSettled() }
             host.onDismissed = { [weak self] in self?.didDismiss() }
             if #available(iOS 18, *) {
-                let options = UIViewController.Transition.ZoomOptions()
-                options.interactiveDismissShouldBegin = { context in
-                    PlayerDismissPan.shouldBegin(velocity: context.velocity)
-                }
-                host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor, weak window] _ in
-                    MainActor.assumeIsolated { anchor?.source(in: window) }
-                }
+                let transition = PlayerCardTransition()
+                transition.source = { [weak anchor = self.anchor, weak window] in anchor?.source(in: window) }
+                self.transition = transition
+                host.modalPresentationStyle = .custom
+                host.modalPresentationCapturesStatusBarAppearance = true
+                host.transitioningDelegate = transition
+                let pan = UIPanGestureRecognizer(target: self, action: #selector(pulled(_:)))
+                pan.delegate = self
+                host.view.addGestureRecognizer(pan)
+                drag = PlayerCardDrag(card: host.view)
             }
             self.host = host
             presenter.present(host, animated: true)
         }
 
+        /// Only a mostly downward pull moves the card; sideways drags stay
+        /// with the artwork's skip swipe.
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return PlayerDismissPan.shouldBegin(velocity: CGVector(dx: velocity.x, dy: velocity.y))
+        }
+
         private func didDismiss() {
             host = nil
-            // "跟手": the system's interactive pull closed it; "程序": the app did.
+            drag = nil
+            transition = nil
+            // "跟手": a pull on the card closed it; "程序": the app did.
             presenter?.view.accessibilityValue = dismissing ? "程序" : "跟手"
             if dismissing {
                 dismissing = false

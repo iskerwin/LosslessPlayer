@@ -69,8 +69,10 @@ MAPPING = {
         # Hosts the player to check the native volume and route views mount at once.
         "PlayerCardRenderingTests",
     }, True),
-    # PlayerDismissPan decides which pans may close the zoomed player.
-    "App/PlayerPresentation.swift": ({"ArtworkSwipeTests"}, True),
+    # PlayerDismissPan decides which pans may pull the player card down.
+    "App/PlayerPresentation.swift": ({"ArtworkSwipeTests", "PlayerCardDragTests"}, True),
+    # The card's pull, release and open/close animation.
+    "App/PlayerCardTransition.swift": ({"PlayerCardDragTests"}, True),
     "App/MusicChrome.swift": ({"PlaybackQueueTests"}, True),
     # LibraryStore invalidates this cache during removal, rescans and cover edits.
     "App/ArtworkCache.swift": (LIBRARY | {"BrowseAndArtworkPerformanceTests", "ArtworkAnalysisTests"}, True),
