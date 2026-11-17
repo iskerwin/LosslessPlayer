@@ -422,6 +422,30 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertFalse(player.exists)
     }
 
+    /// A quick pull-down must be the system's finger-following dismissal,
+    /// not an app drag that ignores the finger and closes on release
+    /// (run 44089072139: a fast pull on the artwork closed with no tracking).
+    func testQuickPullDownFollowsTheFinger() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        let lastClose = app.descendants(matching: .any)["player-last-close"]
+        for (place, start) in [("artwork", CGVector(dx: 0.5, dy: 0.3)), ("grabber", nil)] {
+            try tapMini(in: app)
+            let handle = app.buttons["收起播放器"]
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已展开"),
+                                                    object: handle)
+            wait(for: [settled], timeout: 8)
+            let from = start.map { app.coordinate(withNormalizedOffset: $0) }
+                ?? handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 260)),
+                       withVelocity: 1500, thenHoldForDuration: 0.3)
+            _ = try readyMini(in: app)
+            XCTAssertEqual(lastClose.value as? String, "跟手", "quick pull on the \(place)")
+        }
+    }
+
     /// Control case, split out so a failure summary names the broken half:
     /// if this fails, skip/load is broken in the UI context; if only the
     /// swipe case below fails, the gesture is. Button queries are scoped to

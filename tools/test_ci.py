@@ -1,5 +1,6 @@
 """Python-only checks of the cloud flow; these do not build or run the iOS app."""
 
+import json
 from pathlib import Path
 import plistlib
 import re
@@ -96,6 +97,18 @@ class SourceTests(unittest.TestCase):
     def test_keeps_ten_and_replaces_same_build(self):
         result = ci.updated_source(self.source(*map(str, range(20, 8, -1))), {'buildVersion': '20'})
         self.assertEqual(self.builds(result), [str(n) for n in range(20, 10, -1)])
+
+    def test_source_icons_point_at_the_app_icon_in_this_repo(self):
+        source = json.loads((ROOT / 'apps.json').read_text())
+        prefix = f'https://raw.githubusercontent.com/{ci.REPO}/main/'
+        for icon in (source['iconURL'], source['apps'][0]['iconURL']):
+            self.assertTrue(icon.startswith(prefix), icon)
+            self.assertTrue((ROOT / icon[len(prefix):]).is_file(), icon)
+
+    def test_publishing_keeps_the_app_icon(self):
+        source = self.source('155')
+        source['apps'][0]['iconURL'] = 'icon'
+        self.assertEqual(ci.updated_source(source, {'buildVersion': '156'})['apps'][0]['iconURL'], 'icon')
 
     def test_entry_points_at_release_asset(self):
         info = {'CFBundleShortVersionString': '0.2.0', 'CFBundleVersion': '156'}

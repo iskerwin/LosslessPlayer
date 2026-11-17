@@ -29,6 +29,86 @@ enum ArtworkSwipe {
     static func follows(_ translation: CGSize) -> Bool {
         abs(translation.width) > abs(translation.height) * 1.5
     }
+    /// The swipe starts only on a sideways drag, so a pull-down is left to
+    /// the zoom presentation's own pan, which follows the finger.
+    static func claims(velocity: CGPoint) -> Bool {
+        abs(velocity.x) > abs(velocity.y)
+    }
+}
+
+/// The artwork's skip swipe. iOS 18 and later: a UIKit pan that declines
+/// vertical drags. A SwiftUI drag there could win a quick pull-down from the
+/// zoom's dismissal pan, then close on release without following the finger
+/// (run 44089072139). iOS 17 has no interactive dismissal, so its drag also
+/// closes the player on a long pull.
+private struct ArtworkSwipeGesture: ViewModifier {
+    var onSwipe: (ArtworkSwipe.Direction) -> Void
+    var onClose: () -> Void
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.gesture(ArtworkSwipePan(onSwipe: onSwipe))
+        } else {
+            content.simultaneousGesture(DragGesture(minimumDistance: 16, coordinateSpace: .global)
+                .onEnded { value in
+                    if let direction = ArtworkSwipe.direction(for: value.translation) {
+                        onSwipe(direction)
+                    } else if LegacyPullToClose.closes(value.translation) {
+                        onClose()
+                    }
+                })
+        }
+    }
+}
+
+@available(iOS 18, *)
+private struct ArtworkSwipePan: UIGestureRecognizerRepresentable {
+    var onSwipe: (ArtworkSwipe.Direction) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        guard pan.state == .ended else { return }
+        let translation = pan.translation(in: pan.view)
+        if let direction = ArtworkSwipe.direction(for: CGSize(width: translation.x, height: translation.y)) {
+            onSwipe(direction)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+            return ArtworkSwipe.claims(velocity: pan.velocity(in: pan.view))
+        }
+    }
+}
+
+/// iOS 17 only: without the zoom's interactive dismissal, a long pull on
+/// the grabber closes the player on release. Later systems leave the pull to
+/// the presentation so it follows the finger.
+private struct LegacyPullToClose: ViewModifier {
+    var onClose: () -> Void
+
+    static func closes(_ translation: CGSize) -> Bool {
+        translation.height > 90 && translation.height > abs(translation.width) * 1.5
+    }
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+        } else {
+            content.highPriorityGesture(DragGesture(minimumDistance: 16, coordinateSpace: .global)
+                .onEnded { value in
+                    if Self.closes(value.translation) { onClose() }
+                })
+        }
+    }
 }
 
 /// Header appearance mapping, independent of PlayerCard presentation.
@@ -220,7 +300,6 @@ struct NowPlayingView: View {
         .statusBarHidden(false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing")
-        // The gesture owns the 90pt dismissal decision; the card owns motion.
         .task(id: panel == .lyrics ? current?.lyrics : nil) {
             guard panel == .lyrics, parsedLyrics.source != current?.lyrics else { return }
             let result = await ParsedLyrics.load(current?.lyrics)
@@ -245,17 +324,21 @@ struct NowPlayingView: View {
 
     private func playerContent(stageHeight: CGFloat?) -> some View {
         VStack(spacing: 0) {
-            Button { onClose() } label: {
-                Capsule()
-                    .fill(Color.white.opacity(0.55))
-                    .frame(width: 60, height: 4)
-                    .frame(width: 90, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("收起播放器")
+            // A tap, not a Button: a Button's touch slop let a sideways drag
+            // that ended beside the grabber close the player. Pulls belong to
+            // the presentation (iOS 18+) or LegacyPullToClose (iOS 17).
+            Capsule()
+                .fill(Color.white.opacity(0.55))
+                .frame(width: 60, height: 4)
+                .frame(width: 90, height: 44)
+                .contentShape(Rectangle())
+                .onTapGesture { onClose() }
+                .accessibilityElement()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onClose() }
+                .accessibilityLabel("收起播放器")
             .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
-            .highPriorityGesture(dismissGesture)
+            .modifier(LegacyPullToClose(onClose: onClose))
             Group {
                 if panel == .lyrics {
                     stage.gesture(TapGesture().onEnded { })
@@ -290,30 +373,6 @@ struct NowPlayingView: View {
         .contentShape(Rectangle())
         // Ordinary priority lets child buttons and sliders own their taps.
         .gesture(TapGesture().onEnded { onClose() })
-    }
-
-    private var dismissGesture: some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .onEnded { value in
-                if value.translation.height > 90,
-                   value.translation.height > abs(value.translation.width) * 1.5 {
-                    onClose()
-                }
-            }
-    }
-
-    /// Only the header owns skip/dismiss gestures; queue scrolling stays native.
-    private var artworkGesture: some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .global)
-            .onEnded { value in
-                if let direction = ArtworkSwipe.direction(for: value.translation) {
-                    swipeHaptic += 1
-                    if direction == .next { player.skip() } else { player.skip(backwards: true) }
-                } else if value.translation.height > 90,
-                          value.translation.height > abs(value.translation.width) * 1.5 {
-                    onClose()
-                }
-            }
     }
 
     private var stage: some View {
@@ -398,8 +457,11 @@ struct NowPlayingView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("now-playing-artwork")
-        // Tap dismissal and the 16pt directional drag recognize separately.
-        .simultaneousGesture(artworkGesture)
+        // Tap dismissal and the sideways swipe recognize separately.
+        .modifier(ArtworkSwipeGesture(onSwipe: { direction in
+            swipeHaptic += 1
+            if direction == .next { player.skip() } else { player.skip(backwards: true) }
+        }, onClose: onClose))
         .sensoryFeedback(.selection, trigger: swipeHaptic)
     }
 
