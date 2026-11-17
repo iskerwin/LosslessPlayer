@@ -48,8 +48,8 @@ SELECTOR = re.compile(r'LosslessPlayer(?:UI)?Tests(?:/[A-Za-z_]\w*){0,2}')
 # Phase limits. A limit is a failure, never a pass.
 UNIT_MINUTES = 15
 UI_MINUTES = 20
-# The iPad simulator boots at the start of the run (see execute); the four
-# tests themselves take about six minutes.
+# A fresh iPad simulator spent 5.7 min in xcodebuild before its first test
+# and the four tests took 4.5 min more (run 44040424826), so 10 cut it off.
 IPAD_MINUTES = 20
 IPA_MINUTES = 20
 
@@ -230,11 +230,8 @@ def prepare(simulator=True):
     return boot('iPhone')
 
 
-def boot(family, wait=True):
-    """Boot the first available iOS 26 simulator of this family (iPhone or iPad).
-
-    With wait=False it only starts booting; `ready` waits for it later.
-    """
+def boot(family):
+    """Boot the first available iOS 26 simulator of this family (iPhone or iPad)."""
     data = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json']))
     devices = [d for runtime, items in data['devices'].items() if 'iOS-26' in runtime
                for d in items if d['name'].startswith(family)]
@@ -242,13 +239,8 @@ def boot(family, wait=True):
         raise Failure(f'没有可用的 iOS 26 {family} 模拟器')
     udid = sorted(devices, key=lambda d: d['name'])[0]['udid']
     subprocess.run(['xcrun', 'simctl', 'boot', udid], capture_output=True)
-    if wait:
-        ready(udid)
-    return udid
-
-
-def ready(udid):
     run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], timeout=8 * 60)
+    return udid
 
 
 def split_ui(selectors):
@@ -307,11 +299,6 @@ def execute(plan):
                     unit_passed=0, ui_passed=0, check_only=True,
                     run_id=os.environ.get('GITHUB_RUN_ID'))
     udid = prepare()
-    phone, ipad = split_ui(plan['ui_testing']) if plan['ui'] else ([], [])
-    # A fresh iPad simulator spent 5.7 and 13.7 minutes getting ready inside
-    # xcodebuild (runs 44040424826, 44112409600), so it boots now and warms
-    # up while the unit and iPhone stages run.
-    ipad_udid = boot('iPad', wait=False) if ipad else None
     unit = ui = 0
     if plan['only_testing']:
         unit = xcodebuild_test(udid, plan['only_testing'], ROOT / 'TestResults.xcresult', UNIT_MINUTES)
@@ -319,14 +306,14 @@ def execute(plan):
         shots = ROOT / 'build/screenshots'
         temporary = Path('/tmp/lossless-screenshots')
         shots.mkdir(parents=True, exist_ok=True)
+        phone, ipad = split_ui(plan['ui_testing'])
         env = dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots))
         try:
             if phone:
                 with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
-                ready(ipad_udid)
-                ui += xcodebuild_test(ipad_udid, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
+                ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
                                       env=env)
         finally:
             # Keep screenshots for diagnosis even when an interaction test fails.
