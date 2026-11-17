@@ -324,15 +324,19 @@ struct NowPlayingView: View {
 
     private func playerContent(stageHeight: CGFloat?) -> some View {
         VStack(spacing: 0) {
-            Button { onClose() } label: {
-                Capsule()
-                    .fill(Color.white.opacity(0.55))
-                    .frame(width: 60, height: 4)
-                    .frame(width: 90, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("收起播放器")
+            // A tap, not a Button: a Button's touch slop let a sideways drag
+            // that ended beside the grabber close the player. Pulls belong to
+            // the presentation (iOS 18+) or LegacyPullToClose (iOS 17).
+            Capsule()
+                .fill(Color.white.opacity(0.55))
+                .frame(width: 60, height: 4)
+                .frame(width: 90, height: 44)
+                .contentShape(Rectangle())
+                .onTapGesture { onClose() }
+                .accessibilityElement()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onClose() }
+                .accessibilityLabel("收起播放器")
             .accessibilityValue(presentationSettled ? "已展开" : "过渡中")
             .modifier(LegacyPullToClose(onClose: onClose))
             Group {
