@@ -81,11 +81,13 @@ final class IPadSidebarTests: XCTestCase {
         let library = app.buttons.matching(NSPredicate(format: "label == %@", "资料库")).firstMatch
         XCTAssertTrue(library.waitForExistence(timeout: 20))
         save("ipad-portrait")
-        for hidden in ["浏览", "最近播放"] {
-            XCTAssertFalse(app.tabBars.buttons[hidden].exists, hidden)
+        // The system lists each top-bar tab twice at the same frame, so
+        // compare the set of labels in the bar's row, not a count.
+        let row = app.buttons.allElementsBoundByIndex.filter {
+            abs($0.frame.midY - library.frame.midY) < 1
+                && $0.identifier != "ToggleSideBar" && $0.label != "更多" && !$0.label.isEmpty
         }
-        let libraries = app.buttons.matching(NSPredicate(format: "label == %@", "资料库"))
-        XCTAssertEqual(libraries.count, 1, libraries.debugDescription)
+        XCTAssertEqual(Set(row.map(\.label)), ["资料库", "歌单", "收藏", "搜索"])
     }
 
     private func launch() -> XCUIApplication {
