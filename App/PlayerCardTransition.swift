@@ -3,9 +3,8 @@ import UIKit
 /// The pull-down on the player card, as in Music: the full-width card moves
 /// straight down with the finger and never shrinks while held. Releasing far
 /// or fast enough closes it into the mini; otherwise it springs back.
-/// It owns the pan, so the presentation's SwiftUI coordinator stays a plain
-/// class: making that coordinator an NSObject let shell updates replace the
-/// accessory mini (MiniAccessoryStabilityTests, runs 44099580964, 44106142172).
+/// It owns the pan and its delegate, so the presentation's coordinator only
+/// presents and dismisses.
 @MainActor final class PlayerCardDrag: NSObject, UIGestureRecognizerDelegate {
     /// Rounded top corners while the card is lifted off the screen edge.
     static let cornerRadius: CGFloat = 40
