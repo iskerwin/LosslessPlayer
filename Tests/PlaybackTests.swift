@@ -1321,6 +1321,16 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(ArtworkSwipe.follows(CGSize(width: 0, height: 120)))
     }
 
+    /// The skip swipe must decline a pull-down so the zoom's dismissal pan
+    /// gets it and follows the finger (run 44089072139).
+    func testSkipSwipeStartsOnlyOnSidewaysDrags() {
+        XCTAssertTrue(ArtworkSwipe.claims(velocity: CGPoint(x: -900, y: 40)))
+        XCTAssertTrue(ArtworkSwipe.claims(velocity: CGPoint(x: 600, y: -300)))
+        XCTAssertFalse(ArtworkSwipe.claims(velocity: CGPoint(x: 0, y: 1500)))
+        XCTAssertFalse(ArtworkSwipe.claims(velocity: CGPoint(x: 300, y: 400)))
+        XCTAssertFalse(ArtworkSwipe.claims(velocity: .zero))
+    }
+
     /// The zoom's interactive dismissal must leave sideways drags to the
     /// skip swipe (run 43696246454: a right swipe closed the player).
     func testOnlyAMostlyDownwardPullStartsTheZoomDismissal() {

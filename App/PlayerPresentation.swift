@@ -65,6 +65,12 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         let presenter = UIViewController()
         presenter.view.isUserInteractionEnabled = false
+        if ScreenshotFixture.enabled {
+            // UI tests read how the player last closed. UIKit only: a
+            // SwiftUI state here would re-run the shell and replace the mini.
+            presenter.view.isAccessibilityElement = true
+            presenter.view.accessibilityIdentifier = "player-last-close"
+        }
         return presenter
     }
 
@@ -120,6 +126,8 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
 
         private func didDismiss() {
             host = nil
+            // "跟手": the system's interactive pull closed it; "程序": the app did.
+            presenter?.view.accessibilityValue = dismissing ? "程序" : "跟手"
             if dismissing {
                 dismissing = false
                 // A reopen requested while closing is honoured now.
