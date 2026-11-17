@@ -11,6 +11,14 @@
       "localizedDescription": "iOS 17+ 本地无损音乐播放器（SwiftUI + AVFoundation），交互对齐 Apple Music。",
       "versions": [
         {
+          "version": "0.4.0",
+          "buildVersion": "187.1",
+          "date": "2026-11-17",
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/preview-187.1/LosslessPlayer-dev-unsigned.ipa",
+          "size": 5128381,
+          "localizedDescription": "preview-187.1：预览包（合并前确认用）。\n\n### 新增\n- iPad（iPadOS 26 及以上）改用侧栏：资料库、歌单、收藏、搜索之外，「浏览」分组可直接进入艺术家、专辑、歌曲和最近播放；竖屏或窄窗口回到顶部标签栏时不显示这一组。iPhone 不变。"
+        },
+        {
           "version": "0.3.0",
           "buildVersion": "187",
           "date": "2026-11-16",
@@ -81,14 +89,6 @@
           "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-179/LosslessPlayer-dev-unsigned.ipa",
           "size": 6171425,
           "localizedDescription": "dev-179：最新开发版。"
-        },
-        {
-          "version": "0.2.0",
-          "buildVersion": "178",
-          "date": "2026-10-31",
-          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/dev-178/LosslessPlayer-dev-unsigned.ipa",
-          "size": 6040127,
-          "localizedDescription": "dev-178：最新开发版。"
         }
       ]
     }
