@@ -86,7 +86,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         coordinator.sync()
     }
 
-    @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    @MainActor final class Coordinator {
         weak var presenter: UIViewController?
         var anchor: PlayerZoomAnchor?
         var isPresented: Binding<Bool> = .constant(false)
@@ -99,21 +99,6 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         /// Holds the transition delegate, which UIKit references weakly.
         private var transition: PlayerCardTransition?
         private var drag: PlayerCardDrag?
-
-        @objc private func pulled(_ pan: UIPanGestureRecognizer) {
-            guard let host, let drag else { return }
-            let translation = pan.translation(in: host.view.superview).y
-            switch pan.state {
-            case .changed:
-                drag.update(translation: translation)
-            case .ended, .cancelled:
-                let velocity = pan.state == .ended ? pan.velocity(in: host.view.superview).y : 0
-                // A pull closes like the system pull did: didDismiss reports it.
-                if drag.end(translation: translation, velocity: velocity) { host.dismiss(animated: true) }
-            default:
-                break
-            }
-        }
 
         func sync() {
             if isPresented.wrappedValue {
@@ -138,21 +123,13 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
                 host.modalPresentationStyle = .custom
                 host.modalPresentationCapturesStatusBarAppearance = true
                 host.transitioningDelegate = transition
-                let pan = UIPanGestureRecognizer(target: self, action: #selector(pulled(_:)))
-                pan.delegate = self
-                host.view.addGestureRecognizer(pan)
-                drag = PlayerCardDrag(card: host.view)
+                let drag = PlayerCardDrag(card: host.view)
+                // A pull closes like the system pull did: didDismiss reports it.
+                drag.attach { [weak host] in host?.dismiss(animated: true) }
+                self.drag = drag
             }
             self.host = host
             presenter.present(host, animated: true)
-        }
-
-        /// Only a mostly downward pull moves the card; sideways drags stay
-        /// with the artwork's skip swipe.
-        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
-            let velocity = pan.velocity(in: pan.view)
-            return PlayerDismissPan.shouldBegin(velocity: CGVector(dx: velocity.x, dy: velocity.y))
         }
 
         private func didDismiss() {

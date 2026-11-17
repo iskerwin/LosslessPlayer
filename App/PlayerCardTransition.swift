@@ -3,7 +3,10 @@ import UIKit
 /// The pull-down on the player card, as in Music: the full-width card moves
 /// straight down with the finger and never shrinks while held. Releasing far
 /// or fast enough closes it into the mini; otherwise it springs back.
-@MainActor final class PlayerCardDrag {
+/// It owns the pan, so the presentation's SwiftUI coordinator stays a plain
+/// class: making that coordinator an NSObject let shell updates replace the
+/// accessory mini (MiniAccessoryStabilityTests, runs 44099580964, 44106142172).
+@MainActor final class PlayerCardDrag: NSObject, UIGestureRecognizerDelegate {
     /// Rounded top corners while the card is lifted off the screen edge.
     static let cornerRadius: CGFloat = 40
 
@@ -15,8 +18,42 @@ import UIKit
 
     private weak var card: UIView?
 
+    /// Asked to close the card after a release that should close it.
+    private var onClose: () -> Void = {}
+
     init(card: UIView) {
         self.card = card
+    }
+
+    /// Lets a mostly downward pull on the card move it; `onClose` runs when
+    /// the release should close it.
+    func attach(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(pulled(_:)))
+        pan.delegate = self
+        card?.addGestureRecognizer(pan)
+    }
+
+    @objc private func pulled(_ pan: UIPanGestureRecognizer) {
+        let space = card?.superview
+        let translation = pan.translation(in: space).y
+        switch pan.state {
+        case .changed:
+            update(translation: translation)
+        case .ended, .cancelled:
+            let velocity = pan.state == .ended ? pan.velocity(in: space).y : 0
+            if end(translation: translation, velocity: velocity) { onClose() }
+        default:
+            break
+        }
+    }
+
+    /// Only a mostly downward pull moves the card; sideways drags stay with
+    /// the artwork's skip swipe.
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+        let velocity = pan.velocity(in: pan.view)
+        return PlayerDismissPan.shouldBegin(velocity: CGVector(dx: velocity.x, dy: velocity.y))
     }
 
     /// Follows the finger 1:1, never above the resting position.
