@@ -48,7 +48,9 @@ SELECTOR = re.compile(r'LosslessPlayer(?:UI)?Tests(?:/[A-Za-z_]\w*){0,2}')
 # Phase limits. A limit is a failure, never a pass.
 UNIT_MINUTES = 15
 UI_MINUTES = 20
-IPAD_MINUTES = 10
+# A fresh iPad simulator spent 5.7 min in xcodebuild before its first test
+# and the four tests took 4.5 min more (run 44040424826), so 10 cut it off.
+IPAD_MINUTES = 20
 IPA_MINUTES = 20
 
 

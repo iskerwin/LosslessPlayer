@@ -23,8 +23,8 @@ final class IPadSidebarTests: XCTestCase {
 
         try sidebarCell("艺术家", in: app).tap()
         XCTAssertTrue(app.navigationBars["艺术家"].waitForExistence(timeout: 8))
-        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "OneRepublic"))
-            .firstMatch.tap()
+        // The artist's list row, not the mini player's artist line (which opens the player).
+        app.cells.containing(NSPredicate(format: "label == %@", "OneRepublic")).firstMatch.tap()
         XCTAssertTrue(app.navigationBars["OneRepublic"].waitForExistence(timeout: 8))
         save("ipad-sidebar-artist")
 
@@ -84,7 +84,8 @@ final class IPadSidebarTests: XCTestCase {
         for hidden in ["浏览", "最近播放"] {
             XCTAssertFalse(app.tabBars.buttons[hidden].exists, hidden)
         }
-        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "资料库")).count, 1)
+        let libraries = app.buttons.matching(NSPredicate(format: "label == %@", "资料库"))
+        XCTAssertEqual(libraries.count, 1, libraries.debugDescription)
     }
 
     private func launch() -> XCUIApplication {
