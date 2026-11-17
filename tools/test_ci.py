@@ -259,6 +259,36 @@ class IPadStageTests(unittest.TestCase):
         self.assertEqual(phone, ['-only-testing:LosslessPlayerUITests/GlassScreenshots'])
         self.assertEqual(ipad, [])
 
+    def test_ipad_simulator_boots_before_the_iphone_stages_run(self):
+        calls = []
+        plan = {'only_testing': ['-only-testing:LosslessPlayerTests'], 'ui': True,
+                'ui_testing': ['-only-testing:LosslessPlayerUITests'], 'head': 'h', 'tree': 't'}
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(ci, 'ROOT', Path(tmp)), \
+                patch.object(ci, 'prepare', lambda: calls.append('prepare') or 'phone'), \
+                patch.object(ci, 'boot', lambda family, wait=True: calls.append(f'boot {family} {wait}') or 'pad'), \
+                patch.object(ci, 'ready', lambda udid: calls.append(f'ready {udid}')), \
+                patch.object(ci, 'app_log', lambda *a: __import__('contextlib').nullcontext()), \
+                patch.object(ci, 'xcodebuild_test', lambda udid, sel, *a, **k: calls.append(f'test {udid}') or 1), \
+                patch.object(ci, 'plan_key', lambda plan: 'k'), \
+                patch.object(ci, 'SCREENSHOTS', ()), patch.object(ci, 'IPAD_SCREENSHOTS', ()):
+            ci.execute(plan)
+        self.assertEqual(calls, ['prepare', 'boot iPad False', 'test phone', 'test phone', 'ready pad', 'test pad'])
+
+    def test_no_ipad_boot_without_an_ipad_stage(self):
+        calls = []
+        plan = {'only_testing': ['-only-testing:LosslessPlayerTests'], 'ui': True,
+                'ui_testing': ['-only-testing:LosslessPlayerUITests/GlassScreenshots'], 'head': 'h', 'tree': 't'}
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(ci, 'ROOT', Path(tmp)), \
+                patch.object(ci, 'prepare', lambda: 'phone'), \
+                patch.object(ci, 'boot', lambda family, wait=True: calls.append(family)), \
+                patch.object(ci, 'app_log', lambda *a: __import__('contextlib').nullcontext()), \
+                patch.object(ci, 'xcodebuild_test', lambda *a, **k: 1), \
+                patch.object(ci, 'plan_key', lambda plan: 'k'):
+            ci.execute(plan)
+        self.assertEqual(calls, [])
+
     def test_ipad_results_are_uploaded(self):
         for name in ('ci.yml', 'dev.yml'):
             text = (ROOT / '.github/workflows' / name).read_text()
