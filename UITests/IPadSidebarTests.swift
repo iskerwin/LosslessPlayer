@@ -52,38 +52,50 @@ final class IPadSidebarTests: XCTestCase {
             .withOffset(CGVector(dx: mini.frame.midX, dy: mini.frame.midY)).tap()
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         save("ipad-player")
-        // EXPERIMENT (exp/ipad-grabber-tap, not for merge): repeat open/close to catch a grabber tap that does nothing.
+        // EXPERIMENT (exp/ipad-grabber-tap, not for merge): repeat open/close, keep going past
+        // failures and stalls, and log each round's wall time.
+        continueAfterFailure = true
         let player = app.descendants(matching: .any)["now-playing"]
         let handle = app.buttons["收起播放器"]
-        func closed(_ step: String) -> Bool {
-            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
-            let ok = XCTWaiter().wait(for: [gone], timeout: 6) == .completed
-            NSLog("PROBE step=%@ closed=%@", step, ok ? "yes" : "no")
-            return ok
+        func gone(_ timeout: TimeInterval) -> Bool {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
+            return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
         }
-        var misses = 0
-        for round in 1...12 {
+        var misses = 0, openMisses = 0
+        for round in 1...20 {
+            let started = Date()
             if round > 1 {
-                XCTAssertTrue(mini.waitForExistence(timeout: 8))
+                guard mini.waitForExistence(timeout: 8) else {
+                    NSLog("PROBE round=%d result=no-mini seconds=%.1f", round, Date().timeIntervalSince(started))
+                    openMisses += 1
+                    continue
+                }
                 let frame = mini.frame
                 app.coordinate(withNormalizedOffset: .zero)
                     .withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
-                XCTAssertTrue(player.waitForExistence(timeout: 8))
+                guard player.waitForExistence(timeout: 8) else {
+                    NSLog("PROBE round=%d result=open-miss seconds=%.1f", round, Date().timeIntervalSince(started))
+                    openMisses += 1
+                    continue
+                }
             }
+            let opened = Date().timeIntervalSince(started)
             NSLog("PROBE round=%d tap value=%@", round, (handle.value as? String) ?? "-")
             handle.tap()
-            if closed("round\(round)-grabber") { continue }
+            if gone(6) {
+                NSLog("PROBE round=%d result=closed open=%.1f seconds=%.1f", round, opened, Date().timeIntervalSince(started))
+                continue
+            }
             misses += 1
             save("probe-miss-\(round)")
             app.descendants(matching: .any)["now-playing-artwork"].tap()
-            if !closed("round\(round)-artwork") {
-                handle.tap()
-                _ = closed("round\(round)-grabber-again")
-            }
+            let artwork = gone(6)
+            NSLog("PROBE round=%d result=MISS artwork-closes=%@ open=%.1f seconds=%.1f", round,
+                  artwork ? "yes" : "no", opened, Date().timeIntervalSince(started))
+            if !artwork { handle.tap(); _ = gone(6) }
         }
-        NSLog("PROBE misses=%d", misses)
+        NSLog("PROBE summary misses=%d openMisses=%d", misses, openMisses)
         XCTAssertEqual(misses, 0, "grabber taps that left the player open")
-        XCTAssertTrue(mini.waitForExistence(timeout: 8))
     }
 
     func testReselectStillWorksFromSidebar() throws {
