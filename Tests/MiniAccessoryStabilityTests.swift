@@ -62,6 +62,18 @@ final class MiniAccessoryStabilityTests: XCTestCase {
         hide(earlierWindow)
     }
 
+    /// The shell is compared byte by byte, gaps included, and a gap holds
+    /// leftover data: a Bool stored ahead of a reference re-ran the shell on
+    /// updates that changed nothing, in about half of all runs (8 of 8 with an
+    /// extra state in LibraryView), replacing the mini each time.
+    func testShellStoresItsFieldsWithoutGaps() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = LibraryStore(root: root)
+        let player = PlayerStore(library: library)
+        XCTAssertEqual(LibraryTabsLayout.gapBytes(library: library, player: player), 0)
+    }
+
     /// The player zooms from the native accessory, found from UIKit, since
     /// nothing inside the accessory may be a UIKit view.
     func testPlayerZoomSourceIsTheNativeAccessory() throws {

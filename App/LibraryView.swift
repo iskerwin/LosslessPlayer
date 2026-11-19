@@ -346,6 +346,23 @@ private struct LibraryTabs: View {
     }
 }
 
+/// Bytes between `LibraryTabs`' stored fields that belong to no field. For
+/// tests: SwiftUI compares the shell's stored bytes, and these hold leftover
+/// data, so any gap can make an update that changed nothing re-run the shell
+/// and replace the mini.
+@MainActor enum LibraryTabsLayout {
+    static func gapBytes(library: LibraryStore, player: PlayerStore) -> Int {
+        let tabs = LibraryTabs(library: library, player: player, nav: LibraryNavigation(),
+                               commands: LibraryCommands(), hasCurrent: true, zoom: PlayerZoomAnchor())
+        let used = Mirror(reflecting: tabs).children.reduce(0) { total, field in
+            total + _openExistential(type(of: field.value), do: size)
+        }
+        return MemoryLayout<LibraryTabs>.size - used
+    }
+
+    private static func size<T>(_: T.Type) -> Int { MemoryLayout<T>.size }
+}
+
 /// The native accessory's mini. It observes the stores itself, so playback
 /// changes update it in place instead of re-running `LibraryTabs`.
 private struct AccessoryMini: View {
