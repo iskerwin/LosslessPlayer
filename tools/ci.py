@@ -330,6 +330,8 @@ def execute(plan):
                 with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
+                # EXPERIMENT: free the runner before the iPad stage.
+                run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
                 pad = boot('iPad')
                 with app_log(pad, ROOT / 'IPadAppLog.log'), system_log(pad, ROOT / 'IPadSystemLog.log'):
                     ui += xcodebuild_test(pad, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
