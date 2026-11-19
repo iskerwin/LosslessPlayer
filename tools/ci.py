@@ -70,7 +70,7 @@ def run(command, log=None, timeout=None, env=None):
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         started = time.monotonic()
         for line in process.stdout:
-            sys.stdout.write(line)
+            sys.stdout.write(f'[{time.monotonic() - started:7.1f}s] {line}')
             if handle:
                 handle.write(line)
             if timeout and time.monotonic() - started > timeout:
@@ -313,6 +313,7 @@ def execute(plan):
                 with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
+                run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
                 ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
                                       env=env)
         finally:
