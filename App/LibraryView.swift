@@ -32,7 +32,7 @@ struct LibraryView: View {
     var body: some View {
         let _ = commands.update(actions: actions, openPlayer: { showPlayer = true })
         LibraryTabs(library: library, player: player, nav: nav, commands: commands,
-                    hasCurrent: player.current != nil, zoom: playerZoom)
+                    zoom: playerZoom, hasCurrent: player.current != nil)
             .background {
                 PlayerPresentation(isPresented: $showPlayer, anchor: playerZoom,
                                    onSettled: { playerSettled = true }) {
@@ -278,13 +278,18 @@ private struct LibraryActions {
 /// replacement is lost. So it holds only references and the flag that
 /// changes the accessory, and re-runs only when it changes; the tabs
 /// and the mini observe the stores themselves.
+///
+/// SwiftUI compares these fields byte by byte, including any gap between
+/// them, and a gap holds leftover data. The Bool stays last so no gap
+/// follows it (`LibraryTabsLayout`); ahead of a reference it left seven
+/// bytes that made updates which changed nothing re-run this body.
 private struct LibraryTabs: View {
     let library: LibraryStore
     let player: PlayerStore
     @Bindable var nav: LibraryNavigation
     let commands: LibraryCommands
-    var hasCurrent: Bool
     let zoom: PlayerZoomAnchor
+    var hasCurrent: Bool
 
     @ViewBuilder var body: some View {
         if #available(iOS 26.1, *) {
@@ -375,6 +380,22 @@ private struct LibraryTabs: View {
                 nav.playlistPath = NavigationPath()
             }
         }
+    }
+}
+
+/// Bytes of `LibraryTabs` that belong to none of its fields: gaps between
+/// them, or a field missing from the list below. For tests: SwiftUI compares
+/// the shell's stored bytes, and a gap holds leftover data, so it can make an
+/// update that changed nothing re-run the shell and replace the mini.
+enum LibraryTabsLayout {
+    static var unusedBytes: Int { LibraryTabs.unusedBytes }
+}
+
+private extension LibraryTabs {
+    static var unusedBytes: Int {
+        MemoryLayout<Self>.size - (MemoryLayout<LibraryStore>.size + MemoryLayout<PlayerStore>.size
+            + MemoryLayout<Bindable<LibraryNavigation>>.size + MemoryLayout<LibraryCommands>.size
+            + MemoryLayout<PlayerZoomAnchor>.size + MemoryLayout<Bool>.size)
     }
 }
 
