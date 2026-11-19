@@ -52,30 +52,37 @@ final class IPadSidebarTests: XCTestCase {
             .withOffset(CGVector(dx: mini.frame.midX, dy: mini.frame.midY)).tap()
         XCTAssertTrue(app.descendants(matching: .any)["now-playing"].waitForExistence(timeout: 8))
         save("ipad-player")
-        // EXPERIMENT (exp/ipad-grabber-tap, not for merge): which taps close the player?
+        // EXPERIMENT (exp/ipad-grabber-tap, not for merge): repeat open/close to catch a grabber tap that does nothing.
         let player = app.descendants(matching: .any)["now-playing"]
+        let handle = app.buttons["收起播放器"]
         func closed(_ step: String) -> Bool {
             let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: player)
             let ok = XCTWaiter().wait(for: [gone], timeout: 6) == .completed
-            NSLog("PROBE step=%@ closed=%@ value=%@", step, ok ? "yes" : "no",
-                  (app.buttons["收起播放器"].value as? String) ?? "-")
+            NSLog("PROBE step=%@ closed=%@", step, ok ? "yes" : "no")
             return ok
         }
-        let handle = app.buttons["收起播放器"]
-        NSLog("PROBE handle frame=%@ hittable=%@", NSCoder.string(for: handle.frame), handle.isHittable ? "yes" : "no")
-        handle.tap()
-        if !closed("grabber-center") {
-            save("probe-after-grabber")
-            handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
-            if !closed("grabber-low") {
-                app.descendants(matching: .any)["now-playing-artwork"].tap()
-                if !closed("artwork") {
-                    handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                        .press(forDuration: 0.15)
-                    _ = closed("grabber-press")
-                }
+        var misses = 0
+        for round in 1...12 {
+            if round > 1 {
+                XCTAssertTrue(mini.waitForExistence(timeout: 8))
+                let frame = mini.frame
+                app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+                XCTAssertTrue(player.waitForExistence(timeout: 8))
+            }
+            NSLog("PROBE round=%d tap value=%@", round, (handle.value as? String) ?? "-")
+            handle.tap()
+            if closed("round\(round)-grabber") { continue }
+            misses += 1
+            save("probe-miss-\(round)")
+            app.descendants(matching: .any)["now-playing-artwork"].tap()
+            if !closed("round\(round)-artwork") {
+                handle.tap()
+                _ = closed("round\(round)-grabber-again")
             }
         }
+        NSLog("PROBE misses=%d", misses)
+        XCTAssertEqual(misses, 0, "grabber taps that left the player open")
         XCTAssertTrue(mini.waitForExistence(timeout: 8))
     }
 
