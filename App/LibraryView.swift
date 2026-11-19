@@ -32,7 +32,7 @@ struct LibraryView: View {
     var body: some View {
         let _ = commands.update(actions: actions, openPlayer: { showPlayer = true })
         LibraryTabs(library: library, player: player, nav: nav, commands: commands,
-                    hasCurrent: player.current != nil, zoom: playerZoom)
+                    zoom: playerZoom, hasCurrent: player.current != nil)
             .background {
                 PlayerPresentation(isPresented: $showPlayer, anchor: playerZoom,
                                    onSettled: { playerSettled = true }) {
@@ -270,13 +270,18 @@ private struct LibraryActions {
 /// replacement is lost. So it holds only references and the flag that
 /// changes the accessory, and re-runs only when it changes; the tabs
 /// and the mini observe the stores themselves.
+///
+/// SwiftUI compares these fields byte by byte, including any gap between
+/// them, and a gap holds leftover data. The Bool stays last so no gap
+/// follows it (`LibraryTabsLayout`); ahead of a reference it left seven
+/// bytes that made updates which changed nothing re-run this body.
 private struct LibraryTabs: View {
     let library: LibraryStore
     let player: PlayerStore
     @Bindable var nav: LibraryNavigation
     let commands: LibraryCommands
-    var hasCurrent: Bool
     let zoom: PlayerZoomAnchor
+    var hasCurrent: Bool
 
     @ViewBuilder var body: some View {
         if #available(iOS 26.1, *) {
