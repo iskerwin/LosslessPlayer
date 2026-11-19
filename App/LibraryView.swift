@@ -39,7 +39,7 @@ struct LibraryView: View {
                     NowPlayingView(library: library, player: player, onOpen: open, onDelete: { track in
                         showPlayer = false
                         pendingDelete = [track]
-                    }, onClose: { showPlayer = false }, presentationSettled: playerSettled)
+                    }, onClose: { NSLog("PROBE onClose"); showPlayer = false }, presentationSettled: playerSettled)
                     .background { NowPlayingBackground(library: library, player: player).ignoresSafeArea() }
                     .environment(\.colorScheme, .dark)
                 }

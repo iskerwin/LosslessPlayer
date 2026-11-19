@@ -292,6 +292,23 @@ def app_log(udid, path):
             stream.wait(timeout=30)
 
 
+@contextlib.contextmanager
+def system_log(udid, path):
+    """EXPERIMENT: touch routing in the iPad simulator."""
+    with open(path, 'w') as handle:
+        stream = subprocess.Popen(
+            ['xcrun', 'simctl', 'spawn', udid, 'log', 'stream', '--level', 'debug', '--predicate',
+             'process == "backboardd" OR process == "SpringBoard" OR '
+             '(process == "LosslessPlayer" AND (subsystem == "com.apple.UIKit" OR eventMessage CONTAINS "PROBE"))'],
+            stdout=handle, stderr=subprocess.STDOUT)
+        try:
+            yield
+        finally:
+            time.sleep(2)
+            stream.terminate()
+            stream.wait(timeout=30)
+
+
 def execute(plan):
     """Run exactly the planned tests; returns the proof for this tree and plan."""
     if not plan['only_testing'] and not plan['ui']:
@@ -313,8 +330,10 @@ def execute(plan):
                 with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
-                ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
-                                      env=env)
+                pad = boot('iPad')
+                with app_log(pad, ROOT / 'IPadAppLog.log'), system_log(pad, ROOT / 'IPadSystemLog.log'):
+                    ui += xcodebuild_test(pad, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
+                                          env=env)
         finally:
             # Keep screenshots for diagnosis even when an interaction test fails.
             if temporary.is_dir():
