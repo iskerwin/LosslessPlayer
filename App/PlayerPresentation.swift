@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Which pans may start the zoom's interactive dismissal. Only a mostly
 /// downward pull closes the player; sideways drags belong to the artwork's
@@ -107,6 +108,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         private func present() {
             guard let presenter, let window = presenter.view.window else { return }
             let host = PlayerHostingController(rootView: makePlayer())
+            if ScreenshotFixture.enabled { host.view.addGestureRecognizer(GestureProbe()) }  // EXPERIMENT
             host.modalPresentationStyle = .fullScreen
             host.overrideUserInterfaceStyle = .dark
             host.onAppeared = { [weak self] in self?.onSettled() }
@@ -156,5 +158,54 @@ private final class PlayerHostingController: UIHostingController<AnyView> {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isBeingDismissed || presentingViewController == nil { onDismissed() }
+    }
+}
+
+/// EXPERIMENT (exp/close-ignored, not for merge): logs every gesture recognizer
+/// that receives a touch in the player, with its state, at each touch phase.
+/// It never recognizes, cancels or delays touches.
+private final class GestureProbe: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private var moves = 0
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        moves = 0
+        log("began", touches)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        moves += 1
+        if moves <= 3 || moves % 5 == 0 { log("moved\(moves)", touches) }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        log("ended", touches)
+        state = .failed
+        DispatchQueue.main.async { [weak self] in self?.log("after-end", touches) }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        log("cancelled", touches)
+        state = .failed
+    }
+
+    private func log(_ phase: String, _ touches: Set<UITouch>) {
+        guard let touch = touches.first else { return }
+        let list = (touch.gestureRecognizers ?? []).filter { $0 !== self }.map { recognizer in
+            "\(type(of: recognizer))[\(recognizer.name ?? "-")]@\(recognizer.view.map { String(describing: type(of: $0)) } ?? "nil")"
+                + " s=\(recognizer.state.rawValue)\(recognizer.isEnabled ? "" : " off")"
+        }
+        NSLog("PROBE gestures %@ loc=%@ n=%d %@", phase, NSCoder.string(for: touch.location(in: nil)),
+              list.count, list.joined(separator: " | "))
     }
 }

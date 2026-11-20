@@ -326,7 +326,7 @@ def execute(plan):
         env = dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots))
         try:
             if phone:
-                with app_log(udid, ROOT / 'AppLog.log'), system_log(udid, ROOT / 'SystemLog.log'):
+                with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
                 # The iPhone simulator is done by now. Left running, it loaded the
@@ -334,7 +334,7 @@ def execute(plan):
                 # and 44561449334: 498 s against 267 s for the same test).
                 run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
                 pad = boot('iPad')
-                with app_log(pad, ROOT / 'IPadAppLog.log'), system_log(pad, ROOT / 'IPadSystemLog.log'):
+                with app_log(pad, ROOT / 'IPadAppLog.log'):
                     ui += xcodebuild_test(pad, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
                                           env=env)
         finally:
