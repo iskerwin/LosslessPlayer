@@ -317,8 +317,10 @@ def execute(plan):
                 # runner enough to halve the iPad stage's speed (runs 44561433745
                 # and 44561449334: 498 s against 267 s for the same test).
                 run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
-                ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
-                                      env=env)
+                pad = boot('iPad')
+                with app_log(pad, ROOT / 'IPadAppLog.log'):  # EXPERIMENT
+                    ui += xcodebuild_test(pad, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
+                                          env=env)
         finally:
             # Keep screenshots for diagnosis even when an interaction test fails.
             if temporary.is_dir():

@@ -332,7 +332,7 @@ struct NowPlayingView: View {
                 .frame(width: 60, height: 4)
                 .frame(width: 90, height: 44)
                 .contentShape(Rectangle())
-                .onTapGesture { onClose() }
+                .onTapGesture { NSLog("PROBE grabber onTapGesture"); onClose() }
                 .accessibilityElement()
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { onClose() }

@@ -114,7 +114,11 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
             if #available(iOS 18, *) {
                 let options = UIViewController.Transition.ZoomOptions()
                 options.interactiveDismissShouldBegin = { context in
-                    PlayerDismissPan.shouldBegin(velocity: context.velocity)
+                    let begins = PlayerDismissPan.shouldBegin(velocity: context.velocity)
+                    NSLog("PROBE dismissShouldBegin velocity=(%.1f, %.1f) location=(%.1f, %.1f) systemWillBegin=%@ begins=%@",
+                          context.velocity.dx, context.velocity.dy, context.location.x, context.location.y,
+                          context.willBegin ? "yes" : "no", begins ? "yes" : "no")
+                    return begins
                 }
                 host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor, weak window] _ in
                     MainActor.assumeIsolated { anchor?.source(in: window) }
