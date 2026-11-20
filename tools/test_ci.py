@@ -242,6 +242,44 @@ class SelectorTests(unittest.TestCase):
             ci.make_plan(only=['rm -rf'])
 
 
+class IPadStageTests(unittest.TestCase):
+    def test_whole_ui_target_runs_ipad_class_on_ipad_only(self):
+        phone, ipad = ci.split_ui(['-only-testing:LosslessPlayerUITests'])
+        self.assertEqual(phone, ['-only-testing:LosslessPlayerUITests',
+                                 '-skip-testing:LosslessPlayerUITests/IPadSidebarTests'])
+        self.assertEqual(ipad, ['-only-testing:LosslessPlayerUITests/IPadSidebarTests'])
+
+    def test_manual_ipad_selector_skips_iphone_stage(self):
+        phone, ipad = ci.split_ui(['-only-testing:LosslessPlayerUITests/IPadSidebarTests/testMiniOpensPlayerBesideSidebar'])
+        self.assertEqual(phone, [])
+        self.assertEqual(ipad, ['-only-testing:LosslessPlayerUITests/IPadSidebarTests/testMiniOpensPlayerBesideSidebar'])
+
+    def test_other_ui_classes_stay_on_iphone(self):
+        phone, ipad = ci.split_ui(['-only-testing:LosslessPlayerUITests/GlassScreenshots'])
+        self.assertEqual(phone, ['-only-testing:LosslessPlayerUITests/GlassScreenshots'])
+        self.assertEqual(ipad, [])
+
+    def test_iphone_simulator_shuts_down_before_ipad_boots(self):
+        calls = []
+        with patch.object(ci, 'prepare', return_value='phone'), \
+                patch.object(ci, 'app_log'), \
+                patch.object(ci, 'run', side_effect=lambda command, **_: calls.append(command)), \
+                patch.object(ci, 'boot', side_effect=lambda family: calls.append(['boot', family]) or 'pad'), \
+                patch.object(ci, 'xcodebuild_test',
+                             side_effect=lambda udid, *a, **k: calls.append(['test', udid]) or 1):
+            ci.execute(plan(only_testing=[], ui=True,
+                            ui_testing=['-only-testing:LosslessPlayerUITests/GlassScreenshots',
+                                        '-only-testing:LosslessPlayerUITests/IPadSidebarTests']))
+        self.assertEqual(calls, [['test', 'phone'], ['xcrun', 'simctl', 'shutdown', 'phone'],
+                                 ['boot', 'iPad'], ['test', 'pad']])
+
+    def test_ipad_results_are_uploaded(self):
+        for name in ('ci.yml', 'dev.yml'):
+            text = (ROOT / '.github/workflows' / name).read_text()
+            if 'build/UIResults.xcresult' in text:
+                self.assertIn('build/IPadResults.xcresult', text, name)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_workflows_call_the_shared_executor(self):
         for name, command in (('ci.yml', 'tools/ci.py gate'), ('dev.yml', 'tools/ci.py dev'),
