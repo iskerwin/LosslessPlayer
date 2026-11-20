@@ -292,6 +292,22 @@ def app_log(udid, path):
             stream.wait(timeout=30)
 
 
+@contextlib.contextmanager
+def system_log(udid, path):
+    """EXPERIMENT: touch routing and system gestures in the simulator."""
+    with open(path, 'w') as handle:
+        stream = subprocess.Popen(
+            ['xcrun', 'simctl', 'spawn', udid, 'log', 'stream', '--level', 'info', '--predicate',
+             'process == "backboardd" OR process == "SpringBoard"'],
+            stdout=handle, stderr=subprocess.STDOUT)
+        try:
+            yield
+        finally:
+            time.sleep(2)
+            stream.terminate()
+            stream.wait(timeout=30)
+
+
 def execute(plan):
     """Run exactly the planned tests; returns the proof for this tree and plan."""
     if not plan['only_testing'] and not plan['ui']:
@@ -310,7 +326,7 @@ def execute(plan):
         env = dict(os.environ, TEST_RUNNER_SCREENSHOT_DIR=str(shots))
         try:
             if phone:
-                with app_log(udid, ROOT / 'AppLog.log'):
+                with app_log(udid, ROOT / 'AppLog.log'), system_log(udid, ROOT / 'SystemLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
                 # The iPhone simulator is done by now. Left running, it loaded the
@@ -318,7 +334,7 @@ def execute(plan):
                 # and 44561449334: 498 s against 267 s for the same test).
                 run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
                 pad = boot('iPad')
-                with app_log(pad, ROOT / 'IPadAppLog.log'):  # EXPERIMENT
+                with app_log(pad, ROOT / 'IPadAppLog.log'), system_log(pad, ROOT / 'IPadSystemLog.log'):
                     ui += xcodebuild_test(pad, ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
                                           env=env)
         finally:
