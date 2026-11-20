@@ -313,6 +313,10 @@ def execute(plan):
                 with app_log(udid, ROOT / 'AppLog.log'):
                     ui += xcodebuild_test(udid, phone, ROOT / 'build/UIResults.xcresult', UI_MINUTES, env=env)
             if ipad:
+                # The iPhone simulator is done by now. Left running, it loaded the
+                # runner enough to halve the iPad stage's speed (runs 44561433745
+                # and 44561449334: 498 s against 267 s for the same test).
+                run(['xcrun', 'simctl', 'shutdown', udid], timeout=5 * 60)
                 ui += xcodebuild_test(boot('iPad'), ipad, ROOT / 'build/IPadResults.xcresult', IPAD_MINUTES,
                                       env=env)
         finally:
