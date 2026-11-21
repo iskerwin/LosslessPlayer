@@ -37,4 +37,14 @@ import XCTest
         XCTAssertTrue(drag.end(translation: 60, velocity: 1200), "a flick closes")
         XCTAssertFalse(drag.end(translation: 400, velocity: -600), "flicking back up keeps it open")
     }
+
+    /// A slow release closes only past a quarter of the card's height
+    /// (211 pt on an 844 pt screen); a quick flick closes from anywhere.
+    func testSlowReleaseClosesOnlyPastAQuarterOfTheCard() {
+        XCTAssertFalse(PlayerCardDrag.closes(offset: 160, velocity: 500, height: 844))
+        XCTAssertFalse(PlayerCardDrag.closes(offset: 210, velocity: 0, height: 844))
+        XCTAssertTrue(PlayerCardDrag.closes(offset: 212, velocity: 0, height: 844))
+        XCTAssertFalse(PlayerCardDrag.closes(offset: 40, velocity: 900, height: 844))
+        XCTAssertTrue(PlayerCardDrag.closes(offset: 40, velocity: 901, height: 844))
+    }
 }

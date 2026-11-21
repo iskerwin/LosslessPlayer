@@ -412,12 +412,11 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         let handle = app.buttons["收起播放器"]
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        // The system presentation owns the dismiss threshold, so only the
-        // clear cases are asserted: sideways keeps the player, a long pull closes it.
-        // Horizontal gestures must not dismiss the player.
+        // Sideways keeps the player; a slow pull past a quarter of the card
+        // (PlayerCardDrag.closes) closes it. The exact line is unit tested.
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 100, dy: 15)))
         XCTAssertTrue(player.exists)
-        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 260)))
         _ = try readyMini(in: app)
         XCTAssertFalse(player.exists)
     }
