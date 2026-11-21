@@ -14,11 +14,11 @@
       "versions": [
         {
           "version": "0.4.0",
-          "buildVersion": "188.1",
+          "buildVersion": "188.2",
           "date": "2026-11-21",
-          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/preview-188.1/LosslessPlayer-dev-unsigned.ipa",
-          "size": 5109688,
-          "localizedDescription": "preview-188.1：预览包（合并前确认用）。\n\n### 改进\n- Zeus 安装源显示 Lossless 的图标（#105）。\n### 修复\n- 修复切歌、资料库变化或 App 回到前台后，迷你播放器偶尔被系统重建、点按打不开播放页。\n- iPhone 上快速下拉播放页时，播放页偶尔不跟手、松手后直接缩回迷你播放器；现在下拉一律由系统处理，跟着手指走。左右滑封面切歌不变（#106）。\n- 下拉播放页偶尔没反应、播放页一直开着：手机卡顿的一瞬间往下拉时，系统会放弃这次下拉。现在系统放弃、但手指明显往下拉了一段时，App 直接收起播放页（这种情况不跟手）。"
+          "downloadURL": "https://github.com/iskerwin/LosslessPlayer/releases/download/preview-188.2/LosslessPlayer-dev-unsigned.ipa",
+          "size": 5114254,
+          "localizedDescription": "preview-188.2：预览包（合并前确认用）。\n\n### 改进\n- iPhone 播放页按 Apple Music 的方式打开和收起：从迷你播放器长出整张卡片；下拉时卡片跟手笔直下移、不缩小，松手后缩回迷你播放器或回弹。\n- Zeus 安装源显示 Lossless 的图标（#105）。\n### 修复\n- 修复切歌、资料库变化或 App 回到前台后，迷你播放器偶尔被系统重建、点按打不开播放页。\n- iPhone 上快速下拉播放页时，播放页偶尔不跟手、松手后直接缩回迷你播放器；现在下拉一律跟着手指走。左右滑封面切歌不变（#106）。"
         },
         {
           "version": "0.4.0",
