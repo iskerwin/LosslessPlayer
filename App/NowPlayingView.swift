@@ -53,7 +53,7 @@ private struct ArtworkSwipeGesture: ViewModifier {
                 .onEnded { value in
                     if let direction = ArtworkSwipe.direction(for: value.translation) {
                         onSwipe(direction)
-                    } else if LegacyPullToClose.closes(value.translation) {
+                    } else if PlayerPullClose.closes(value.translation) {
                         onClose()
                     }
                 })
@@ -95,17 +95,13 @@ private struct ArtworkSwipePan: UIGestureRecognizerRepresentable {
 private struct LegacyPullToClose: ViewModifier {
     var onClose: () -> Void
 
-    static func closes(_ translation: CGSize) -> Bool {
-        translation.height > 90 && translation.height > abs(translation.width) * 1.5
-    }
-
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 18, *) {
             content
         } else {
             content.highPriorityGesture(DragGesture(minimumDistance: 16, coordinateSpace: .global)
                 .onEnded { value in
-                    if Self.closes(value.translation) { onClose() }
+                    if PlayerPullClose.closes(value.translation) { onClose() }
                 })
         }
     }

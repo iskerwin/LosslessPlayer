@@ -1341,6 +1341,15 @@ final class ArtworkSwipeTests: XCTestCase {
         XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: CGVector(dx: 0, dy: -600)))
         XCTAssertFalse(PlayerDismissPan.shouldBegin(velocity: .zero))
     }
+
+    /// A pull the app closes itself must be long and mostly downward.
+    func testAppClosesOnlyALongDownwardPull() {
+        XCTAssertTrue(PlayerPullClose.closes(CGSize(width: 0, height: 260)))
+        XCTAssertTrue(PlayerPullClose.closes(CGSize(width: -60, height: 120)))
+        XCTAssertFalse(PlayerPullClose.closes(CGSize(width: 0, height: 80)))
+        XCTAssertFalse(PlayerPullClose.closes(CGSize(width: 120, height: 150)))
+        XCTAssertFalse(PlayerPullClose.closes(CGSize(width: 0, height: -260)))
+    }
 }
 
 final class ArtworkAnalysisTests: XCTestCase {

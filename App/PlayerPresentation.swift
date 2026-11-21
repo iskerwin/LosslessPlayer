@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Which pans may start the zoom's interactive dismissal. Only a mostly
 /// downward pull closes the player; sideways drags belong to the artwork's
@@ -8,6 +9,67 @@ import UIKit
 enum PlayerDismissPan {
     static func shouldBegin(velocity: CGVector) -> Bool {
         velocity.dy > 0 && velocity.dy >= abs(velocity.dx)
+    }
+}
+
+/// How far a pull must travel to close the player when the app, not the
+/// zoom's dismissal, closes it: on iOS 17, and on later systems when the
+/// dismissal dropped the pull.
+enum PlayerPullClose {
+    static func closes(_ translation: CGSize) -> Bool {
+        translation.height > 90 && translation.height > abs(translation.width) * 1.5
+    }
+}
+
+/// Closes the player when a long downward pull ends and nothing took it.
+/// The zoom's swipe-down dismissal gives up when the first move arrives as
+/// one long jump, without asking `interactiveDismissShouldBegin`, and the
+/// player stayed open (run 44778299804: a 45 pt first move). It only watches
+/// touches and never recognizes, so it cannot take a pull from the
+/// dismissal, a scroll view or a control.
+private final class DroppedPullClose: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private let onClose: () -> Void
+    private var start: CGPoint?
+
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard start == nil, event.allTouches?.count == 1, let touch = touches.first else {
+            state = .failed
+            return
+        }
+        start = touch.location(in: nil)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        defer { state = .failed }
+        guard let start, let touch = touches.first else { return }
+        let taken = touch.gestureRecognizers?.contains { other in
+            other !== self && [.began, .changed, .ended].contains(other.state)
+        } ?? false
+        let end = touch.location(in: nil)
+        if !taken && PlayerPullClose.closes(CGSize(width: end.x - start.x, height: end.y - start.y)) {
+            onClose()
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        state = .failed
+    }
+
+    override func reset() {
+        start = nil
+    }
+
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 
@@ -92,16 +154,29 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         var onSettled: () -> Void = {}
         var makePlayer: () -> AnyView = { AnyView(EmptyView()) }
         fileprivate var host: PlayerHostingController?
-        /// The current dismissal was asked for by the app, not a user pull.
-        private var dismissing = false
+        /// Why the app is closing the player, read by UI tests: "程序" when
+        /// asked to, "兜底" for a pull the dismissal dropped. Nil while the
+        /// system's pull closes it ("跟手").
+        private var closing: String?
 
         func sync() {
             if isPresented.wrappedValue {
                 if host == nil { present() }
-            } else if let host, !dismissing {
-                dismissing = true
-                host.dismiss(animated: true)
+            } else {
+                close(as: "程序")
             }
+        }
+
+        private func close(as reason: String) {
+            guard let host, closing == nil else { return }
+            closing = reason
+            host.dismiss(animated: true)
+        }
+
+        private func closeDroppedPull() {
+            guard let host, !host.isBeingDismissed, host.transitionCoordinator == nil else { return }
+            close(as: "兜底")
+            isPresented.wrappedValue = false
         }
 
         private func present() {
@@ -119,6 +194,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
                 host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor, weak window] _ in
                     MainActor.assumeIsolated { anchor?.source(in: window) }
                 }
+                host.view.addGestureRecognizer(DroppedPullClose { [weak self] in self?.closeDroppedPull() })
             }
             self.host = host
             presenter.present(host, animated: true)
@@ -126,10 +202,9 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
 
         private func didDismiss() {
             host = nil
-            // "跟手": the system's interactive pull closed it; "程序": the app did.
-            presenter?.view.accessibilityValue = dismissing ? "程序" : "跟手"
-            if dismissing {
-                dismissing = false
+            presenter?.view.accessibilityValue = closing ?? "跟手"
+            if closing != nil {
+                closing = nil
                 // A reopen requested while closing is honoured now.
                 sync()
             } else {
