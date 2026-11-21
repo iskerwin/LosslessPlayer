@@ -412,12 +412,11 @@ final class GlassScreenshots: XCTestCase {
         XCTAssertTrue(player.waitForExistence(timeout: 8))
         let handle = app.buttons["收起播放器"]
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        // The system presentation owns the dismiss threshold, so only the
-        // clear cases are asserted: sideways keeps the player, a long pull closes it.
-        // Horizontal gestures must not dismiss the player.
+        // Sideways keeps the player; a slow pull past a quarter of the card
+        // (PlayerCardDrag.closes) closes it. The exact line is unit tested.
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 100, dy: 15)))
         XCTAssertTrue(player.exists)
-        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 260)))
         _ = try readyMini(in: app)
         XCTAssertFalse(player.exists)
     }
@@ -444,6 +443,27 @@ final class GlassScreenshots: XCTestCase {
             _ = try readyMini(in: app)
             XCTAssertEqual(lastClose.value as? String, "跟手", "quick pull on the \(place)")
         }
+    }
+
+    /// A short, slow pull lets go of the card: it springs back to full screen.
+    func testShortPullSpringsBackToFullScreen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        try tapMini(in: app)
+        let player = app.descendants(matching: .any)["now-playing"]
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已展开"),
+                                                object: app.buttons["收起播放器"])
+        wait(for: [settled], timeout: 8)
+        let resting = player.frame
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 90)),
+                   withVelocity: 120, thenHoldForDuration: 0.3)
+        let back = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            player.exists && player.frame == resting
+        }, object: nil)
+        wait(for: [back], timeout: 5)
     }
 
     /// Control case, split out so a failure summary names the broken half:

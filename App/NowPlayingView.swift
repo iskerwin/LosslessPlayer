@@ -30,7 +30,7 @@ enum ArtworkSwipe {
         abs(translation.width) > abs(translation.height) * 1.5
     }
     /// The swipe starts only on a sideways drag, so a pull-down is left to
-    /// the zoom presentation's own pan, which follows the finger.
+    /// the player card's pull, which follows the finger.
     static func claims(velocity: CGPoint) -> Bool {
         abs(velocity.x) > abs(velocity.y)
     }
@@ -38,7 +38,7 @@ enum ArtworkSwipe {
 
 /// The artwork's skip swipe. iOS 18 and later: a UIKit pan that declines
 /// vertical drags. A SwiftUI drag there could win a quick pull-down from the
-/// zoom's dismissal pan, then close on release without following the finger
+/// card's pull, then close on release without following the finger
 /// (run 44089072139). iOS 17 has no interactive dismissal, so its drag also
 /// closes the player on a long pull.
 private struct ArtworkSwipeGesture: ViewModifier {
@@ -89,7 +89,7 @@ private struct ArtworkSwipePan: UIGestureRecognizerRepresentable {
     }
 }
 
-/// iOS 17 only: without the zoom's interactive dismissal, a long pull on
+/// iOS 17 only: without the card's pull, a long pull on
 /// the grabber closes the player on release. Later systems leave the pull to
 /// the presentation so it follows the finger.
 private struct LegacyPullToClose: ViewModifier {
@@ -1267,7 +1267,7 @@ private struct LyricsReaderBody: View {
     }
 }
 
-/// Mounted with the player from its first frame. The system zoom animates
+/// Mounted with the player from its first frame. The card animation runs
 /// in the render server, so creating these views does not stall it.
 struct SystemVolumeBar: View {
     var body: some View {

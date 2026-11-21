@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Which pans may start the zoom's interactive dismissal. Only a mostly
+/// Which pans may start pulling the player card down. Only a mostly
 /// downward pull closes the player; sideways drags belong to the artwork's
 /// skip swipe. SwiftUI's zoom cover let the system pan take a rightward
 /// swipe and close the player instead of going back a track.
@@ -50,9 +50,10 @@ struct PlayerZoomSource: UIViewRepresentable {
     }
 }
 
-/// Presents the player full screen from UIKit, zooming from the mini on
-/// iOS 18 and later. UIKit is needed for `interactiveDismissShouldBegin`,
-/// which SwiftUI's zoom transition does not expose.
+/// Presents the player full screen from UIKit. On iOS 18 and later the card
+/// grows out of the mini, follows a pull straight down and shrinks back into
+/// the mini (`PlayerCardTransition`), as in Music; the system zoom shrank the
+/// page while it was pulled. iOS 17 uses the plain full-screen cover.
 struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     var anchor: PlayerZoomAnchor
@@ -95,6 +96,10 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         /// The current dismissal was asked for by the app, not a user pull.
         private var dismissing = false
 
+        /// Holds the transition delegate, which UIKit references weakly.
+        private var transition: PlayerCardTransition?
+        private var drag: PlayerCardDrag?
+
         func sync() {
             if isPresented.wrappedValue {
                 if host == nil { present() }
@@ -112,13 +117,16 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
             host.onAppeared = { [weak self] in self?.onSettled() }
             host.onDismissed = { [weak self] in self?.didDismiss() }
             if #available(iOS 18, *) {
-                let options = UIViewController.Transition.ZoomOptions()
-                options.interactiveDismissShouldBegin = { context in
-                    PlayerDismissPan.shouldBegin(velocity: context.velocity)
-                }
-                host.preferredTransition = .zoom(options: options) { [weak anchor = self.anchor, weak window] _ in
-                    MainActor.assumeIsolated { anchor?.source(in: window) }
-                }
+                let transition = PlayerCardTransition()
+                transition.source = { [weak anchor = self.anchor, weak window] in anchor?.source(in: window) }
+                self.transition = transition
+                host.modalPresentationStyle = .custom
+                host.modalPresentationCapturesStatusBarAppearance = true
+                host.transitioningDelegate = transition
+                let drag = PlayerCardDrag(card: host.view)
+                // A pull closes like the system pull did: didDismiss reports it.
+                drag.attach { [weak host] in host?.dismiss(animated: true) }
+                self.drag = drag
             }
             self.host = host
             presenter.present(host, animated: true)
@@ -126,7 +134,9 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
 
         private func didDismiss() {
             host = nil
-            // "跟手": the system's interactive pull closed it; "程序": the app did.
+            drag = nil
+            transition = nil
+            // "跟手": a pull on the card closed it; "程序": the app did.
             presenter?.view.accessibilityValue = dismissing ? "程序" : "跟手"
             if dismissing {
                 dismissing = false
