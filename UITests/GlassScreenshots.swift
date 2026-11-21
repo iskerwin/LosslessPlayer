@@ -466,6 +466,30 @@ final class GlassScreenshots: XCTestCase {
         wait(for: [back], timeout: 5)
     }
 
+    /// A pull whose first move arrives as one long jump must still close.
+    /// The system zoom's swipe-down dismissal gave up on a 45 pt first move
+    /// and the player stayed open (run 44778299804); the card's pull must not.
+    func testJumpingPullDownCloses() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotMode"]
+        app.launch()
+        for (place, start) in [("artwork", CGVector(dx: 0.5, dy: 0.3)), ("grabber", nil)] {
+            try tapMini(in: app)
+            let handle = app.buttons["收起播放器"]
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已展开"),
+                                                    object: handle)
+            wait(for: [settled], timeout: 8)
+            let from = start.map { app.coordinate(withNormalizedOffset: $0) }
+                ?? handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 260)),
+                       withVelocity: 20000, thenHoldForDuration: 0.3)
+            let player = app.descendants(matching: .any)["now-playing"]
+            XCTAssertTrue(player.waitForNonExistence(timeout: 8), "jumping pull on the \(place)")
+            _ = try readyMini(in: app)
+        }
+    }
+
     /// Control case, split out so a failure summary names the broken half:
     /// if this fails, skip/load is broken in the UI context; if only the
     /// swipe case below fails, the gesture is. Button queries are scoped to
