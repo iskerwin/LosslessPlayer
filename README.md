@@ -1,50 +1,60 @@
 # Lossless
 
-Lossless 是 iOS 17+ 本地音乐播放器，SwiftUI + AVFoundation，无账号、无服务器。播放内核使用 `AVAudioEngine` 直通链路：按曲目请求其原始采样率、引擎内不挂音效、数字音量固定为 100%，并按实际会话采样率与输出路由判定播放路径；只有无损源、采样率一致、有线 / USB 输出等条件同时成立时才标注 Bit-Perfect（条件成立），其余情况如实标注重采样、无线或有损。0.2 使用原有的音符 / 黑胶图标，界面强调色采用 Music 粉红色，在 iOS 26 / 27 使用系统 Liquid Glass；旧系统使用原生材质兼容。
+English | [简体中文](README.zh-CN.md)
 
-## 安装
+Lossless (原音) is a local music player for iOS 17+, built with SwiftUI and AVFoundation, with no account and no server. Playback runs through a pass-through `AVAudioEngine` chain: each track asks for its own sample rate, no effects sit in the engine, and digital volume stays at 100%. The playback path is judged from the actual session sample rate and output route: only when the source is lossless, the sample rates match and the output is wired or USB is it labelled Bit-Perfect (conditions met); otherwise it says plainly resampled, wireless or lossy. 0.2 keeps the original note / vinyl icon, uses the Music pink as the accent, and uses the system Liquid Glass on iOS 26 / 27, with native materials on older systems.
 
-在 Zeus（或 AltStore 等兼容安装源的工具）里添加安装源：
+<p align="center">
+  <img src="docs/screenshots/library.jpg" width="19%" alt="Library">
+  <img src="docs/screenshots/playlist.jpg" width="19%" alt="Playlist">
+  <img src="docs/screenshots/now-playing.jpg" width="19%" alt="Now Playing">
+  <img src="docs/screenshots/lyrics.jpg" width="19%" alt="Synced lyrics">
+  <img src="docs/screenshots/queue.jpg" width="19%" alt="Up next">
+</p>
+
+## Install
+
+Add this source in Zeus (or AltStore or another tool that supports install sources):
 
 ```
 https://raw.githubusercontent.com/iskerwin/LosslessPlayer/main/apps.json
 ```
 
-源里列出最新开发版，以及当前开发版之后的最新预览包（合并前在手机上确认用），带 Lossless 图标。每次发布开发版或预览包会自动更新这个源；安装包是未签名 IPA，由安装工具重新签名。
+The source lists the latest development build and, after it, the latest preview build (for checking on a phone before merging), with the Lossless icon. Each development or preview release updates the source automatically. The packages are unsigned IPAs that the install tool re-signs.
 
-## 资料库和播放
+## Library and playback
 
-- 资料库、歌单、收藏、搜索四个标签；歌曲、艺术家、专辑和最近播放。搜索结果按 Apple Music 的方式分区呈现：艺术家、专辑、歌曲，歌曲按匹配部位（标题优先，其次艺术家、专辑）排序。
-- 全局搜索、歌曲列表、专辑/艺术家曲目、最近播放、收藏、歌单及选歌页共用模糊匹配：支持部分文字、多个不连续关键词，忽略大小写、多余空格、音调和字符宽度差异。关键词可分别匹配歌名、艺术家、专辑等标签，所有关键词都需命中。资料库的艺术家、专辑索引和歌单首页也可搜索。列表搜索保留原排序，播放、随机播放和点按歌曲均使用筛选结果；清空搜索恢复全部歌曲，无匹配时显示无结果。歌单封面、总曲数和导出保留完整内容，进入编辑时清空搜索。全局搜索包含按名称匹配的歌单分区，空歌单也能找到。
-- 专辑按专辑艺术家分组。没有专辑艺术家、但标为合辑的曲目，按专辑名归到同一张专辑。
-- 歌单是独立标签，可在列表和封面网格之间切换。可重命名、拖动排序、指定封面、从资料库挑选歌曲，并可导入、导出 m3u/m3u8。
-- 歌曲、专辑、艺术家、收藏、最近播放和搜索的列表页有两个等宽按钮：「播放」从头播放这个列表，「随机播放」打乱后播放。它们不显示暂停或高亮。iOS 26 用系统 Liquid Glass，粉红色只出现在文字、图标、选中的标签和正在播放的歌名上。随机和循环只在正在播放的队列页里切换，并跟着全局状态变。浅色和深色都跟着系统。
-- 歌曲行是圆角封面、标题和艺术家。当前歌曲标题用强调色（沉浸式歌单页使用白色），播放中再显示波形。长按和行尾省略号是同一套菜单：收藏、添加到歌单、下一首播放、稍后播放、前往专辑、前往艺术家、有歌词时查看完整歌词、从资料库中删除。专辑、艺术家和歌单有对应的播放和队列菜单。
-- 歌单详情采用封面取色的沉浸背景、65% 屏宽的居中封面、圆形随机按钮、白色播放胶囊和添加歌曲按钮；底部保留歌曲数量与总时长。
-- 播放页按提供的 Apple Music 截图调整封面比例、标题、控制间距、4pt 进度线和弱化音量；支持下拉跟手、未达阈值回弹。音质信息从更多菜单进入。
-- 内嵌封面缩略图、歌曲信息、浮动迷你播放器与可下拉收起的完整播放页。
-- 原生标签栏、工具栏与菜单；玻璃材质用于导航和操作控件。支持动态字体、VoiceOver、减少透明度。
-- 收藏、下一首播放、稍后播放；队列拖动排序和移除，单曲/列表循环、随机排序。循环和随机的开关在正在播放，不在列表页。
-- 进度拖动、系统音量、音频输出选择、后台和锁屏控制、耳机拔出与来电处理。
-- 同名 UTF-8 `.lrc` 歌词，歌曲行右侧用歌词图标标记已读到歌词的歌曲。歌词及换行文本居中显示。带时间戳时自动滚动并高亮当前句，点按整行跳到该句起点并开始播放（暂停时也会恢复播放）；无时间戳的文本只供阅读。正在播放页与完整歌词页使用同一套行为。
-- 不包含 Apple Music 品牌、流媒体曲库、订阅、在线电台、联网歌词或 DRM 解密。
+- Four tabs: Library, Playlists, Favorites and Search; songs, artists, albums and recently played. Search results are grouped the Apple Music way: artists, albums, songs, with songs ranked by where they match (title first, then artist, then album).
+- Global search, song lists, album / artist tracks, recently played, favorites, playlists and the song picker share fuzzy matching: partial words and several non-adjacent keywords work, ignoring case, extra spaces, diacritics and character width. Keywords can match title, artist, album and other tags separately, and all of them must match. The library's artist and album indexes and the playlists page are searchable too. List search keeps the original order, and Play, Shuffle and tapping a song all use the filtered result; clearing the search brings back every song, and no match shows an empty result. A playlist's cover, total count and export keep its full contents, and entering edit mode clears the search. Global search includes a section of playlists matched by name, so even empty playlists can be found.
+- Albums are grouped by album artist. Tracks without an album artist but marked as a compilation are grouped into one album by album name.
+- Playlists have their own tab and switch between a list and a cover grid. They can be renamed, reordered by dragging, given a cover, filled from the library, and imported or exported as m3u/m3u8.
+- Song, album, artist, favorites, recently played and search lists have two equal-width buttons: Play plays the list from the top, Shuffle plays it shuffled. They show no pause state or highlight. On iOS 26 they use the system Liquid Glass, and pink appears only on text, icons, the selected tab and the playing song's title. Shuffle and repeat are switched only in the Now Playing queue and follow the global state. Light and dark follow the system.
+- A song row has a rounded cover, title and artist. The current song's title is in the accent color (white on immersive playlist pages), with a waveform while playing. Long-press and the trailing ellipsis open the same menu: favorite, add to playlist, play next, play later, go to album, go to artist, view full lyrics (when there are lyrics), and remove from library. Albums, artists and playlists have matching play and queue menus.
+- Playlist details use an immersive background tinted from the cover, a centered cover 65% of the screen width, a round shuffle button, a white play capsule and an add-songs button; the song count and total length stay at the bottom.
+- The Now Playing screen follows the provided Apple Music screenshots for cover proportion, title, control spacing, a 4pt progress line and a subdued volume bar; it follows the finger when pulled down and springs back short of the threshold. Audio quality details open from the More menu.
+- Embedded cover thumbnails, song info, a floating mini player and a full player that can be pulled down to close.
+- Native tab bar, toolbars and menus; glass materials on navigation and controls. Dynamic Type, VoiceOver and Reduce Transparency are supported.
+- Favorites, play next and play later; drag to reorder or remove in the queue, repeat one / all, shuffle. The repeat and shuffle switches live in Now Playing, not on list pages.
+- Seeking, system volume, audio output selection, background and lock screen controls, headphone unplugging and incoming calls.
+- UTF-8 `.lrc` lyrics with the same name as the song; songs with lyrics show a lyrics icon at the end of their row. Lyrics and wrapped text are centered. With timestamps they scroll automatically and highlight the current line, and tapping a line jumps to its start and plays (resuming if paused); text without timestamps is for reading only. Now Playing and the full lyrics page behave the same.
+- No Apple Music branding, streaming catalogue, subscription, online radio, online lyrics or DRM decryption.
 
-## 本地文件夹扫盘
+## Scanning local folders
 
-1. 点资料库右上角 `+` → 添加音乐文件夹，选择“文件”中可访问的目录。
-2. 保存系统授权书签，递归扫描子目录，直接索引并播放原文件，不复制整份目录。
-3. 从 `+` → 管理文件夹重新扫描；显示进度、支持取消、增量更新。不会自动在后台持续监视磁盘。
-4. 按授权文件夹 + 相对路径去重，保留歌曲 ID、收藏、歌单关联；大小或修改日期变化时更新元数据。
-5. 原文件移除后保留条目并标记失效；权限/遍历失败或取消时不会批量移除资料库。
-6. 移除条目只移除索引并持久化排除路径；移除文件夹清除授权和关联索引，绝不删除文件夹里的音乐文件。
+1. Tap `+` at the top right of Library → Add Music Folder, and pick a folder reachable in Files.
+2. The system access bookmark is saved, subfolders are scanned recursively, and the original files are indexed and played in place; the folder is not copied.
+3. Rescan from `+` → Manage Folders, with progress, cancel and incremental updates. The disk is not watched in the background.
+4. Entries are deduplicated by authorized folder + relative path, keeping song IDs, favorites and playlist membership; metadata is updated when size or modification date changes.
+5. When an original file is removed, its entry stays and is marked missing; a permission or traversal failure, or a cancel, never removes library entries in bulk.
+6. Removing an entry only removes the index and remembers the excluded path; removing a folder clears its access and its entries, and never deletes the music files in it.
 
-普通多文件导入仍复制到 App 内，使用流式 SHA-256 防止同一内容重复导入。直接索引模式的不同路径文件不会跨文件夹做内容去重，以免扫描大曲库时读取全部音频。
+Importing individual files still copies them into the app, with a streaming SHA-256 to avoid importing the same content twice. Files indexed in place at different paths are not deduplicated by content across folders, so scanning a large library doesn't read all the audio.
 
-支持 FLAC、ALAC/M4A、WAV、AIFF、CAF、MP3、AAC，实际解码能力由设备系统决定。M4A 可能是有损 AAC，不能按扩展名认定无损。iCloud / 第三方文件提供器可能需要下载或重新授权；建议优先本机离线目录。系统沙盒不允许无授权扫描整台手机。
+FLAC, ALAC/M4A, WAV, AIFF, CAF, MP3 and AAC are supported; what actually decodes depends on the device's system. M4A may be lossy AAC, so the extension alone doesn't make it lossless. iCloud and third-party file providers may need to download or re-authorize; a local offline folder is recommended. The system sandbox doesn't allow scanning the whole phone without permission.
 
-## 构建和开发版
+## Building and development builds
 
-使用 Xcode 27 与 XcodeGen：
+With Xcode 27 and XcodeGen:
 
 ```sh
 brew install xcodegen
@@ -52,22 +62,22 @@ xcodegen generate
 open LosslessPlayer.xcodeproj
 ```
 
-最低运行 iOS 17，Liquid Glass 分支需要 iOS 26+。工程以 `project.yml` 为来源，不提交生成的工程和 Info.plist。设置自己的 Signing Team 后可真机运行。
+It runs on iOS 17 and later; the Liquid Glass branch needs iOS 26+. The project is generated from `project.yml`, and the generated project and Info.plist aren't committed. Set your own Signing Team to run it on a device.
 
-测试、编译和发布全部在 GitHub 托管的 `macos-26` 执行机上进行（Xcode 26、iOS 26 模拟器），本机只编辑、运行 `python3 tools/ship.py check` 和发起云端任务。流程是：分支 → PR 检查（`Lossless CI / gate`）→ 需要时发预览包上手机 → 合并 → 手动发开发版 `python3 tools/ship.py dev`。开发版与预览包编译 arm64 Release 优化 App，校验 Bundle ID、后台音频能力、图标和二进制架构，生成未签名 IPA 与 SHA256SUMS，并更新 AltStore 安装源 `apps.json`。未签名 IPA 需 AltStore 等工具重新签名安装，不是 TestFlight / App Store 发行版。完整说明见 [云端测试与发布](docs/ci-and-release.md)。
+Tests, builds and releases all run on GitHub-hosted `macos-26` runners (Xcode 26, iOS 26 simulator); locally you only edit, run `python3 tools/ship.py check` and start cloud jobs. The flow is: branch → PR check (`Lossless CI / gate`) → a preview build on the phone when needed → merge → a development build by hand with `python3 tools/ship.py dev`. Development and preview builds compile an optimized arm64 Release app, check the bundle ID, background audio capability, icon and binary architecture, produce an unsigned IPA and SHA256SUMS, and update the AltStore source `apps.json`. Unsigned IPAs must be re-signed by a tool such as AltStore; they are not TestFlight or App Store releases. See [Cloud testing and release (Chinese)](docs/ci-and-release.md) for the details.
 
-## 验证与限制
+## Verification and limits
 
-切歌时，同解码格式复用现有引擎连接；新曲目接管前不再重新播放一次旧曲目。蓝牙和 AirPlay 保留系统选择的输出采样率，避免逐首申请采样率而重配无线输出；有线和 USB 仍按音源申请采样率。自动测试覆盖连接连续性和采样率策略，蓝牙爆音是否消失仍需真机听音验收。
+When changing tracks with the same decoding format, the existing engine connection is reused, and the old track no longer replays briefly before the new one takes over. Bluetooth and AirPlay keep the output sample rate the system chose, rather than asking for a new rate per track and reconfiguring the wireless output; wired and USB still ask for the source's rate. Automated tests cover connection continuity and the sample rate policy; whether Bluetooth pops are gone still needs listening on a real device.
 
-界面尺寸、交互规则、Apple 官方依据与 iOS 27 真机验收方法见 [iOS 播放器界面规范](docs/ios-ui-spec.md)。其中 3pt 进度轨道、44pt 命中区域等是本项目基准；Apple Music 的精确视觉比例仍需同机对照验收。
+Interface sizes, interaction rules, Apple's guidance and how to accept it on an iOS 27 device are in the [iOS player interface spec (Chinese)](docs/ios-ui-spec.md). Values such as the 3pt progress track and 44pt hit areas are this project's baseline; Apple Music's exact visual proportions still need a side-by-side check on the same device.
 
-自动测试覆盖旧资料库迁移、复制导入与去重、队列边界、下一首播放和稍后播放的插入、列表胶囊不跟随播放状态、正在播放的随机和循环、歌曲菜单文案、递归扫描与重扫、收藏/歌单保留、歌单重命名排序与 m3u、专辑艺术家/流派/碟号标签、文件夹封面、播放次数、失效文件、移除不删除原文件、扫描取消、LRC 解析、播放路径判定（重采样 / 无线 / 数字音量 / Bit-Perfect 条件）和资料库索引与备份恢复（格式版本、主文件损坏时从上一个完好版本恢复）。UI 截图与 xcresult 随 CI 保存。
+Automated tests cover migrating an old library, copying imports and deduplication, queue edges, inserting play next and play later, list capsules not following playback state, shuffle and repeat in Now Playing, song menu wording, recursive scanning and rescanning, keeping favorites and playlists, playlist rename, ordering and m3u, album artist / genre / disc number tags, folder covers, play counts, missing files, removal not deleting originals, scan cancel, LRC parsing, playback path judgment (resampled / wireless / digital volume / Bit-Perfect conditions), and the library index with backup and recovery (format version, recovering from the last good copy when the main file is corrupt). UI screenshots and xcresult bundles are kept with each CI run.
 
-仍需真机验收，步骤见 [docs/device-verification.md](docs/device-verification.md)：授权重启恢复、移动授权目录、iCloud 离线文件、锁屏封面、拔出耳机、大 FLAC 内存，以及文件格式和会话采样率是否一致。
+Still to be accepted on a real device, with steps in [docs/device-verification.md](docs/device-verification.md) (Chinese): restoring access after a restart, moving an authorized folder, iCloud offline files, lock screen cover, unplugging headphones, memory with large FLAC files, and whether the file format matches the session sample rate.
 
-播放经由 `AVAudioEngine` 直通链路与 iOS 系统输出。本轮已实现按曲目请求采样率跟随，但系统是否接受取决于硬件与路由（内置输出上限 48 kHz，高于 48 kHz 需外接 DAC；蓝牙 / AirPlay 无法逐位），因此不保证所有路由逐位输出；相同解码处理格式的曲目支持无缝切歌，不同格式仍走原有切歌路径；歌曲信息里的「播放路径」按实际会话采样率与路由给出判定，文件格式不等于设备实际输出。未实现 DSD、APE、CUE、NAS、CarPlay。专辑按专辑艺术家分组；没有专辑艺术家但标成合辑时，按专辑名归到一起。随机播放会记住原顺序，关闭随机后恢复；歌词支持 LRC offset 标签（毫秒，正值提前、负值延后）。扫描只在授权路径内进行，忽略隐藏文件、符号链接和 package 目录。同目录的 `cover.jpg` / `folder.jpg` 会在没有内嵌封面时用作封面。
+Playback goes through the pass-through `AVAudioEngine` chain and the iOS system output. Per-track sample rate following is implemented, but whether the system accepts it depends on hardware and route (built-in output tops out at 48 kHz, above that needs an external DAC; Bluetooth / AirPlay can't be bit-exact), so bit-exact output isn't guaranteed on every route. Tracks with the same decoding format switch gaplessly, while different formats go through the original track-change path. The Playback Path in song info is judged from the actual session sample rate and route; the file format is not the device's actual output. DSD, APE, CUE, NAS and CarPlay are not implemented. Albums are grouped by album artist; without an album artist but marked as a compilation, they are grouped by album name. Shuffle remembers the original order and restores it when turned off; lyrics support the LRC offset tag (milliseconds, positive earlier, negative later). Scanning stays within authorized paths and ignores hidden files, symbolic links and package directories. A `cover.jpg` / `folder.jpg` in the same folder is used as the cover when there is no embedded one.
 
-## 本次界面改造
+## This round's interface rework
 
-变更说明和验收入口见 [Apple Music 风格改造](docs/apple-music-restyle.md)。本轮仅完成源码修改和静态差异检查；当前 Linux 环境没有 Xcode / iOS SDK，尚未编译或执行 XCTest，也没有模拟器或真机视觉验收证据。
+Changes and how to accept them are in [Apple Music style rework (Chinese)](docs/apple-music-restyle.md). This round only changed source and checked the diff statically; the Linux environment it was made in had no Xcode / iOS SDK, so it wasn't compiled or run through XCTest, and there is no simulator or device visual acceptance yet.
