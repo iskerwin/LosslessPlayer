@@ -8,12 +8,12 @@ MUST、MUST NOT、SHOULD、SHOULD NOT、MAY 的含义见 [AGENTS.md](../AGENTS.m
 
 | 入口 | 怎么运行 | 做什么 |
 | --- | --- | --- |
-| 本机检查 | `python3 tools/ship.py check` | 与云端第一步相同的静态检查和工具测试；不编译 App |
+| 本机检查 | `uv run tools/ship.py check` | 与云端第一步相同的静态检查和工具测试；不编译 App |
 | Lossless CI / gate | 开 PR 或推送 PR 分支时自动运行 | 与开发版同一套选测和执行程序，测 PR 的合并结果；通过后留下 PR 测试记录，不发布 |
 | Lossless CI / test | 每周日 22:00（北京时间）main 自动全量；或 `ship.py test` | 只验证，不发布 |
-| Lossless Preview | 已推送的分支上 `python3 tools/ship.py preview` | 只编译，发布预览包（构建 N.k）并列进安装源；不跑模拟器测试 |
-| Lossless Dev | 最新 main 上 `python3 tools/ship.py dev` | 复用 PR 测试记录或自己跑相同测试，通过后发布开发版并更新安装源 |
-| 查看进度 | `python3 tools/ship.py watch [--once]` | 列出最近任务并跟踪最新一个 |
+| Lossless Preview | 已推送的分支上 `uv run tools/ship.py preview` | 只编译，发布预览包（构建 N.k）并列进安装源；不跑模拟器测试 |
+| Lossless Dev | 最新 main 上 `uv run tools/ship.py dev` | 复用 PR 测试记录或自己跑相同测试，通过后发布开发版并更新安装源 |
+| 查看进度 | `uv run tools/ship.py watch [--once]` | 列出最近任务并跟踪最新一个 |
 
 CI 通过、开发版可安装、手机验收是三件不同的事，MUST 分开记录；没在手机上看过的 MUST 写「待手机验收」。
 

@@ -1,0 +1,9 @@
+# 构建、测试和发布工具（tools/*.py）只用标准库；用 uv run tools/<脚本>.py 运行，Python 版本见 .python-version
+[project]
+name = "lossless-player-tools"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false

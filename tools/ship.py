@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Local entry point. This Mac only edits, checks and dispatches; GitHub runs every build and test.
 
-    python3 tools/ship.py check                    static checks and tool tests, same as the cloud's first step
-    python3 tools/ship.py test [--full] [--only Target/Class[/method] ...]
+    uv run tools/ship.py check                    static checks and tool tests, same as the cloud's first step
+    uv run tools/ship.py test [--full] [--only Target/Class[/method] ...]
                                                    verify the pushed current branch; never publishes
-    python3 tools/ship.py preview                  pushed branch: build a phone preview (N.k), no simulator tests
-    python3 tools/ship.py dev                      latest main: reuse the PR proof or test, then publish dev
-    python3 tools/ship.py version patch|minor|major|X.Y.Z
+    uv run tools/ship.py preview                  pushed branch: build a phone preview (N.k), no simulator tests
+    uv run tools/ship.py dev                      latest main: reuse the PR proof or test, then publish dev
+    uv run tools/ship.py version patch|minor|major|X.Y.Z
                                                    raise marketing version and start a changelog section
-    python3 tools/ship.py watch [--once]           follow the newest cloud runs
+    uv run tools/ship.py watch [--once]           follow the newest cloud runs
 """
 import argparse
 import os
@@ -52,7 +52,7 @@ def dispatch(workflow, branch, fields=()):
     for key, value in fields:
         command += ['-f', f'{key}={value}']
     subprocess.run(command, cwd=ROOT, check=True)
-    print(f'已发起 {workflow}（{branch}）；用 python3 tools/ship.py watch 查看进度')
+    print(f'已发起 {workflow}（{branch}）；用 uv run tools/ship.py watch 查看进度')
 
 
 def check(_):

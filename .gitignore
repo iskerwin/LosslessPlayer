@@ -10,3 +10,4 @@ dist/
 build/
 *.log
 __pycache__/
+.venv/

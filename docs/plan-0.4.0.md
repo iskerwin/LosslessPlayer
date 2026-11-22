@@ -72,7 +72,7 @@ Kerwin 2026-11-17 确认：封面自适应遮罩取消，iPad 布局按下面的
 
 ## 6. 发布
 
-- 合并后 `python3 tools/ship.py dev` 发开发版，Kerwin 手机验收。
+- 合并后 `uv run tools/ship.py dev` 发开发版，Kerwin 手机验收。
 - 确认转正后，单独一个 PR 把 CHANGELOG 标题改为「## 0.4.0（YYYY-MM-DD 发布）」。
 
 ## 走查记录

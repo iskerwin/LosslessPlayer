@@ -24,10 +24,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      # Python 由 uv 按 .python-version 安装，工具脚本用 uv run 运行
+      - uses: astral-sh/setup-uv@v10.4.0
       - name: Static checks and tool tests
-        run: python3 tools/ci.py check
+        run: uv run tools/ci.py check
       - name: Build and publish preview (no simulator tests)
-        run: python3 tools/ci.py preview
+        run: uv run tools/ci.py preview
       - name: Keep logs and package
         if: always()
         uses: actions/upload-artifact@v4

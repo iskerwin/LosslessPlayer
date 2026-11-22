@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Cloud side of the Lossless test and release flow. Runs only on GitHub macOS runners.
 
-    python3 tools/ci.py check     static checks and tool tests (also run locally by ship.py)
-    python3 tools/ci.py gate      PR gate: the Dev plan and executor on the PR merge result
-    python3 tools/ci.py test      manual or weekly run: --full, or --only Target/Class[/method]
-    python3 tools/ci.py dev       main only: reuse a matching PR proof or test, then publish
-    python3 tools/ci.py preview   pushed branch: build and publish a preview, no simulator tests
+    uv run tools/ci.py check     static checks and tool tests (also run locally by ship.py)
+    uv run tools/ci.py gate      PR gate: the Dev plan and executor on the PR merge result
+    uv run tools/ci.py test      manual or weekly run: --full, or --only Target/Class[/method]
+    uv run tools/ci.py dev       main only: reuse a matching PR proof or test, then publish
+    uv run tools/ci.py preview   pushed branch: build and publish a preview, no simulator tests
 
 PR gate and Dev share one plan: changes since the last dev release, selected by
 tools/select_tests.py. A passing gate leaves .ship/proof.json; Dev reuses it when
