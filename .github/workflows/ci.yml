@@ -33,10 +33,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Python 由 uv 按 .python-version 安装，工具脚本用 uv run 运行
+      - uses: astral-sh/setup-uv@v10
       - name: Static checks and tool tests
-        run: python3 tools/ci.py check
+        run: uv run tools/ci.py check
       - name: Same plan and executor as Dev, on the PR merge result
-        run: python3 tools/ci.py gate
+        run: uv run tools/ci.py gate
       # Dev reuses this when main becomes this same tree with the same plan.
       - name: Keep PR proof
         if: success()
@@ -70,8 +72,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Python 由 uv 按 .python-version 安装，工具脚本用 uv run 运行
+      - uses: astral-sh/setup-uv@v10
       - name: Static checks and tool tests
-        run: python3 tools/ci.py check
+        run: uv run tools/ci.py check
       - name: Run tests (verify only)
         env:
           FULL: ${{ github.event_name == 'schedule' || inputs.full }}
@@ -80,9 +84,9 @@ jobs:
           set -euo pipefail
           if [ -n "${ONLY}" ] && [ "${FULL}" != "true" ]; then
             read -r -a selectors <<< "${ONLY}"
-            python3 tools/ci.py test --only "${selectors[@]}"
+            uv run tools/ci.py test --only "${selectors[@]}"
           else
-            python3 tools/ci.py test --full
+            uv run tools/ci.py test --full
           fi
       - name: Keep logs, results and screenshots
         if: always()
