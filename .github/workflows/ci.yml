@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # Python 由 uv 按 .python-version 安装，工具脚本用 uv run 运行
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0
       - name: Static checks and tool tests
         run: uv run tools/ci.py check
       - name: Same plan and executor as Dev, on the PR merge result
@@ -73,7 +73,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # Python 由 uv 按 .python-version 安装，工具脚本用 uv run 运行
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0
       - name: Static checks and tool tests
         run: uv run tools/ci.py check
       - name: Run tests (verify only)
