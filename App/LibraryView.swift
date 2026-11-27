@@ -30,7 +30,10 @@ struct LibraryView: View {
     enum ImportKind { case files, folders, folderPlaylists, playlist }
 
     var body: some View {
-        let _ = commands.update(actions: actions, openPlayer: { showPlayer = true })
+        let _ = commands.update(actions: actions, openPlayer: {
+            PlayerOpenTrace.note("openPlayer showPlayer=\(showPlayer)")
+            showPlayer = true
+        })
         LibraryTabs(library: library, player: player, nav: nav, commands: commands,
                     zoom: playerZoom, hasCurrent: player.current != nil)
             .background {
@@ -305,7 +308,10 @@ private struct LibraryTabs: View {
     /// is also the source of the system zoom into the player (see
     /// `PlayerZoomAnchor`).
     private var miniPlayer: some View {
-        AccessoryMini(library: library, player: player, open: { [commands] in commands.openPlayer() })
+        AccessoryMini(library: library, player: player, open: { [commands] in
+            PlayerOpenTrace.note("mini open")
+            commands.openPlayer()
+        })
     }
 
     @available(iOS 26, *)
@@ -379,7 +385,11 @@ private struct AccessoryMini: View {
         PlayerMiniSlotView { compact in
             MiniPlayer(library: library, player: player, compact: compact, open: open)
         }
-        .onAppear { MiniAccessoryProbe.appeared(instance, for: player) }
+        .onAppear {
+            MiniAccessoryProbe.appeared(instance, for: player)
+            PlayerOpenTrace.note("mini appeared \(instance.uuidString.prefix(4))")
+        }
+        .onDisappear { PlayerOpenTrace.note("mini disappeared \(instance.uuidString.prefix(4))") }
         .onChange(of: player.current?.id, initial: true) { _, id in MiniAccessoryProbe.showed(id, for: player) }
     }
 }

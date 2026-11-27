@@ -826,7 +826,9 @@ final class GlassScreenshots: XCTestCase {
         // One tap. Lost taps were the accessory replacing its mini during a
         // shell update (MiniAccessoryStabilityTests), not simulator noise.
         let player = app.descendants(matching: .any)["now-playing"]
-        XCTAssertTrue(player.waitForExistence(timeout: 8), file: file, line: line)
+        let opened = player.waitForExistence(timeout: 8)
+        let trace = app.descendants(matching: .any)["player-last-close"]
+        XCTAssertTrue(opened, "open trace: \(trace.exists ? trace.label : "none")", file: file, line: line)
     }
 
     /// Taps a mini control once and asserts its effect.

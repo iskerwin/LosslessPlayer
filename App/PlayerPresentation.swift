@@ -71,6 +71,7 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
             // SwiftUI state here would re-run the shell and replace the mini.
             presenter.view.isAccessibilityElement = true
             presenter.view.accessibilityIdentifier = "player-last-close"
+            PlayerOpenTrace.view = presenter.view
         }
         return presenter
     }
@@ -101,6 +102,9 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         private var drag: PlayerCardDrag?
 
         func sync() {
+            if isPresented.wrappedValue != (host != nil) {
+                PlayerOpenTrace.note("sync want=\(isPresented.wrappedValue) host=\(host != nil) dismissing=\(dismissing)")
+            }
             if isPresented.wrappedValue {
                 if host == nil { present() }
             } else if let host, !dismissing {
@@ -110,7 +114,10 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
         }
 
         private func present() {
-            guard let presenter, let window = presenter.view.window else { return }
+            guard let presenter, let window = presenter.view.window else {
+                PlayerOpenTrace.note(presenter == nil ? "present: no presenter" : "present: no window")
+                return
+            }
             let host = PlayerHostingController(rootView: makePlayer())
             host.modalPresentationStyle = .fullScreen
             host.overrideUserInterfaceStyle = .dark
@@ -129,10 +136,12 @@ struct PlayerPresentation<Player: View>: UIViewControllerRepresentable {
                 self.drag = drag
             }
             self.host = host
+            PlayerOpenTrace.note("present: presenting=\(presenter.presentedViewController != nil) beingDismissed=\(presenter.isBeingDismissed)")
             presenter.present(host, animated: true)
         }
 
         private func didDismiss() {
+            PlayerOpenTrace.note("dismissed")
             host = nil
             drag = nil
             transition = nil
@@ -156,11 +165,29 @@ private final class PlayerHostingController: UIHostingController<AnyView> {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        PlayerOpenTrace.note("appeared")
         onAppeared()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isBeingDismissed || presentingViewController == nil { onDismissed() }
+    }
+}
+
+/// Screenshot-mode trace of the open path, for UI tests that lose a mini tap.
+/// UIKit only: SwiftUI state here would re-run the shell and replace the mini.
+@MainActor enum PlayerOpenTrace {
+    static weak var view: UIView?
+    private static var events: [String] = []
+    private static let start = ProcessInfo.processInfo.systemUptime
+
+    static func note(_ event: String) {
+        guard ScreenshotFixture.enabled else { return }
+        let ms = Int((ProcessInfo.processInfo.systemUptime - start) * 1000)
+        events.append("\(ms) \(event)")
+        print("[PlayerOpenTrace] \(ms) \(event)")
+        events = Array(events.suffix(16))
+        view?.accessibilityLabel = events.joined(separator: " | ")
     }
 }
