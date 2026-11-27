@@ -1706,6 +1706,100 @@ final class EngineSwitchContinuityTests: XCTestCase {
     }
 }
 
+final class InterruptionPositionTests: XCTestCase {
+    func testInterruptionKeepsPositionAndResumesFromIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 88200))
+        buffer.frameLength = 88200
+        let url = root.appendingPathComponent("track.wav")
+        do { try AVAudioFile(forWriting: url, settings: format.settings).write(from: buffer) }
+        let engine = AVAudioEngine()
+        let player = EnginePlayer(engine: engine)
+        defer { player.stop() }
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                                    frameCapacity: engine.manualRenderingMaximumFrameCount))
+        func render(seconds: Double) throws {
+            for _ in 0..<Int(seconds * 44100 / 1024) {
+                XCTAssertEqual(try engine.renderOffline(1024, to: output), .success)
+            }
+        }
+        try player.load(url: url)
+        XCTAssertTrue(try player.play())
+        try render(seconds: 0.5)
+        let before = player.currentTime
+        XCTAssertEqual(before, 0.5, accuracy: 0.05)
+        player.invalidatePreload(.interruption)
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertEqual(player.currentTime, before, accuracy: 0.001,
+                       "An interruption must not move the position back to the segment start")
+        XCTAssertTrue(try player.play())
+        try render(seconds: 0.5)
+        XCTAssertEqual(player.currentTime, before + 0.5, accuracy: 0.05,
+                       "Playback resumes from where the interruption paused it")
+    }
+}
+
+@MainActor
+final class InterruptionResumeTests: XCTestCase {
+    private func fixture() throws -> (URL, LibraryStore, Track) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 240000))
+        buffer.frameLength = 240000
+        do { try AVAudioFile(forWriting: root.appendingPathComponent("Song.wav"), settings: format.settings).write(from: buffer) }
+        let track = Track(id: UUID(), filename: "Song.wav", title: "Song", artist: "Artist", album: "Album",
+                          duration: 30, sampleRate: 8000, bitDepth: 16)
+        var snapshot = LibrarySnapshot()
+        snapshot.tracks = [track]
+        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("library.json"))
+        return (root, LibraryStore(root: root), track)
+    }
+
+    func testRepeatedBeginStillResumesWhenSystemAllows() throws {
+        let (root, library, track) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(track, autoplay: false)
+        player.resume()
+        XCTAssertTrue(player.playing)
+        player.handleInterruption(.began, options: [])
+        XCTAssertFalse(player.playing)
+        // e.g. Siri followed by a voice message, before the first one ends.
+        player.handleInterruption(.began, options: [])
+        player.handleInterruption(.ended, options: .shouldResume)
+        XCTAssertTrue(player.playing, "Playback paused by an interruption resumes when the system says it may")
+    }
+
+    func testOnlyResumesWhatTheInterruptionPaused() throws {
+        let (root, library, track) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = PlayerStore(library: library)
+        defer { player.pause() }
+        player.load(track, autoplay: false)
+        player.handleInterruption(.began, options: [])
+        player.handleInterruption(.ended, options: .shouldResume)
+        XCTAssertFalse(player.playing, "A paused player stays paused")
+
+        player.resume()
+        player.handleInterruption(.began, options: [])
+        player.handleInterruption(.ended, options: [])
+        player.handleInterruption(.ended, options: .shouldResume)
+        XCTAssertFalse(player.playing, "An end without shouldResume consumes the resume intent")
+
+        player.resume()
+        player.handleInterruption(.began, options: [])
+        player.pause()
+        player.handleInterruption(.ended, options: .shouldResume)
+        XCTAssertFalse(player.playing, "The user's own pause during an interruption wins")
+    }
+}
+
 final class GaplessPlaybackTests: XCTestCase {
     private func format(_ rate: Double = 44100, channels: AVAudioChannelCount = 2) -> AVAudioFormat {
         AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels)!

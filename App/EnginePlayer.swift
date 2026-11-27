@@ -36,6 +36,9 @@ final class EnginePlayer {
     // Node time is continuous across tracks, but each track's UI clock starts at zero.
     private var timelineStartFrame: AVAudioFramePosition = 0
     private var scheduledEndFrame: AVAudioFramePosition = 0
+    // The render clock is gone once the node pauses or the system stops the
+    // engine; position then stays at the last time it reported.
+    private var lastKnownTime: Double = 0
 
     private(set) var duration: Double = 0
     var hasFile: Bool { file != nil && pendingOperation != .stop }
@@ -202,9 +205,10 @@ final class EnginePlayer {
         guard rate > 0 else { return 0 }
         let base = Double(segmentStartFrame) / rate
         guard let nodeTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: nodeTime) else { return base }
+              let playerTime = node.playerTime(forNodeTime: nodeTime) else { return lastKnownTime }
         let played = Double(playerTime.sampleTime) / playerTime.sampleRate
-        return min(max(0, base + played - Double(timelineStartFrame) / rate), duration)
+        lastKnownTime = min(max(0, base + played - Double(timelineStartFrame) / rate), duration)
+        return lastKnownTime
     }
 
     private func frame(for time: Double) -> AVAudioFramePosition {
@@ -229,8 +233,14 @@ final class EnginePlayer {
     /// AVAudioPlayerNode cannot remove just its tail. Rebuild only the current
     /// segment at the current position, and reject callbacks from the old tail.
     func invalidatePreload(_ reason: GaplessQueueState.Invalidation) {
-        let needsRebuild = nextFile != nil || (pendingOperation != nil && queue.currentToken == nil && file != nil)
-        if reason == .interruption {
+        let interrupted = reason == .interruption
+        // The system may have stopped the engine and discarded the node's
+        // schedule; resume from our own segment at the last known position.
+        let needsRebuild = interrupted ? file != nil
+            : nextFile != nil || (pendingOperation != nil && queue.currentToken == nil && file != nil)
+        if interrupted {
+            // Read the clock while the node can still report it.
+            _ = currentTime
             // The system may already have stopped rendering. Discard any old
             // closure before restoring unity; never leave a half-faded transport.
             node.pause()
@@ -266,6 +276,7 @@ final class EnginePlayer {
         node.stop()
         segmentStartFrame = startFrame
         timelineStartFrame = 0
+        lastKnownTime = Double(startFrame) / file.fileFormat.sampleRate
         scheduledEndFrame = file.length - startFrame
         append(file, from: startFrame, token: token)
     }
