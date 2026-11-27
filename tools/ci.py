@@ -43,7 +43,7 @@ SCREENSHOTS = ('library.png', 'songs.png', 'playlist.png', 'now-playing.png')
 SELECTOR = re.compile(r'LosslessPlayer(?:UI)?Tests(?:/[A-Za-z_]\w*){0,2}')
 # Phase limits. A limit is a failure, never a pass.
 UNIT_MINUTES = 15
-UI_MINUTES = 20
+UI_MINUTES = 45
 IPA_MINUTES = 20
 
 
@@ -246,6 +246,8 @@ def xcodebuild_test(udid, selectors, result, minutes, env=None):
         shutil.rmtree(result)
     run(['xcodebuild', 'test', '-project', 'LosslessPlayer.xcodeproj', '-scheme', 'LosslessPlayer',
          '-destination', f'platform=iOS Simulator,id={udid}', *selectors,
+         # Investigation branch only: repeat until the intermittent mini tap fails.
+         *(['-test-iterations', '7', '-run-tests-until-failure'] if 'UIResults' in result.name else []),
          '-parallel-testing-enabled', 'NO', '-maximum-concurrent-test-simulator-destinations', '1',
          '-derivedDataPath', 'build/simulator', '-resultBundlePath', str(result),
          'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-'],
