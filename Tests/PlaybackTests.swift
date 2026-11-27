@@ -1706,6 +1706,7 @@ final class EngineSwitchContinuityTests: XCTestCase {
     }
 }
 
+@MainActor
 final class InterruptionPositionTests: XCTestCase {
     func testInterruptionKeepsPositionAndResumesFromIt() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
