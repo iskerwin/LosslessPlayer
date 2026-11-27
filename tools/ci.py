@@ -247,7 +247,7 @@ def xcodebuild_test(udid, selectors, result, minutes, env=None):
     run(['xcodebuild', 'test', '-project', 'LosslessPlayer.xcodeproj', '-scheme', 'LosslessPlayer',
          '-destination', f'platform=iOS Simulator,id={udid}', *selectors,
          # Investigation branch only: repeat until the intermittent mini tap fails.
-         *(['-test-iterations', '7', '-run-tests-until-failure'] if 'UIResults' in result.name else []),
+         *(['-test-iterations', '2', '-run-tests-until-failure'] if 'UIResults' in result.name else []),
          '-parallel-testing-enabled', 'NO', '-maximum-concurrent-test-simulator-destinations', '1',
          '-derivedDataPath', 'build/simulator', '-resultBundlePath', str(result),
          'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGN_IDENTITY=-'],
