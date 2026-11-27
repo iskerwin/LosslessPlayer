@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -42,7 +42,7 @@ jobs:
       # Dev reuses this when main becomes this same tree with the same plan.
       - name: Keep PR proof
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lossless-pr-proof-${{ github.run_id }}
           include-hidden-files: true
@@ -51,7 +51,7 @@ jobs:
           path: .ship/proof.json
       - name: Keep logs, results and screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lossless-pr-${{ github.run_id }}
           include-hidden-files: true
@@ -68,7 +68,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -90,7 +90,7 @@ jobs:
           fi
       - name: Keep logs, results and screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lossless-test-${{ github.run_id }}
           include-hidden-files: true
