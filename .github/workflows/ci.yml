@@ -62,6 +62,7 @@ jobs:
             *.log
             TestResults.xcresult
             build/UIResults.xcresult
+            build/IPadResults.xcresult
             build/screenshots
   test:
     if: github.event_name != 'pull_request'
@@ -101,4 +102,5 @@ jobs:
             *.log
             TestResults.xcresult
             build/UIResults.xcresult
+            build/IPadResults.xcresult
             build/screenshots
