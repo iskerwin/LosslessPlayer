@@ -24,10 +24,12 @@ import sys
 
 TARGET = "LosslessPlayerTests"
 PLAYBACK = {"PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests",
-            "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests", "TransportFaderTests"}
+            "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests", "TransportFaderTests",
+            "InterruptionPositionTests"}
 # These integration classes instantiate PlayerStore -> EnginePlayer, not just
 # LibraryStore (testToggleStartsFirstAvailableTrack / upcoming queue mutations).
-PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests", "LyricPlaybackTests"}
+PLAYER_INTEGRATION = {"FolderScanTests", "FolderPlaylistTests", "LyricPlaybackTests",
+                      "InterruptionResumeTests"}
 LIBRARY = {
     "LibraryTests", "FolderScanTests", "LibraryCatalogTests",
     "PlaylistManagementTests", "FolderPlaylistTests",

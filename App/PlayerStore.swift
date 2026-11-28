@@ -77,15 +77,8 @@ final class PlayerStore: NSObject, ObservableObject {
             let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             let options = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             Task { @MainActor [weak self] in
-                if type == AVAudioSession.InterruptionType.began.rawValue {
-                    self?.interruptedWhilePlaying = self?.playing == true
-                    self?.engine.pause()
-                    self?.invalidatePreload(.interruption)
-                    self?.pause()
-                } else if AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume),
-                          self?.interruptedWhilePlaying == true {
-                    self?.interruptedWhilePlaying = false; self?.resume()
-                }
+                guard let type = type.flatMap(AVAudioSession.InterruptionType.init(rawValue:)) else { return }
+                self?.handleInterruption(type, options: AVAudioSession.InterruptionOptions(rawValue: options))
             }
         })
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
@@ -167,6 +160,24 @@ final class PlayerStore: NSObject, ObservableObject {
         }
     }
 
+    /// Resumes only what the interruption itself paused, and only when the
+    /// system says so. A later begin while already paused keeps that intent.
+    func handleInterruption(_ type: AVAudioSession.InterruptionType, options: AVAudioSession.InterruptionOptions) {
+        switch type {
+        case .began:
+            if playing { interruptedWhilePlaying = true }
+            engine.pause()
+            invalidatePreload(.interruption)
+            pause(discardingPreload: true)
+        case .ended:
+            let shouldResume = interruptedWhilePlaying && options.contains(.shouldResume)
+            interruptedWhilePlaying = false
+            if shouldResume { resume() }
+        @unknown default:
+            break
+        }
+    }
+
     func toggle() {
         if playing { pause() }
         else if engine.hasFile { resume() }
@@ -189,6 +200,7 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func resume() {
+        interruptedWhilePlaying = false
         guard engine.hasFile else { return }
         do {
             if let current { try prepareSession(for: current, activate: true) }
@@ -222,6 +234,7 @@ final class PlayerStore: NSObject, ObservableObject {
     }
 
     func pause() {
+        interruptedWhilePlaying = false
         pause(discardingPreload: true)
     }
 

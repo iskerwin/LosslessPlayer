@@ -22,7 +22,8 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["screenshots"])
         for name in ("PlaybackQueueTests", "AudioPathTests", "GaplessPlaybackTests",
                      "FolderScanTests", "FolderPlaylistTests",
-                     "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests"):
+                     "AudioSessionRatePolicyTests", "EngineSwitchContinuityTests",
+                     "InterruptionPositionTests", "InterruptionResumeTests"):
             self.assertIn(f"-only-testing:LosslessPlayerTests/{name}", result["only_testing"])
 
     def test_transport_fader_keeps_engine_dependents_and_envelope_regressions(self):
