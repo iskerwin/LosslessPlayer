@@ -71,3 +71,7 @@ open LosslessPlayer.xcodeproj
 ## 本次界面改造
 
 变更说明和验收入口见 [Apple Music 风格改造](docs/apple-music-restyle.md)。本轮仅完成源码修改和静态差异检查；当前 Linux 环境没有 Xcode / iOS SDK，尚未编译或执行 XCTest，也没有模拟器或真机视觉验收证据。
+
+## 许可证
+
+[MIT](LICENSE)
